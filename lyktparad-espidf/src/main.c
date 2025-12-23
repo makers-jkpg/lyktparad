@@ -8,6 +8,8 @@
 #include "driver/rmt_tx.h"      // RMT config types
 #include "driver/gpio.h"
 
+#include "esp_mesh.h"
+
 static const char *TAG = "ws2812_blink";
 
 #define LED_GPIO                10          // Waveshare ESP32-C3-Zero WS2812 DI pin

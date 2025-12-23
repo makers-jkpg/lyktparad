@@ -6,7 +6,7 @@ FILE(GLOB_RECURSE app_sources ${CMAKE_SOURCE_DIR}/src/*.*)
 #idf_component_register(SRCS ${app_sources})
 
 idf_component_register(
-    SRCS "main.c"
+    SRCS "mesh.c" "mesh_light.c"
     INCLUDE_DIRS "."
-    REQUIRES led_strip
+    REQUIRES led_strip esp_wifi
 )
