@@ -77,6 +77,7 @@
 #include "esp_mesh_internal.h"
 #include "mesh_light.h"
 #include "nvs_flash.h"
+#include "esp_timer.h"
 
 #define RX_SIZE          (1500)
 #define TX_SIZE          (1460)
@@ -190,32 +191,109 @@ void esp_mesh_p2p_rx_main(void *arg)
             ESP_LOGE(MESH_TAG, "err:0x%x, size:%d", err, data.size);
             continue;
         }
+        if (esp_mesh_is_root()) {
+            continue;
+        }
+
+        ESP_LOGI(MESH_TAG, "[RCVD NOT ROOT]");
+
         /* extract send count */
         if (data.size >= sizeof(send_count)) {
             send_count = (data.data[25] << 24) | (data.data[24] << 16)
                          | (data.data[23] << 8) | data.data[22];
         }
         recv_count++;
-        /* process light control */
-        mesh_light_process(&from, data.data, data.size);
-        if (!(recv_count % 1)) {
-            ESP_LOGW(MESH_TAG,
-                     "[#RX:%d/%d][L:%d] parent:"MACSTR", receive from "MACSTR", size:%d, heap:%" PRId32 ", flag:%d[err:0x%x, proto:%d, tos:%d]",
-                     recv_count, send_count, mesh_layer,
-                     MAC2STR(mesh_parent_addr.addr), MAC2STR(from.addr),
-                     data.size, esp_get_minimum_free_heap_size(), flag, err, data.proto,
-                     data.tos);
+        /* detect heartbeat: 4-byte big-endian counter (sent by root as broadcast) */
+        if (data.proto == MESH_PROTO_BIN && data.size == 4) {
+            uint32_t hb = ((uint32_t)(uint8_t)data.data[0] << 24) |
+                          ((uint32_t)(uint8_t)data.data[1] << 16) |
+                          ((uint32_t)(uint8_t)data.data[2] << 8) |
+                          ((uint32_t)(uint8_t)data.data[3] << 0);
+            ESP_LOGI(MESH_TAG, "[HEARTBEAT] from "MACSTR", count:%" PRIu32, MAC2STR(from.addr), hb);
+            if (!(hb%2)) {
+                /* even heartbeat: turn off light */
+                mesh_light_set(0);
+            } else {
+                /* odd heartbeat: turn on light */
+                mesh_light_set(MESH_LIGHT_BLUE);
+            }
+        } else {
+            /* process light control */
+            //mesh_light_process(&from, data.data, data.size);
         }
+
+//        if (!(recv_count % 1)) {
+//            ESP_LOGW(MESH_TAG,
+//                     "[#RX:%d/%d][L:%d] parent:"MACSTR", receive from "MACSTR", size:%d, heap:%" PRId32 ", flag:%d[err:0x%x, proto:%d, tos:%d]",
+//                     recv_count, send_count, mesh_layer,
+//                     MAC2STR(mesh_parent_addr.addr), MAC2STR(from.addr),
+//                     data.size, esp_get_minimum_free_heap_size(), flag, err, data.proto,
+//                     data.tos);
+//        }
     }
     vTaskDelete(NULL);
 }
+
+    /* Heartbeat timer: send a small counter payload to all known routes every 500ms */
+    static esp_timer_handle_t heartbeat_timer = NULL;
+    static uint32_t heartbeat_count = 0;
+
+    static void heartbeat_timer_cb(void *arg)
+    {
+        /* only root should send the heartbeat */
+        if (!esp_mesh_is_root()) {
+            return;
+        }
+
+        mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+        int route_table_size = 0;
+        int i;
+
+        esp_err_t err;
+        mesh_data_t data;
+
+        /* payload: 4-byte big-endian counter */
+        heartbeat_count++;
+        uint32_t cnt = heartbeat_count;
+        tx_buf[0] = (cnt >> 24) & 0xff;
+        tx_buf[1] = (cnt >> 16) & 0xff;
+        tx_buf[2] = (cnt >> 8) & 0xff;
+        tx_buf[3] = (cnt >> 0) & 0xff;
+
+        data.data = tx_buf;
+        data.size = 4;
+        data.proto = MESH_PROTO_BIN;
+        data.tos = MESH_TOS_P2P;
+
+        esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+        for (i = 0; i < route_table_size; i++) {
+            err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+
+        /* single broadcast to all children */
+//        err = esp_mesh_send(NULL, &data, MESH_DATA_P2P, NULL, 0);
+            if (err) {
+                ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x", err);
+            }
+        }
+        ESP_LOGI(MESH_TAG, "[ROOT HEARTBEAT] sent - routing table size: %d ", esp_mesh_get_routing_table_size());
+
+        if (!(cnt%2)) {
+            /* even heartbeat: turn off light */
+            mesh_light_set(0);
+        } else {
+            /* odd heartbeat: turn on light */
+            mesh_light_set(MESH_LIGHT_GREEN);
+        }
+
+    }
+
 
 esp_err_t esp_mesh_comm_p2p_start(void)
 {
     static bool is_comm_p2p_started = false;
     if (!is_comm_p2p_started) {
         is_comm_p2p_started = true;
-        xTaskCreate(esp_mesh_p2p_tx_main, "MPTX", 3072, NULL, 5, NULL);
+//        xTaskCreate(esp_mesh_p2p_tx_main, "MPTX", 3072, NULL, 5, NULL);
         xTaskCreate(esp_mesh_p2p_rx_main, "MPRX", 3072, NULL, 5, NULL);
     }
     return ESP_OK;
@@ -287,7 +365,7 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
                  esp_mesh_is_root() ? "<ROOT>" :
                  (mesh_layer == 2) ? "<layer2>" : "", MAC2STR(id.addr), connected->duty);
         last_layer = mesh_layer;
-        mesh_connected_indicator(mesh_layer);
+//        mesh_connected_indicator(mesh_layer);
         is_mesh_connected = true;
         if (esp_mesh_is_root()) {
             esp_netif_dhcpc_stop(netif_sta);
@@ -302,7 +380,7 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
                  "<MESH_EVENT_PARENT_DISCONNECTED>reason:%d",
                  disconnected->reason);
         is_mesh_connected = false;
-        mesh_disconnected_indicator();
+//        mesh_disconnected_indicator();
         mesh_layer = esp_mesh_get_layer();
     }
     break;
@@ -314,7 +392,7 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
                  esp_mesh_is_root() ? "<ROOT>" :
                  (mesh_layer == 2) ? "<layer2>" : "");
         last_layer = mesh_layer;
-        mesh_connected_indicator(mesh_layer);
+//        mesh_connected_indicator(mesh_layer);
     }
     break;
     case MESH_EVENT_ROOT_ADDRESS: {
@@ -470,7 +548,8 @@ void app_main(void)
     /* mesh ID */
     memcpy((uint8_t *) &cfg.mesh_id, MESH_ID, 6);
     /* router */
-    cfg.channel = CONFIG_MESH_CHANNEL;
+    cfg.channel = 6;
+//    cfg.channel = CONFIG_MESH_CHANNEL;
     cfg.router.ssid_len = strlen(CONFIG_MESH_ROUTER_SSID);
     memcpy((uint8_t *) &cfg.router.ssid, CONFIG_MESH_ROUTER_SSID, cfg.router.ssid_len);
     memcpy((uint8_t *) &cfg.router.password, CONFIG_MESH_ROUTER_PASSWD,
@@ -479,9 +558,12 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_mesh_set_ap_authmode(CONFIG_MESH_AP_AUTHMODE));
     cfg.mesh_ap.max_connection = CONFIG_MESH_AP_CONNECTIONS;
     cfg.mesh_ap.nonmesh_max_connection = CONFIG_MESH_NON_MESH_AP_CONNECTIONS;
-    memcpy((uint8_t *) &cfg.mesh_ap.password, CONFIG_MESH_AP_PASSWD,
-           strlen(CONFIG_MESH_AP_PASSWD));
+    memcpy((uint8_t *) &cfg.mesh_ap.password, CONFIG_MESH_AP_PASSWD, strlen(CONFIG_MESH_AP_PASSWD));
     ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
+
+    // disable wifi power saving...
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
     /* mesh start */
     ESP_ERROR_CHECK(esp_mesh_start());
 #ifdef CONFIG_MESH_ENABLE_PS
@@ -490,6 +572,17 @@ void app_main(void)
     /* set the network active duty cycle. (default:10, -1, MESH_PS_NETWORK_DUTY_APPLIED_ENTIRE) */
     ESP_ERROR_CHECK(esp_mesh_set_network_duty_cycle(CONFIG_MESH_PS_NWK_DUTY, CONFIG_MESH_PS_NWK_DUTY_DURATION, CONFIG_MESH_PS_NWK_DUTY_RULE));
 #endif
+
+    /* create and start heartbeat timer (500ms) */
+    {
+        const esp_timer_create_args_t periodic_timer_args = {
+            .callback = &heartbeat_timer_cb,
+            .arg = NULL,
+            .name = "heartbeat"
+        };
+        ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &heartbeat_timer));
+        ESP_ERROR_CHECK(esp_timer_start_periodic(heartbeat_timer, 500000)); /* 500ms */
+    }
     ESP_LOGI(MESH_TAG, "mesh starts successfully, heap:%" PRId32 ", %s<%d>%s, ps:%d",  esp_get_minimum_free_heap_size(),
              esp_mesh_is_root_fixed() ? "root fixed" : "root not fixed",
              esp_mesh_get_topology(), esp_mesh_get_topology() ? "(chain)":"(tree)", esp_mesh_is_ps_enabled());
