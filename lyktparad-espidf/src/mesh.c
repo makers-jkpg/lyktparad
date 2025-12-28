@@ -78,6 +78,8 @@
 #include "mesh_light.h"
 #include "nvs_flash.h"
 #include "esp_timer.h"
+#include "driver/ledc.h"
+#include "driver/gpio.h"
 
 #define RX_SIZE          (1500)
 #define TX_SIZE          (1460)
@@ -105,6 +107,85 @@ mesh_light_ctl_t light_off = {
     .token_id = MESH_TOKEN_ID,
     .token_value = MESH_TOKEN_VALUE,
 };
+
+/* RGB LED (GPIO0 = R, GPIO1 = G, GPIO2 = B) using LEDC PWM */
+#define RGB_LEDC_TIMER           LEDC_TIMER_0
+#define RGB_LEDC_MODE            LEDC_LOW_SPEED_MODE
+#define RGB_LEDC_RESOLUTION      LEDC_TIMER_8_BIT
+#define RGB_LEDC_FREQUENCY_HZ    5000
+#define RGB_CHANNEL_G            LEDC_CHANNEL_0
+#define RGB_CHANNEL_R            LEDC_CHANNEL_1
+#define RGB_CHANNEL_B            LEDC_CHANNEL_2
+#define RGB_GPIO_G               0
+#define RGB_GPIO_R               1
+#define RGB_GPIO_B               2
+
+void init_rgb_led(void)
+{
+    ledc_timer_config_t ledc_timer = {
+        .duty_resolution = RGB_LEDC_RESOLUTION,
+        .freq_hz = RGB_LEDC_FREQUENCY_HZ,
+        .speed_mode = RGB_LEDC_MODE,
+        .timer_num = RGB_LEDC_TIMER,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    ledc_timer_config(&ledc_timer);
+
+    ledc_channel_config_t ch = {
+        .intr_type = LEDC_INTR_DISABLE,
+        .duty = 0,
+        .hpoint = 0,
+        .speed_mode = RGB_LEDC_MODE,
+        .timer_sel = RGB_LEDC_TIMER,
+    };
+
+    ch.channel = RGB_CHANNEL_R;
+    ch.gpio_num = RGB_GPIO_R;
+    ledc_channel_config(&ch);
+    ch.channel = RGB_CHANNEL_G;
+    ch.gpio_num = RGB_GPIO_G;
+    ledc_channel_config(&ch);
+    ch.channel = RGB_CHANNEL_B;
+    ch.gpio_num = RGB_GPIO_B;
+    ledc_channel_config(&ch);
+
+    /* apply initial zero duty */
+    ledc_set_duty(RGB_LEDC_MODE, RGB_CHANNEL_R, 0);
+    ledc_update_duty(RGB_LEDC_MODE, RGB_CHANNEL_R);
+    ledc_set_duty(RGB_LEDC_MODE, RGB_CHANNEL_G, 0);
+    ledc_update_duty(RGB_LEDC_MODE, RGB_CHANNEL_G);
+    ledc_set_duty(RGB_LEDC_MODE, RGB_CHANNEL_B, 0);
+    ledc_update_duty(RGB_LEDC_MODE, RGB_CHANNEL_B);
+}
+
+void set_rgb_led(int r, int g, int b)
+{
+    if (r < 0) {
+        r = 0; 
+    }
+    if (r > 255) {
+        r = 255;
+    }
+    if (g < 0) {
+        g = 0; 
+    }
+    if (g > 255) {  
+        g = 255;
+    }
+    if (b < 0) {
+        b = 0; 
+    }
+    if (b > 255) {
+        b = 255;
+    }
+
+    ledc_set_duty(RGB_LEDC_MODE, RGB_CHANNEL_R, (uint32_t)r);
+    ledc_update_duty(RGB_LEDC_MODE, RGB_CHANNEL_R);
+    ledc_set_duty(RGB_LEDC_MODE, RGB_CHANNEL_G, (uint32_t)g);
+    ledc_update_duty(RGB_LEDC_MODE, RGB_CHANNEL_G);
+    ledc_set_duty(RGB_LEDC_MODE, RGB_CHANNEL_B, (uint32_t)b);
+    ledc_update_duty(RGB_LEDC_MODE, RGB_CHANNEL_B);
+}
 
 void esp_mesh_p2p_tx_main(void *arg)
 {
@@ -213,9 +294,11 @@ void esp_mesh_p2p_rx_main(void *arg)
             if (!(hb%2)) {
                 /* even heartbeat: turn off light */
                 mesh_light_set(0);
+                set_rgb_led(0, 0, 0);
             } else {
                 /* odd heartbeat: turn on light */
                 mesh_light_set(MESH_LIGHT_BLUE);
+                set_rgb_led(255, 255, 255);
             }
         } else {
             /* process light control */
@@ -572,6 +655,8 @@ void app_main(void)
     /* set the network active duty cycle. (default:10, -1, MESH_PS_NETWORK_DUTY_APPLIED_ENTIRE) */
     ESP_ERROR_CHECK(esp_mesh_set_network_duty_cycle(CONFIG_MESH_PS_NWK_DUTY, CONFIG_MESH_PS_NWK_DUTY_DURATION, CONFIG_MESH_PS_NWK_DUTY_RULE));
 #endif
+
+    init_rgb_led();
 
     /* create and start heartbeat timer (500ms) */
     {
