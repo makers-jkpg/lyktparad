@@ -440,12 +440,6 @@ esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
         if (err) {
             ESP_LOGD(MESH_TAG, "RGB send err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
         }
-
-static void heartbeat_timer_cb(void *arg)
-{
-    /* only root should send the heartbeat */
-    if (!esp_mesh_is_root()) {
-        return;
     }
     ESP_LOGI(MESH_TAG, "[ROOT ACTION] RGB command sent: R:%d G:%d B:%d to %d nodes", r, g, b, route_table_size);
     return ESP_OK;

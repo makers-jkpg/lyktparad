@@ -1,16 +1,16 @@
-/* LED Configuration File - Example Template
+/* Device Configuration File - Example Template
  *
  * This is an example configuration file. To use it:
- * 1. Copy this file to mesh_led_config.h: cp mesh_led_config.h.example mesh_led_config.h
+ * 1. Copy this file to mesh_device_config.h: cp mesh_device_config.h.example mesh_device_config.h
  * 2. Update the values below with your hardware-specific settings
- * 3. DO NOT commit mesh_led_config.h to version control (it's in .gitignore)
+ * 3. DO NOT commit mesh_device_config.h to version control (it's in .gitignore)
  *
  * WARNING: Never commit hardware-specific configurations to version control!
  *          Only commit this .example file with default values.
  */
 
-#ifndef __MESH_LED_CONFIG_H__
-#define __MESH_LED_CONFIG_H__
+#ifndef __MESH_DEVICE_CONFIG_H__
+#define __MESH_DEVICE_CONFIG_H__
 
 /*******************************************************
  *                LED Strip Configuration
@@ -44,5 +44,5 @@
  */
 #define MESH_LED_RMT_RES_HZ      10000000
 
-#endif /* __MESH_LED_CONFIG_H__ */
+#endif /* __MESH_DEVICE_CONFIG_H__ */
 

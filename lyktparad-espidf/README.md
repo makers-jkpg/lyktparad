@@ -13,8 +13,8 @@ Before building, you need to configure two files:
    - Set Mesh AP password (for node-to-node connections)
    - Configure authentication tokens
 
-2. **`include/mesh_led_config.h`** - Copy from `include/mesh_led_config.h.example`:
-   - Set LED GPIO pin (default: 4)
+2. **`include/mesh_device_config.h`** - Copy from `include/mesh_device_config.h.example`:
+   - Set LED GPIO pin (default: 10)
    - Set number of pixels (default: 1)
    - Set RMT resolution (default: 10 MHz, usually no change needed)
 
@@ -39,7 +39,7 @@ Before building, you need to configure two files:
 
 ### Default Hardware Configuration
 
-- **LED GPIO Pin**: GPIO 4 (configurable)
+- **LED GPIO Pin**: GPIO 10 (configurable)
 - **Number of LEDs**: 1 (configurable)
 - **RMT Resolution**: 10 MHz (configurable)
 
@@ -74,9 +74,9 @@ Before building, you need to configure two files:
 
 4. **Configure LED Hardware** (if different from defaults):
    ```bash
-   cp include/mesh_led_config.h.example include/mesh_led_config.h
+   cp include/mesh_device_config.h.example include/mesh_device_config.h
    ```
-   Edit `include/mesh_led_config.h` and update:
+   Edit `include/mesh_device_config.h` and update:
    - GPIO pin number
    - Number of pixels
    - RMT resolution (if needed)
@@ -112,12 +112,12 @@ Required settings:
 - `MESH_CONFIG_TOKEN_ID`: Token ID for command authentication
 - `MESH_CONFIG_TOKEN_VALUE`: Token value for command authentication
 
-### LED Configuration (`include/mesh_led_config.h`)
+### LED Configuration (`include/mesh_device_config.h`)
 
-**⚠️ WARNING**: Never commit `mesh_led_config.h` to version control if it contains site-specific settings.
+**⚠️ WARNING**: Never commit `mesh_device_config.h` to version control if it contains site-specific settings.
 
 Settings:
-- `MESH_LED_GPIO`: GPIO pin connected to WS2812 data line (default: 4)
+- `MESH_LED_GPIO`: GPIO pin connected to WS2812 data line (default: 10)
 - `MESH_LED_NUM_PIXELS`: Number of LEDs in strip (default: 1)
 - `MESH_LED_RMT_RES_HZ`: RMT resolution in Hz (default: 10000000)
 
@@ -177,7 +177,7 @@ Monitor at 115200 baud to see real-time device activity.
 lyktparad-espidf/
 ├── include/
 │   ├── mesh_config.h.example      # Mesh configuration template
-│   ├── mesh_led_config.h.example  # LED configuration template
+│   ├── mesh_device_config.h.example  # Device configuration template
 │   ├── mesh_light.h               # LED control API
 │   └── mesh_web.h                 # Web server API
 ├── src/
@@ -222,7 +222,7 @@ lyktparad-espidf/
 - Check serial output for error messages
 
 ### LED not working
-- Verify GPIO pin in `mesh_led_config.h` matches hardware
+- Verify GPIO pin in `mesh_device_config.h` matches hardware
 - Check LED power supply (WS2812 requires 5V)
 - Verify data line connection
 - Check serial output for initialization errors

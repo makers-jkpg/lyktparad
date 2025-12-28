@@ -9,7 +9,7 @@
 #include "esp_err.h"
 #include "esp_mesh.h"
 #include "mesh_light.h"
-#include "mesh_led_config.h"
+#include "mesh_device_config.h"
 #include "led_strip.h"
 #include "driver/rmt_tx.h"
 
