@@ -62,11 +62,12 @@ esp_err_t mesh_light_init(void)
 	}
 
 	/* set default initial color */
-	mesh_light_set(MESH_LIGHT_INIT);
+	mesh_light_set_colour(MESH_LIGHT_INIT);
 	return ESP_OK;
 }
 
-esp_err_t mesh_light_set(int color)
+/* Set LED color using predefined color constants */
+esp_err_t mesh_light_set_colour(int color)
 {
 	if (!s_light_inited || s_led_strip == NULL) {
 		return ESP_FAIL;
@@ -97,40 +98,72 @@ esp_err_t mesh_light_set(int color)
 	return led_strip_refresh(s_led_strip);
 }
 
+/* Set LED color using direct RGB values (0-255) */
+esp_err_t mesh_light_set_rgb(uint8_t r, uint8_t g, uint8_t b)
+{
+	if (!s_light_inited || s_led_strip == NULL) {
+		return ESP_FAIL;
+	}
+
+	esp_err_t err = led_strip_set_pixel(s_led_strip, 0, r, g, b);
+	if (err != ESP_OK) return err;
+	return led_strip_refresh(s_led_strip);
+}
+
 void mesh_connected_indicator(int layer)
 {
 	switch (layer) {
-	case 1: mesh_light_set(MESH_LIGHT_PINK); break;
-	case 2: mesh_light_set(MESH_LIGHT_YELLOW); break;
-	case 3: mesh_light_set(MESH_LIGHT_RED); break;
-	case 4: mesh_light_set(MESH_LIGHT_BLUE); break;
-	case 5: mesh_light_set(MESH_LIGHT_GREEN); break;
-	case 6: mesh_light_set(MESH_LIGHT_WARNING); break;
-	default: mesh_light_set(0); break;
+	case 1: mesh_light_set_colour(MESH_LIGHT_PINK); break;
+	case 2: mesh_light_set_colour(MESH_LIGHT_YELLOW); break;
+	case 3: mesh_light_set_colour(MESH_LIGHT_RED); break;
+	case 4: mesh_light_set_colour(MESH_LIGHT_BLUE); break;
+	case 5: mesh_light_set_colour(MESH_LIGHT_GREEN); break;
+	case 6: mesh_light_set_colour(MESH_LIGHT_WARNING); break;
+	default: mesh_light_set_colour(0); break;
 	}
 }
 
 void mesh_disconnected_indicator(void)
 {
-	mesh_light_set(MESH_LIGHT_WARNING);
+	mesh_light_set_colour(MESH_LIGHT_WARNING);
 }
 
 esp_err_t mesh_light_process(mesh_addr_t *from, uint8_t *buf, uint16_t len)
 {
-	mesh_light_ctl_t *in = (mesh_light_ctl_t *) buf;
-	if (!from || !buf || len < sizeof(mesh_light_ctl_t)) {
+	if (!from || !buf || len < 1) {
 		return ESP_FAIL;
 	}
-	if (in->token_id != MESH_TOKEN_ID || in->token_value != MESH_TOKEN_VALUE) {
+
+	uint8_t cmd = buf[0];
+
+	/* Handle RGB command (4 bytes: cmd + R + G + B) */
+	if (cmd == MESH_CMD_SET_RGB) {
+		if (len < 4) {
+			return ESP_FAIL;
+		}
+		uint8_t r = buf[1];
+		uint8_t g = buf[2];
+		uint8_t b = buf[3];
+		return mesh_light_set_rgb(r, g, b);
+	}
+
+	/* Handle light on/off command (requires token authentication) */
+	if (len < sizeof(mesh_light_ctl_t)) {
+		return ESP_FAIL;
+	}
+	mesh_light_ctl_t *in = (mesh_light_ctl_t *) buf;
+	if (in->token_id != MESH_CONFIG_TOKEN_ID || in->token_value != MESH_CONFIG_TOKEN_VALUE) {
 		return ESP_FAIL;
 	}
 	if (in->cmd == MESH_CMD_LIGHT_ON_OFF) {
 		if (in->on) {
 			mesh_connected_indicator(esp_mesh_get_layer());
 		} else {
-			mesh_light_set(0);
+			mesh_light_set_colour(0);
 		}
+		return ESP_OK;
 	}
-	return ESP_OK;
+	/* Unknown command type */
+	return ESP_FAIL;
 }
 

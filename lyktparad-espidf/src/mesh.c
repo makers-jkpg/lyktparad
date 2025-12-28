@@ -93,6 +93,11 @@ static bool is_mesh_connected = false;
 static mesh_addr_t mesh_parent_addr;
 static int mesh_layer = -1;
 static esp_netif_t *netif_sta = NULL;
+/* Store last RGB values from MESH_CMD_SET_RGB command */
+static uint8_t last_rgb_r = 0;
+static uint8_t last_rgb_g = 0;
+static uint8_t last_rgb_b = 0;
+static bool rgb_has_been_set = false;
 
 mesh_light_ctl_t light_on = {
     .cmd = MESH_CMD_LIGHT_ON_OFF,
@@ -288,15 +293,37 @@ void esp_mesh_p2p_rx_main(void *arg)
             ESP_LOGI(MESH_TAG, "[HEARTBEAT] from "MACSTR", count:%" PRIu32, MAC2STR(from.addr), hb);
             if (!(hb%2)) {
                 /* even heartbeat: turn off light */
-                mesh_light_set(0);
+                mesh_light_set_colour(0);
                 set_rgb_led(0, 0, 0);
             } else {
-                /* odd heartbeat: turn on light */
-                mesh_light_set(MESH_LIGHT_BLUE);
-                set_rgb_led(255, 255, 255);
+                /* odd heartbeat: turn on light using last RGB color or default to MESH_LIGHT_BLUE */
+                if (rgb_has_been_set) {
+                    /* Use the color from the latest MESH_CMD_SET_RGB command */
+                    mesh_light_set_rgb(last_rgb_r, last_rgb_g, last_rgb_b);
+                    set_rgb_led(last_rgb_r, last_rgb_g, last_rgb_b);
+                } else {
+                    /* Default to MESH_LIGHT_BLUE if no RGB command has been received */
+                    mesh_light_set_colour(MESH_LIGHT_BLUE);
+                    set_rgb_led(0, 0, 155);  /* Match MESH_LIGHT_BLUE RGB values */
+                }
+            }
+        } else if (data.proto == MESH_PROTO_BIN && data.size == 4 && data.data[0] == MESH_CMD_SET_RGB) {
+            /* detect RGB command: command prefix (0x03) + 3-byte RGB values */
+            uint8_t r = data.data[1];
+            uint8_t g = data.data[2];
+            uint8_t b = data.data[3];
+            ESP_LOGI(MESH_TAG, "[RGB] from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
+            /* Store RGB values for use in heartbeat handler */
+            last_rgb_r = r;
+            last_rgb_g = g;
+            last_rgb_b = b;
+            rgb_has_been_set = true;
+            err = mesh_light_set_rgb(r, g, b);
+            if (err != ESP_OK) {
+                ESP_LOGE(MESH_TAG, "[RGB] failed to set LED: 0x%x", err);
             }
         } else {
-            /* process light control */
+            /* process other light control messages */
             //mesh_light_process(&from, data.data, data.size);
         }
 
@@ -312,60 +339,101 @@ void esp_mesh_p2p_rx_main(void *arg)
     vTaskDelete(NULL);
 }
 
-    /* Heartbeat timer: send a small counter payload to all known routes every 500ms */
-    static esp_timer_handle_t heartbeat_timer = NULL;
-    static uint32_t heartbeat_count = 0;
+/* Heartbeat timer: send a small counter payload to all known routes every 500ms */
+static esp_timer_handle_t heartbeat_timer = NULL;
+static uint32_t heartbeat_count = 0;
 
-    static void heartbeat_timer_cb(void *arg)
-    {
-        /* only root should send the heartbeat */
-        if (!esp_mesh_is_root()) {
-            return;
-        }
-
-        mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
-        int route_table_size = 0;
-        int i;
-
-        esp_err_t err;
-        mesh_data_t data;
-
-        /* payload: command prefix (0x01) + 4-byte big-endian counter */
-        heartbeat_count++;
-        uint32_t cnt = heartbeat_count;
-        tx_buf[0] = MESH_CMD_HEARTBEAT;  /* Command prefix */
-        tx_buf[1] = (cnt >> 24) & 0xff;  /* Counter MSB */
-        tx_buf[2] = (cnt >> 16) & 0xff;
-        tx_buf[3] = (cnt >> 8) & 0xff;
-        tx_buf[4] = (cnt >> 0) & 0xff;    /* Counter LSB */
-
-        data.data = tx_buf;
-        data.size = 5;
-        data.proto = MESH_PROTO_BIN;
-        data.tos = MESH_TOS_P2P;
-
-        esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
-        for (i = 0; i < route_table_size; i++) {
-            err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
-
-        /* single broadcast to all children */
-//        err = esp_mesh_send(NULL, &data, MESH_DATA_P2P, NULL, 0);
-            if (err) {
-                ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x", err);
-            }
-        }
-        ESP_LOGI(MESH_TAG, "[ROOT HEARTBEAT] sent - routing table size: %d ", esp_mesh_get_routing_table_size());
-
-        if (!(cnt%2)) {
-            /* even heartbeat: turn off light */
-            mesh_light_set(0);
-        } else {
-            /* odd heartbeat: turn on light */
-            mesh_light_set(MESH_LIGHT_GREEN);
-        }
-
+static void heartbeat_timer_cb(void *arg)
+{
+    /* only root should send the heartbeat */
+    if (!esp_mesh_is_root()) {
+        return;
     }
 
+    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+    int route_table_size = 0;
+    int i;
+
+    esp_err_t err;
+    mesh_data_t data;
+
+    /* payload: command prefix (0x01) + 4-byte big-endian counter */
+    heartbeat_count++;
+    uint32_t cnt = heartbeat_count;
+    tx_buf[0] = MESH_CMD_HEARTBEAT;  /* Command prefix */
+    tx_buf[1] = (cnt >> 24) & 0xff;  /* Counter MSB */
+    tx_buf[2] = (cnt >> 16) & 0xff;
+    tx_buf[3] = (cnt >> 8) & 0xff;
+    tx_buf[4] = (cnt >> 0) & 0xff;    /* Counter LSB */
+
+    data.data = tx_buf;
+    data.size = 5;
+    data.proto = MESH_PROTO_BIN;
+    data.tos = MESH_TOS_P2P;
+
+    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+    for (i = 0; i < route_table_size; i++) {
+        err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+
+        /* single broadcast to all children */
+        // err = esp_mesh_send(NULL, &data, MESH_DATA_P2P, NULL, 0);
+        if (err) {
+            ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x", err);
+        }
+    }
+    ESP_LOGI(MESH_TAG, "[ROOT HEARTBEAT] sent - routing table size: %d ", esp_mesh_get_routing_table_size());
+
+    if (!(cnt%2)) {
+        /* even heartbeat: turn off light */
+        mesh_light_set_colour(0);
+    } else {
+        /* odd heartbeat: turn on light */
+        mesh_light_set_colour(MESH_LIGHT_GREEN);
+    }
+
+}
+
+/* Send RGB color values to all mesh nodes
+ * This function can be called from root node to set LED colors on all connected nodes
+ * Example: mesh_send_rgb(255, 0, 0) to set all nodes to red
+ */
+esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
+{
+    if (!esp_mesh_is_root()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+    int route_table_size = 0;
+    int i;
+    esp_err_t err;
+    mesh_data_t data;
+
+    /* Prepare RGB message: command prefix (0x03) + 3-byte RGB values */
+    tx_buf[0] = MESH_CMD_SET_RGB;
+    tx_buf[1] = r;
+    tx_buf[2] = g;
+    tx_buf[3] = b;
+
+    data.data = tx_buf;
+    data.size = 4;
+    data.proto = MESH_PROTO_BIN;
+    data.tos = MESH_TOS_P2P;
+
+    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+    if (route_table_size == 0) {
+        ESP_LOGD(MESH_TAG, "[RGB SENT] R:%d G:%d B:%d - no nodes in routing table", r, g, b);
+        return ESP_OK;
+    }
+    for (i = 0; i < route_table_size; i++) {
+        err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+        if (err) {
+            ESP_LOGD(MESH_TAG, "RGB send err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
+        }
+    }
+    ESP_LOGI(MESH_TAG, "[RGB SENT] R:%d G:%d B:%d to %d nodes", r, g, b, route_table_size);
+    return ESP_OK;
+}
 
 esp_err_t esp_mesh_comm_p2p_start(void)
 {
