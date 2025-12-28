@@ -95,14 +95,14 @@ static int mesh_layer = -1;
 static esp_netif_t *netif_sta = NULL;
 
 mesh_light_ctl_t light_on = {
-    .cmd = MESH_CONTROL_CMD,
+    .cmd = MESH_CMD_LIGHT_ON_OFF,
     .on = 1,
     .token_id = MESH_TOKEN_ID,
     .token_value = MESH_TOKEN_VALUE,
 };
 
 mesh_light_ctl_t light_off = {
-    .cmd = MESH_CONTROL_CMD,
+    .cmd = MESH_CMD_LIGHT_ON_OFF,
     .on = 0,
     .token_id = MESH_TOKEN_ID,
     .token_value = MESH_TOKEN_VALUE,
@@ -161,19 +161,19 @@ void init_rgb_led(void)
 void set_rgb_led(int r, int g, int b)
 {
     if (r < 0) {
-        r = 0; 
+        r = 0;
     }
     if (r > 255) {
         r = 255;
     }
     if (g < 0) {
-        g = 0; 
+        g = 0;
     }
-    if (g > 255) {  
+    if (g > 255) {
         g = 255;
     }
     if (b < 0) {
-        b = 0; 
+        b = 0;
     }
     if (b > 255) {
         b = 255;
@@ -278,18 +278,13 @@ void esp_mesh_p2p_rx_main(void *arg)
 
         ESP_LOGI(MESH_TAG, "[RCVD NOT ROOT]");
 
-        /* extract send count */
-        if (data.size >= sizeof(send_count)) {
-            send_count = (data.data[25] << 24) | (data.data[24] << 16)
-                         | (data.data[23] << 8) | data.data[22];
-        }
         recv_count++;
-        /* detect heartbeat: 4-byte big-endian counter (sent by root as broadcast) */
-        if (data.proto == MESH_PROTO_BIN && data.size == 4) {
-            uint32_t hb = ((uint32_t)(uint8_t)data.data[0] << 24) |
-                          ((uint32_t)(uint8_t)data.data[1] << 16) |
-                          ((uint32_t)(uint8_t)data.data[2] << 8) |
-                          ((uint32_t)(uint8_t)data.data[3] << 0);
+        /* detect heartbeat: command prefix (0x01) + 4-byte big-endian counter */
+        if (data.proto == MESH_PROTO_BIN && data.size == 5 && data.data[0] == MESH_CMD_HEARTBEAT) {
+            uint32_t hb = ((uint32_t)(uint8_t)data.data[1] << 24) |
+                          ((uint32_t)(uint8_t)data.data[2] << 16) |
+                          ((uint32_t)(uint8_t)data.data[3] << 8) |
+                          ((uint32_t)(uint8_t)data.data[4] << 0);
             ESP_LOGI(MESH_TAG, "[HEARTBEAT] from "MACSTR", count:%" PRIu32, MAC2STR(from.addr), hb);
             if (!(hb%2)) {
                 /* even heartbeat: turn off light */
@@ -335,16 +330,17 @@ void esp_mesh_p2p_rx_main(void *arg)
         esp_err_t err;
         mesh_data_t data;
 
-        /* payload: 4-byte big-endian counter */
+        /* payload: command prefix (0x01) + 4-byte big-endian counter */
         heartbeat_count++;
         uint32_t cnt = heartbeat_count;
-        tx_buf[0] = (cnt >> 24) & 0xff;
-        tx_buf[1] = (cnt >> 16) & 0xff;
-        tx_buf[2] = (cnt >> 8) & 0xff;
-        tx_buf[3] = (cnt >> 0) & 0xff;
+        tx_buf[0] = MESH_CMD_HEARTBEAT;  /* Command prefix */
+        tx_buf[1] = (cnt >> 24) & 0xff;  /* Counter MSB */
+        tx_buf[2] = (cnt >> 16) & 0xff;
+        tx_buf[3] = (cnt >> 8) & 0xff;
+        tx_buf[4] = (cnt >> 0) & 0xff;    /* Counter LSB */
 
         data.data = tx_buf;
-        data.size = 4;
+        data.size = 5;
         data.proto = MESH_PROTO_BIN;
         data.tos = MESH_TOS_P2P;
 

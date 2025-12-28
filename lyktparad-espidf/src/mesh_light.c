@@ -124,7 +124,7 @@ esp_err_t mesh_light_process(mesh_addr_t *from, uint8_t *buf, uint16_t len)
 	if (in->token_id != MESH_TOKEN_ID || in->token_value != MESH_TOKEN_VALUE) {
 		return ESP_FAIL;
 	}
-	if (in->cmd == MESH_CONTROL_CMD) {
+	if (in->cmd == MESH_CMD_LIGHT_ON_OFF) {
 		if (in->on) {
 			mesh_connected_indicator(esp_mesh_get_layer());
 		} else {

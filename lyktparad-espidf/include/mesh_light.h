@@ -25,7 +25,10 @@
 
 #define  MESH_TOKEN_ID       (0x0)
 #define  MESH_TOKEN_VALUE    (0xbeef)
-#define  MESH_CONTROL_CMD    (0x2)
+
+/* Mesh command prefixes - used to identify message types */
+#define  MESH_CMD_HEARTBEAT      (0x01)
+#define  MESH_CMD_LIGHT_ON_OFF   (0x02)
 
 /*******************************************************
  *                Type Definitions
