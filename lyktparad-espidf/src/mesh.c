@@ -32,23 +32,7 @@
 #ifndef CONFIG_MESH_CHANNEL
 #define CONFIG_MESH_CHANNEL 0
 #endif
-#ifndef CONFIG_MESH_ROUTER_SSID
-#define CONFIG_MESH_ROUTER_SSID "MartinRouterKing"
-#endif
-#ifndef CONFIG_MESH_ROUTER_PASSWD
-#define CONFIG_MESH_ROUTER_PASSWD "Sally6789"
-#endif
-// CONFIG_MESH_AP_AUTHMODE
-// 0 if WIFI_AUTH_OPEN
-// 2 if WIFI_AUTH_WPA_PSK
-// 3 if WIFI_AUTH_WPA2_PSK
-// 4 if WIFI_AUTH_WPA_WPA2_PSK
-#ifndef CONFIG_MESH_AP_AUTHMODE
-#define CONFIG_MESH_AP_AUTHMODE 3
-#endif
-#ifndef CONFIG_MESH_AP_PASSWD
-#define CONFIG_MESH_AP_PASSWD "MAP_PASSWD"
-#endif
+/* Site-specific configuration is now in mesh_config.h */
 #ifndef CONFIG_MESH_AP_CONNECTIONS
 #define CONFIG_MESH_AP_CONNECTIONS 6
 #endif
@@ -75,6 +59,7 @@
 #include "esp_log.h"
 #include "esp_mesh.h"
 #include "esp_mesh_internal.h"
+#include "mesh_config.h"
 #include "mesh_light.h"
 #include "nvs_flash.h"
 #include "esp_timer.h"
@@ -85,7 +70,7 @@
 #define TX_SIZE          (1460)
 
 static const char *MESH_TAG = "mesh_main";
-static const uint8_t MESH_ID[6] = { 0x77, 0x77, 0x77, 0x77, 0x77, 0x77};
+static const uint8_t MESH_ID[6] = MESH_CONFIG_MESH_ID;
 static uint8_t tx_buf[TX_SIZE] = { 0, };
 static uint8_t rx_buf[RX_SIZE] = { 0, };
 static bool is_running = true;
@@ -102,15 +87,15 @@ static bool rgb_has_been_set = false;
 mesh_light_ctl_t light_on = {
     .cmd = MESH_CMD_LIGHT_ON_OFF,
     .on = 1,
-    .token_id = MESH_TOKEN_ID,
-    .token_value = MESH_TOKEN_VALUE,
+    .token_id = MESH_CONFIG_TOKEN_ID,
+    .token_value = MESH_CONFIG_TOKEN_VALUE,
 };
 
 mesh_light_ctl_t light_off = {
     .cmd = MESH_CMD_LIGHT_ON_OFF,
     .on = 0,
-    .token_id = MESH_TOKEN_ID,
-    .token_value = MESH_TOKEN_VALUE,
+    .token_id = MESH_CONFIG_TOKEN_ID,
+    .token_value = MESH_CONFIG_TOKEN_VALUE,
 };
 
 /* RGB LED (GPIO0 = R, GPIO1 = G, GPIO2 = B) using LEDC PWM */
@@ -695,17 +680,16 @@ void app_main(void)
     /* mesh ID */
     memcpy((uint8_t *) &cfg.mesh_id, MESH_ID, 6);
     /* router */
-    cfg.channel = 6;
-//    cfg.channel = CONFIG_MESH_CHANNEL;
-    cfg.router.ssid_len = strlen(CONFIG_MESH_ROUTER_SSID);
-    memcpy((uint8_t *) &cfg.router.ssid, CONFIG_MESH_ROUTER_SSID, cfg.router.ssid_len);
-    memcpy((uint8_t *) &cfg.router.password, CONFIG_MESH_ROUTER_PASSWD,
-           strlen(CONFIG_MESH_ROUTER_PASSWD));
+    cfg.channel = MESH_CONFIG_MESH_CHANNEL;
+    cfg.router.ssid_len = strlen(MESH_CONFIG_ROUTER_SSID);
+    memcpy((uint8_t *) &cfg.router.ssid, MESH_CONFIG_ROUTER_SSID, cfg.router.ssid_len);
+    memcpy((uint8_t *) &cfg.router.password, MESH_CONFIG_ROUTER_PASSWORD,
+           strlen(MESH_CONFIG_ROUTER_PASSWORD));
     /* mesh softAP */
-    ESP_ERROR_CHECK(esp_mesh_set_ap_authmode(CONFIG_MESH_AP_AUTHMODE));
+    ESP_ERROR_CHECK(esp_mesh_set_ap_authmode(MESH_CONFIG_MESH_AP_AUTHMODE));
     cfg.mesh_ap.max_connection = CONFIG_MESH_AP_CONNECTIONS;
     cfg.mesh_ap.nonmesh_max_connection = CONFIG_MESH_NON_MESH_AP_CONNECTIONS;
-    memcpy((uint8_t *) &cfg.mesh_ap.password, CONFIG_MESH_AP_PASSWD, strlen(CONFIG_MESH_AP_PASSWD));
+    memcpy((uint8_t *) &cfg.mesh_ap.password, MESH_CONFIG_MESH_AP_PASSWORD, strlen(MESH_CONFIG_MESH_AP_PASSWORD));
     ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
 
     // disable wifi power saving...

@@ -1,0 +1,70 @@
+/* Mesh Configuration File - Example Template
+ *
+ * This is an example configuration file. To use it:
+ * 1. Copy this file to mesh_config.h: cp mesh_config.h.example mesh_config.h
+ * 2. Update the values below with your site-specific settings
+ * 3. DO NOT commit mesh_config.h to version control (it's in .gitignore)
+ *
+ * WARNING: Never commit real credentials to version control!
+ *          Only commit this .example file with placeholder values.
+ */
+
+#ifndef __MESH_CONFIG_H__
+#define __MESH_CONFIG_H__
+
+/*******************************************************
+ *                WiFi Router Configuration
+ *******************************************************/
+
+/* Router SSID - The WiFi network name the root node connects to */
+#define MESH_CONFIG_ROUTER_SSID "YOUR_ROUTER_SSID"
+
+/* Router Password - The WiFi password for the router network */
+#define MESH_CONFIG_ROUTER_PASSWORD "YOUR_ROUTER_PASSWORD"
+
+/*******************************************************
+ *                Mesh Network Configuration
+ *******************************************************/
+
+/* Mesh ID - Unique 6-byte identifier for the mesh network
+ * All nodes in the same mesh must have the same Mesh ID
+ * Format: { 0xXX, 0xXX, 0xXX, 0xXX, 0xXX, 0xXX }
+ * Example: { 0x77, 0x77, 0x77, 0x77, 0x77, 0x77 }
+ */
+#define MESH_CONFIG_MESH_ID { 0x77, 0x77, 0x77, 0x77, 0x77, 0x77 }
+
+/* Mesh Channel - WiFi channel for the mesh network (1-11 for 2.4GHz)
+ * Set to 0 for auto-selection, or specify a channel (e.g., 6)
+ */
+#define MESH_CONFIG_MESH_CHANNEL 6
+
+/* Mesh AP Password - Password for the mesh access point
+ * This is used when nodes connect to each other in the mesh
+ */
+#define MESH_CONFIG_MESH_AP_PASSWORD "YOUR_MESH_PASSWORD"
+
+/* Mesh AP Authentication Mode
+ * 0 = WIFI_AUTH_OPEN (no password)
+ * 2 = WIFI_AUTH_WPA_PSK
+ * 3 = WIFI_AUTH_WPA2_PSK (recommended)
+ * 4 = WIFI_AUTH_WPA_WPA2_PSK
+ */
+#define MESH_CONFIG_MESH_AP_AUTHMODE 3
+
+/*******************************************************
+ *                Authentication Tokens
+ *******************************************************/
+
+/* Token ID - Used for authenticating mesh light control commands
+ * Must match between sender and receiver
+ */
+#define MESH_CONFIG_TOKEN_ID 0x0
+
+/* Token Value - Used for authenticating mesh light control commands
+ * Must match between sender and receiver
+ * Example: 0xbeef
+ */
+#define MESH_CONFIG_TOKEN_VALUE 0xbeef
+
+#endif /* __MESH_CONFIG_H__ */
+
