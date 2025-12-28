@@ -11,6 +11,7 @@
 #define __MESH_LIGHT_H__
 
 #include "esp_err.h"
+#include "mesh_config.h"
 
 /*******************************************************
  *                Constants
@@ -23,8 +24,10 @@
 #define MESH_LIGHT_INIT      (0xfa)
 #define MESH_LIGHT_WARNING   (0xf9)
 
-#define  MESH_TOKEN_ID       (0x0)
-#define  MESH_TOKEN_VALUE    (0xbeef)
+/* Token constants are now defined in mesh_config.h:
+ *   MESH_CONFIG_TOKEN_ID
+ *   MESH_CONFIG_TOKEN_VALUE
+ */
 
 /* Mesh command prefixes - used to identify message types */
 #define  MESH_CMD_HEARTBEAT      (0x01)
