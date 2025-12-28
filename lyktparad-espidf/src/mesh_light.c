@@ -9,16 +9,9 @@
 #include "esp_err.h"
 #include "esp_mesh.h"
 #include "mesh_light.h"
+#include "mesh_led_config.h"
 #include "led_strip.h"
 #include "driver/rmt_tx.h"
-
-/*******************************************************
- *                LED strip configuration
- *******************************************************/
-/* Defaults to match the example in main.c. Change if needed. */
-#define MESH_LED_GPIO            10
-#define MESH_LED_NUM_PIXELS      1
-#define MESH_LED_RMT_RES_HZ      10000000
 
 /*******************************************************
  *                Variable Definitions

@@ -36,6 +36,7 @@ Thumbs.db
 *.pem
 *.key
 include/mesh_config.h
+include/mesh_led_config.h
 
 # Misc
 .idea/
