@@ -61,6 +61,7 @@
 #include "esp_mesh_internal.h"
 #include "mesh_config.h"
 #include "mesh_light.h"
+#include "mesh_web.h"
 #include "nvs_flash.h"
 #include "esp_timer.h"
 #include "driver/ledc.h"
@@ -83,6 +84,11 @@ static uint8_t last_rgb_r = 0;
 static uint8_t last_rgb_g = 0;
 static uint8_t last_rgb_b = 0;
 static bool rgb_has_been_set = false;
+/* Store RGB state on root node for web interface */
+static uint8_t root_rgb_r = 0;
+static uint8_t root_rgb_g = 0;
+static uint8_t root_rgb_b = 0;
+static bool root_rgb_has_been_set = false;
 
 mesh_light_ctl_t light_on = {
     .cmd = MESH_CMD_LIGHT_ON_OFF,
@@ -248,7 +254,6 @@ void esp_mesh_p2p_rx_main(void *arg)
     int recv_count = 0;
     esp_err_t err;
     mesh_addr_t from;
-    int send_count = 0;
     mesh_data_t data;
     int flag = 0;
     data.data = rx_buf;
@@ -275,21 +280,25 @@ void esp_mesh_p2p_rx_main(void *arg)
                           ((uint32_t)(uint8_t)data.data[2] << 16) |
                           ((uint32_t)(uint8_t)data.data[3] << 8) |
                           ((uint32_t)(uint8_t)data.data[4] << 0);
-            ESP_LOGI(MESH_TAG, "[HEARTBEAT] from "MACSTR", count:%" PRIu32, MAC2STR(from.addr), hb);
+            ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat received from "MACSTR", count:%" PRIu32, MAC2STR(from.addr), hb);
             if (!(hb%2)) {
                 /* even heartbeat: turn off light */
                 mesh_light_set_colour(0);
                 set_rgb_led(0, 0, 0);
+                ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat #%lu (even) - LED OFF", (unsigned long)hb);
             } else {
                 /* odd heartbeat: turn on light using last RGB color or default to MESH_LIGHT_BLUE */
                 if (rgb_has_been_set) {
                     /* Use the color from the latest MESH_CMD_SET_RGB command */
                     mesh_light_set_rgb(last_rgb_r, last_rgb_g, last_rgb_b);
                     set_rgb_led(last_rgb_r, last_rgb_g, last_rgb_b);
+                    ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat #%lu (odd) - LED RGB(%d,%d,%d)",
+                             (unsigned long)hb, last_rgb_r, last_rgb_g, last_rgb_b);
                 } else {
                     /* Default to MESH_LIGHT_BLUE if no RGB command has been received */
                     mesh_light_set_colour(MESH_LIGHT_BLUE);
                     set_rgb_led(0, 0, 155);  /* Match MESH_LIGHT_BLUE RGB values */
+                    ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat #%lu (odd) - LED BLUE (default)", (unsigned long)hb);
                 }
             }
         } else if (data.proto == MESH_PROTO_BIN && data.size == 4 && data.data[0] == MESH_CMD_SET_RGB) {
@@ -297,7 +306,7 @@ void esp_mesh_p2p_rx_main(void *arg)
             uint8_t r = data.data[1];
             uint8_t g = data.data[2];
             uint8_t b = data.data[3];
-            ESP_LOGI(MESH_TAG, "[RGB] from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
+            ESP_LOGI(MESH_TAG, "[NODE ACTION] RGB command received from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
             /* Store RGB values for use in heartbeat handler */
             last_rgb_r = r;
             last_rgb_g = g;
@@ -324,56 +333,58 @@ void esp_mesh_p2p_rx_main(void *arg)
     vTaskDelete(NULL);
 }
 
-/* Heartbeat timer: send a small counter payload to all known routes every 500ms */
-static esp_timer_handle_t heartbeat_timer = NULL;
-static uint32_t heartbeat_count = 0;
+    /* Heartbeat timer: send a small counter payload to all known routes every 500ms */
+    static esp_timer_handle_t heartbeat_timer = NULL;
+    static uint32_t heartbeat_count = 0;
 
-static void heartbeat_timer_cb(void *arg)
-{
-    /* only root should send the heartbeat */
-    if (!esp_mesh_is_root()) {
-        return;
-    }
+    static void heartbeat_timer_cb(void *arg)
+    {
+        /* only root should send the heartbeat */
+        if (!esp_mesh_is_root()) {
+            return;
+        }
 
-    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
-    int route_table_size = 0;
-    int i;
+        mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+        int route_table_size = 0;
+        int i;
 
-    esp_err_t err;
-    mesh_data_t data;
+        esp_err_t err;
+        mesh_data_t data;
 
-    /* payload: command prefix (0x01) + 4-byte big-endian counter */
-    heartbeat_count++;
-    uint32_t cnt = heartbeat_count;
-    tx_buf[0] = MESH_CMD_HEARTBEAT;  /* Command prefix */
-    tx_buf[1] = (cnt >> 24) & 0xff;  /* Counter MSB */
-    tx_buf[2] = (cnt >> 16) & 0xff;
-    tx_buf[3] = (cnt >> 8) & 0xff;
-    tx_buf[4] = (cnt >> 0) & 0xff;    /* Counter LSB */
+        /* payload: command prefix (0x01) + 4-byte big-endian counter */
+        heartbeat_count++;
+        uint32_t cnt = heartbeat_count;
+        tx_buf[0] = MESH_CMD_HEARTBEAT;  /* Command prefix */
+        tx_buf[1] = (cnt >> 24) & 0xff;  /* Counter MSB */
+        tx_buf[2] = (cnt >> 16) & 0xff;
+        tx_buf[3] = (cnt >> 8) & 0xff;
+        tx_buf[4] = (cnt >> 0) & 0xff;    /* Counter LSB */
 
-    data.data = tx_buf;
-    data.size = 5;
-    data.proto = MESH_PROTO_BIN;
-    data.tos = MESH_TOS_P2P;
+        data.data = tx_buf;
+        data.size = 5;
+        data.proto = MESH_PROTO_BIN;
+        data.tos = MESH_TOS_P2P;
 
-    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
-    for (i = 0; i < route_table_size; i++) {
-        err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+        esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+        for (i = 0; i < route_table_size; i++) {
+            err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
 
         /* single broadcast to all children */
-        // err = esp_mesh_send(NULL, &data, MESH_DATA_P2P, NULL, 0);
-        if (err) {
-            ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x", err);
+//        err = esp_mesh_send(NULL, &data, MESH_DATA_P2P, NULL, 0);
+            if (err) {
+                ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x", err);
+            }
         }
-    }
-    ESP_LOGI(MESH_TAG, "[ROOT HEARTBEAT] sent - routing table size: %d ", esp_mesh_get_routing_table_size());
+        ESP_LOGI(MESH_TAG, "[ROOT HEARTBEAT] sent - routing table size: %d ", esp_mesh_get_routing_table_size());
 
     if (!(cnt%2)) {
         /* even heartbeat: turn off light */
         mesh_light_set_colour(0);
+        ESP_LOGI(MESH_TAG, "[ROOT ACTION] Heartbeat #%lu (even) - LED OFF", (unsigned long)cnt);
     } else {
         /* odd heartbeat: turn on light */
         mesh_light_set_colour(MESH_LIGHT_GREEN);
+        ESP_LOGI(MESH_TAG, "[ROOT ACTION] Heartbeat #%lu (odd) - LED GREEN", (unsigned long)cnt);
     }
 
 }
@@ -406,6 +417,20 @@ esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
     data.tos = MESH_TOS_P2P;
 
     esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+
+    /* Update root node RGB state for web interface (even if no other nodes) */
+    root_rgb_r = r;
+    root_rgb_g = g;
+    root_rgb_b = b;
+    root_rgb_has_been_set = true;
+
+    /* Update root node's own LED */
+    err = mesh_light_set_rgb(r, g, b);
+    if (err != ESP_OK) {
+        ESP_LOGE(MESH_TAG, "[RGB] failed to set root node LED: 0x%x", err);
+    }
+    set_rgb_led(r, g, b);
+
     if (route_table_size == 0) {
         ESP_LOGD(MESH_TAG, "[RGB SENT] R:%d G:%d B:%d - no nodes in routing table", r, g, b);
         return ESP_OK;
@@ -415,9 +440,50 @@ esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
         if (err) {
             ESP_LOGD(MESH_TAG, "RGB send err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
         }
+
+static void heartbeat_timer_cb(void *arg)
+{
+    /* only root should send the heartbeat */
+    if (!esp_mesh_is_root()) {
+        return;
     }
-    ESP_LOGI(MESH_TAG, "[RGB SENT] R:%d G:%d B:%d to %d nodes", r, g, b, route_table_size);
+    ESP_LOGI(MESH_TAG, "[ROOT ACTION] RGB command sent: R:%d G:%d B:%d to %d nodes", r, g, b, route_table_size);
     return ESP_OK;
+}
+
+/* Get current heartbeat counter value
+ * Note: heartbeat_count is modified in timer callback and read here.
+ * On ESP32, 32-bit read/write operations are atomic, so this is thread-safe.
+ */
+uint32_t mesh_get_heartbeat_count(void)
+{
+    return heartbeat_count;
+}
+
+/* Get current RGB color (for root node web interface) */
+void mesh_get_current_rgb(uint8_t *r, uint8_t *g, uint8_t *b, bool *is_set)
+{
+    if (root_rgb_has_been_set) {
+        *r = root_rgb_r;
+        *g = root_rgb_g;
+        *b = root_rgb_b;
+        *is_set = true;
+    } else {
+        /* Return MESH_LIGHT_BLUE default (RGB: 0, 0, 155) */
+        *r = 0;
+        *g = 0;
+        *b = 155;
+        *is_set = false;
+    }
+}
+
+/* Get number of nodes in mesh (for root node web interface) */
+int mesh_get_node_count(void)
+{
+    if (!esp_mesh_is_root()) {
+        return 0;
+    }
+    return esp_mesh_get_routing_table_size();
 }
 
 esp_err_t esp_mesh_comm_p2p_start(void)
@@ -443,6 +509,8 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "<MESH_EVENT_MESH_STARTED>ID:"MACSTR"", MAC2STR(id.addr));
         is_mesh_connected = false;
         mesh_layer = esp_mesh_get_layer();
+        ESP_LOGI(MESH_TAG, "[STARTUP] Mesh network started - Node Status: %s",
+                 esp_mesh_is_root() ? "ROOT NODE" : "NON-ROOT NODE");
     }
     break;
     case MESH_EVENT_STOPPED: {
@@ -519,11 +587,26 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
     case MESH_EVENT_LAYER_CHANGE: {
         mesh_event_layer_change_t *layer_change = (mesh_event_layer_change_t *)event_data;
         mesh_layer = layer_change->new_layer;
+        bool is_root = esp_mesh_is_root();
         ESP_LOGI(MESH_TAG, "<MESH_EVENT_LAYER_CHANGE>layer:%d-->%d%s",
                  last_layer, mesh_layer,
-                 esp_mesh_is_root() ? "<ROOT>" :
+                 is_root ? "<ROOT>" :
                  (mesh_layer == 2) ? "<layer2>" : "");
+        ESP_LOGI(MESH_TAG, "[STATUS CHANGE] Layer: %d -> %d | Node Type: %s",
+                 last_layer, mesh_layer, is_root ? "ROOT NODE" : "NON-ROOT NODE");
         last_layer = mesh_layer;
+
+        /* Start web server if became root, stop if no longer root */
+        if (esp_mesh_is_root()) {
+            /* Check if we have IP address before starting web server */
+            esp_netif_ip_info_t ip_info;
+            if (esp_netif_get_ip_info(netif_sta, &ip_info) == ESP_OK &&
+                ip_info.ip.addr != 0) {
+                mesh_web_server_start();
+            }
+        } else {
+            mesh_web_server_stop();
+        }
 //        mesh_connected_indicator(mesh_layer);
     }
     break;
@@ -558,7 +641,15 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         /* new root */
         mesh_layer = esp_mesh_get_layer();
         esp_mesh_get_parent_bssid(&mesh_parent_addr);
+        bool is_root = esp_mesh_is_root();
         ESP_LOGI(MESH_TAG, "<MESH_EVENT_ROOT_SWITCH_ACK>layer:%d, parent:"MACSTR"", mesh_layer, MAC2STR(mesh_parent_addr.addr));
+        ESP_LOGI(MESH_TAG, "[STATUS CHANGE] Root switch acknowledged - Node Type: %s",
+                 is_root ? "ROOT NODE" : "NON-ROOT NODE");
+
+        /* Stop web server if no longer root */
+        if (!is_root) {
+            mesh_web_server_stop();
+        }
     }
     break;
     case MESH_EVENT_TODS_STATE: {
@@ -637,11 +728,31 @@ void ip_event_handler(void *arg, esp_event_base_t event_base,
     ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
     ESP_LOGI(MESH_TAG, "<IP_EVENT_STA_GOT_IP>IP:" IPSTR, IP2STR(&event->ip_info.ip));
 
+    /* Start web server if this is the root node */
+    bool is_root = esp_mesh_is_root();
+    ESP_LOGI(MESH_TAG, "[STARTUP] IP address obtained - Node Type: %s",
+             is_root ? "ROOT NODE" : "NON-ROOT NODE");
+
+    if (is_root) {
+        ESP_LOGI(MESH_TAG, "[ROOT ACTION] Starting web server on port 80");
+        esp_err_t err = mesh_web_server_start();
+        if (err != ESP_OK) {
+            ESP_LOGE(MESH_TAG, "Failed to start web server: 0x%x", err);
+        } else {
+            ESP_LOGI(MESH_TAG, "[ROOT ACTION] Web server started successfully");
+        }
+    }
 }
 
 void app_main(void)
 {
+    ESP_LOGI(MESH_TAG, "========================================");
+    ESP_LOGI(MESH_TAG, "Mesh Node Starting Up");
+    ESP_LOGI(MESH_TAG, "========================================");
+
     ESP_ERROR_CHECK(mesh_light_init());
+    ESP_LOGI(MESH_TAG, "[STARTUP] LED strip initialized");
+
     ESP_ERROR_CHECK(nvs_flash_init());
     /*  tcpip initialization */
     ESP_ERROR_CHECK(esp_netif_init());
@@ -716,7 +827,11 @@ void app_main(void)
         ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &heartbeat_timer));
         ESP_ERROR_CHECK(esp_timer_start_periodic(heartbeat_timer, 500000)); /* 500ms */
     }
+    bool is_root = esp_mesh_is_root();
     ESP_LOGI(MESH_TAG, "mesh starts successfully, heap:%" PRId32 ", %s<%d>%s, ps:%d",  esp_get_minimum_free_heap_size(),
              esp_mesh_is_root_fixed() ? "root fixed" : "root not fixed",
              esp_mesh_get_topology(), esp_mesh_get_topology() ? "(chain)":"(tree)", esp_mesh_is_ps_enabled());
+    ESP_LOGI(MESH_TAG, "[STARTUP] Mesh started - Node Type: %s | Heap: %" PRId32 " bytes",
+             is_root ? "ROOT NODE" : "NON-ROOT NODE", esp_get_minimum_free_heap_size());
+    ESP_LOGI(MESH_TAG, "========================================");
 }

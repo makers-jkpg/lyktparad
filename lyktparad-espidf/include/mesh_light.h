@@ -11,7 +11,10 @@
 #define __MESH_LIGHT_H__
 
 #include "esp_err.h"
+#include "esp_mesh.h"
 #include "mesh_config.h"
+#include <stdint.h>
+#include <stdbool.h>
 
 /*******************************************************
  *                Constants
@@ -61,5 +64,13 @@ esp_err_t mesh_light_set_rgb(uint8_t r, uint8_t g, uint8_t b);
 esp_err_t mesh_light_process(mesh_addr_t *from, uint8_t *buf, uint16_t len);
 void mesh_connected_indicator(int layer);
 void mesh_disconnected_indicator(void);
+
+/* State access functions for web interface */
+uint32_t mesh_get_heartbeat_count(void);
+void mesh_get_current_rgb(uint8_t *r, uint8_t *g, uint8_t *b, bool *is_set);
+int mesh_get_node_count(void);
+
+/* Send RGB color to all mesh nodes (root node only) */
+esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b);
 
 #endif /* __MESH_LIGHT_H__ */
