@@ -29,6 +29,7 @@
 /* Mesh command prefixes - used to identify message types */
 #define  MESH_CMD_HEARTBEAT      (0x01)
 #define  MESH_CMD_LIGHT_ON_OFF   (0x02)
+#define  MESH_CMD_SET_RGB        (0x03)
 
 /*******************************************************
  *                Type Definitions
@@ -52,7 +53,8 @@ typedef struct {
  *                Function Definitions
  *******************************************************/
 esp_err_t mesh_light_init(void);
-esp_err_t mesh_light_set(int color);
+esp_err_t mesh_light_set_colour(int color);
+esp_err_t mesh_light_set_rgb(uint8_t r, uint8_t g, uint8_t b);
 esp_err_t mesh_light_process(mesh_addr_t *from, uint8_t *buf, uint16_t len);
 void mesh_connected_indicator(int layer);
 void mesh_disconnected_indicator(void);
