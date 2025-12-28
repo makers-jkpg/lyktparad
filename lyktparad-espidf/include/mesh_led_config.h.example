@@ -4,6 +4,9 @@
  * 1. Copy this file to mesh_led_config.h: cp mesh_led_config.h.example mesh_led_config.h
  * 2. Update the values below with your hardware-specific settings
  * 3. DO NOT commit mesh_led_config.h to version control (it's in .gitignore)
+ *
+ * WARNING: Never commit hardware-specific configurations to version control!
+ *          Only commit this .example file with default values.
  */
 
 #ifndef __MESH_LED_CONFIG_H__
@@ -14,21 +17,30 @@
  *******************************************************/
 
 /* LED GPIO Pin - The GPIO pin connected to the WS2812 LED data line
- * Default: GPIO 4
+ * This pin must be capable of RMT (Remote Control) peripheral output
+ * Default: GPIO 10
+ * Valid range: Most GPIO pins support RMT (check ESP32 datasheet for restrictions)
  * Change this if your LED is connected to a different pin
+ * Note: Some GPIOs may have restrictions (e.g., GPIO 6-11 are typically flash/PSRAM)
  */
-#define MESH_LED_GPIO            4
+#define MESH_LED_GPIO            10
 
 /* Number of Pixels - The number of WS2812 LEDs in the strip
+ * This determines how many LEDs will be controlled simultaneously
  * Default: 1 (single LED)
+ * Valid range: 1 to maximum supported by available memory
  * Change this if you have multiple LEDs in a strip
+ * Note: More pixels require more memory and processing time
  */
 #define MESH_LED_NUM_PIXELS      1
 
 /* RMT Resolution - The resolution (frequency) for the RMT peripheral
+ * This controls the timing precision for WS2812 communication protocol
+ * Higher resolution allows more precise timing control
  * Default: 10,000,000 Hz (10 MHz)
- * This controls the timing precision for WS2812 communication
+ * Valid range: Typically 1 MHz to 80 MHz (check ESP32 RMT specifications)
  * Usually doesn't need to be changed unless you have timing issues
+ * Note: WS2812 requires precise timing (800kHz data rate), default works for most cases
  */
 #define MESH_LED_RMT_RES_HZ      10000000
 
