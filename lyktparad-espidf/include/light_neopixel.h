@@ -19,6 +19,12 @@
 /*******************************************************
  *                Constants
  *******************************************************/
+/* Color format configuration
+ * Define USE_GRB to enable GRB format (swap R and G when setting pixels)
+ * Leave undefined to use standard RGB format
+ */
+#define USE_GRB  /* Enable GRB format conversion for WS2812 LEDs */
+
 #define MESH_LIGHT_RED       (0xff)
 #define MESH_LIGHT_GREEN     (0xfe)
 #define MESH_LIGHT_BLUE      (0xfd)
@@ -29,10 +35,6 @@
 #define MESH_LIGHT_WHITE     (0xf8)
 #define MESH_LIGHT_ORANGE    (0xf7)
 
-/* Token constants are now defined in mesh_config.h:
- *   MESH_CONFIG_TOKEN_ID
- *   MESH_CONFIG_TOKEN_VALUE
- */
 
 /* Mesh command prefixes - used to identify message types */
 #define  MESH_CMD_HEARTBEAT      (0x01)
@@ -75,4 +77,4 @@ int mesh_get_node_count(void);
 /* This function is implemented in mesh_root.c */
 esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b);
 
-#endif /* __LIGHT_NEOPIXEL_H__ */ /* __LIGHT_NEOPIXEL_H__ */
+#endif /* __LIGHT_NEOPIXEL_H__ */

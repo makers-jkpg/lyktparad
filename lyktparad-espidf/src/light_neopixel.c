@@ -7,6 +7,7 @@
 #include <string.h>
 #include "esp_err.h"
 #include "esp_mesh.h"
+#include "esp_timer.h"
 #include "light_neopixel.h"
 #include "mesh_device_config.h"
 #include "led_strip.h"
@@ -17,6 +18,24 @@
  *******************************************************/
 static bool s_light_inited = false;
 static led_strip_handle_t s_led_strip = NULL;
+
+/*******************************************************
+ *                Helper Functions
+ *******************************************************/
+/* Wrapper function for led_strip_set_pixel that handles RGB/GRB conversion
+ * This function always accepts RGB values and converts to the appropriate format
+ * based on the USE_GRB define before calling the underlying led_strip_set_pixel function.
+ */
+static esp_err_t led_strip_set_pixel_rgb(led_strip_handle_t strip, uint32_t index, uint8_t r, uint8_t g, uint8_t b)
+{
+#ifdef USE_GRB
+    /* Swap R and G for GRB format - hardware expects GRB order */
+    return led_strip_set_pixel(strip, index, g, r, b);
+#else
+    /* Standard RGB format - no conversion needed */
+    return led_strip_set_pixel(strip, index, r, g, b);
+#endif
+}
 
 /*******************************************************
  *                Function Definitions
@@ -89,7 +108,8 @@ esp_err_t mesh_light_set_colour(int color)
         r = 0; g = 0; b = 0; break;
     }
 
-    esp_err_t err = led_strip_set_pixel(s_led_strip, 0, r, g, b);
+    /* Use wrapper function to handle RGB/GRB conversion based on USE_GRB define */
+    esp_err_t err = led_strip_set_pixel_rgb(s_led_strip, 0, r, g, b);
     if (err != ESP_OK) return err;
     return led_strip_refresh(s_led_strip);
 }
@@ -101,7 +121,8 @@ esp_err_t mesh_light_set_rgb(uint8_t r, uint8_t g, uint8_t b)
         return ESP_FAIL;
     }
 
-    esp_err_t err = led_strip_set_pixel(s_led_strip, 0, r, g, b);
+    /* Use wrapper function to handle RGB/GRB conversion based on USE_GRB define */
+    esp_err_t err = led_strip_set_pixel_rgb(s_led_strip, 0, r, g, b);
     if (err != ESP_OK) return err;
     return led_strip_refresh(s_led_strip);
 }
