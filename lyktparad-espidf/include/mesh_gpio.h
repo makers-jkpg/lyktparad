@@ -4,15 +4,15 @@
  * Two GPIO pins can be used to manually select root or mesh node behavior at startup.
  *
  * GPIO Pin Configuration (configurable in mesh_device_config.h):
- * - Default: GPIO 4 (Pin A) - Force Root Node - When connected to GND, forces root node behavior
- * - Default: GPIO 5 (Pin B) - Force Mesh Node - When connected to GND, forces mesh node behavior
+ * - Default: GPIO 5 (Pin A) - Force Root Node - When connected to GND, forces root node behavior
+ * - Default: GPIO 4 (Pin B) - Force Mesh Node - When connected to GND, forces mesh node behavior
  * - Pins can be changed via MESH_GPIO_FORCE_ROOT and MESH_GPIO_FORCE_MESH in mesh_device_config.h
  *
- * Truth Table:
- * - Pin A=HIGH, Pin B=HIGH: Default to mesh node (normal operation)
- * - Pin A=LOW, Pin B=HIGH: Force root node
- * - Pin A=HIGH, Pin B=LOW: Force mesh node
- * - Pin A=LOW, Pin B=LOW: Default to mesh node (conflict resolution)
+ * Simplified Logic (only one pin tied to GND at a time, other floating with pull-up):
+ * - GPIO 5 (Pin A) LOW (tied to GND): Force root node
+ * - GPIO 4 (Pin B) LOW (tied to GND): Force mesh node
+ * - Both HIGH (both floating): Default to mesh node (normal operation)
+ * - Both LOW: Conflict - defaults to mesh node (safe default, should not occur)
  *
  * Both pins have internal pull-up resistors enabled, so they read HIGH when not connected to GND.
  *
@@ -35,7 +35,7 @@
  *******************************************************/
 
 /* GPIO pins are configured in mesh_device_config.h
- * Default values: MESH_GPIO_FORCE_ROOT = 4, MESH_GPIO_FORCE_MESH = 5
+ * Default values: MESH_GPIO_FORCE_ROOT = 5, MESH_GPIO_FORCE_MESH = 4
  * These can be changed in mesh_device_config.h to use different pins
  */
 
@@ -44,7 +44,8 @@
  *******************************************************/
 
 /* Initialize GPIO pins for root node forcing
- * Configures the GPIO pins defined in mesh_device_config.h (default: GPIO 4 and 5) as inputs with internal pull-up resistors enabled
+ * Configures the GPIO pins defined in mesh_device_config.h (default: GPIO 5 and 4) as inputs with internal pull-up resistors enabled.
+ * After configuration, waits 50ms for pull-up resistors to stabilize before allowing pin reads.
  *
  * @return ESP_OK on success, error code on failure
  * @note This function is idempotent and safe to call multiple times
@@ -54,11 +55,12 @@
 esp_err_t mesh_gpio_init(void);
 
 /* Read GPIO pins to determine if root node should be forced
- * Implements the truth table for GPIO pin combinations
+ * Implements simplified logic: only one pin tied to GND at a time, other floating with pull-up
  *
  * @return true if root node should be forced, false otherwise
- * @note Returns false (mesh node) on any GPIO read error (safe default)
- * @note Both pins have pull-up resistors, so they read HIGH when not grounded
+ * @note Returns false (mesh node) if GPIO not initialized (safe default)
+ * @note Both pins have pull-up resistors, so they read HIGH when floating (not grounded)
+ * @note GPIO must be initialized (mesh_gpio_init) before calling this function
  */
 bool mesh_gpio_read_root_force(void);
 

@@ -36,6 +36,7 @@ void mesh_common_set_layer(int layer);
 
 /* Get mesh connection status */
 bool mesh_common_is_connected(void);
+bool mesh_common_is_router_connected(void);
 
 /* Set mesh connection status */
 void mesh_common_set_connected(bool connected);

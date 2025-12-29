@@ -82,6 +82,7 @@ static uint8_t tx_buf[TX_SIZE] = { 0, };
 static uint8_t rx_buf[RX_SIZE] = { 0, };
 static bool is_running = true;
 static bool is_mesh_connected = false;
+static bool is_router_connected = false; /* Track router connection for root node */
 static mesh_addr_t mesh_parent_addr;
 static int mesh_layer = -1;
 static esp_netif_t *netif_sta = NULL;
@@ -123,6 +124,11 @@ void mesh_common_set_layer(int layer)
 bool mesh_common_is_connected(void)
 {
     return is_mesh_connected;
+}
+
+bool mesh_common_is_router_connected(void)
+{
+    return is_router_connected;
 }
 
 void mesh_common_set_connected(bool connected)
@@ -217,12 +223,34 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         mesh_layer = esp_mesh_get_layer();
         ESP_LOGI(MESH_TAG, "[STARTUP] Mesh network started - Node Status: %s",
                  is_root ? "ROOT NODE" : "NON-ROOT NODE");
+        /* Ensure LED shows unconnected state - check router connection for root */
+        if (is_root) {
+            /* Root node: LED base color indicates router connection status */
+            if (is_router_connected) {
+                mesh_light_set_colour(MESH_LIGHT_GREEN);
+            } else {
+                mesh_light_set_colour(MESH_LIGHT_ORANGE);
+            }
+        } else {
+            mesh_light_set_colour(MESH_LIGHT_RED);
+        }
     }
     break;
     case MESH_EVENT_STOPPED: {
         ESP_LOGI(MESH_TAG, "<MESH_EVENT_STOPPED>");
         is_mesh_connected = false;
         mesh_layer = esp_mesh_get_layer();
+        /* Turn LED back to unconnected state - check router connection for root */
+        if (is_root) {
+            /* Root node: LED base color indicates router connection status */
+            if (is_router_connected) {
+                mesh_light_set_colour(MESH_LIGHT_GREEN);
+            } else {
+                mesh_light_set_colour(MESH_LIGHT_ORANGE);
+            }
+        } else {
+            mesh_light_set_colour(MESH_LIGHT_RED);
+        }
     }
     break;
     case MESH_EVENT_CHILD_CONNECTED: {
@@ -280,6 +308,15 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
                  (mesh_layer == 2) ? "<layer2>" : "", MAC2STR(id.addr), connected->duty);
         last_layer = mesh_layer;
         is_mesh_connected = true;
+        /* Set LED state when connected - heartbeat will take over from here */
+        if (is_root) {
+            /* Root node: LED base color is controlled by router connection status (IP events)
+             * Don't change LED here - router connection status (GREEN/ORANGE) is the base color
+             * Heartbeat will add white blink when mesh nodes are present */
+        } else {
+            /* Non-root node: turn off LED (heartbeat will control it) */
+            mesh_light_set_colour(0);
+        }
         if (is_root && root_event_callback) {
             root_event_callback(arg, event_base, event_id, event_data);
         }
@@ -293,6 +330,17 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
                  disconnected->reason);
         is_mesh_connected = false;
         mesh_layer = esp_mesh_get_layer();
+        /* Turn LED back to unconnected state - check router connection for root */
+        if (is_root) {
+            /* Root node: LED base color indicates router connection status */
+            if (is_router_connected) {
+                mesh_light_set_colour(MESH_LIGHT_GREEN);
+            } else {
+                mesh_light_set_colour(MESH_LIGHT_ORANGE);
+            }
+        } else {
+            mesh_light_set_colour(MESH_LIGHT_RED);
+        }
     }
     break;
     case MESH_EVENT_LAYER_CHANGE: {
@@ -427,15 +475,31 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
 void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
                                    int32_t event_id, void *event_data)
 {
-    ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
-    ESP_LOGI(MESH_TAG, "<IP_EVENT_STA_GOT_IP>IP:" IPSTR, IP2STR(&event->ip_info.ip));
-
     bool is_root = esp_mesh_is_root();
-    ESP_LOGI(MESH_TAG, "[STARTUP] IP address obtained - Node Type: %s",
-             is_root ? "ROOT NODE" : "NON-ROOT NODE");
 
-    if (is_root && root_ip_callback) {
-        root_ip_callback(arg, event_base, event_id, event_data);
+    if (event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
+        ESP_LOGI(MESH_TAG, "<IP_EVENT_STA_GOT_IP>IP:" IPSTR, IP2STR(&event->ip_info.ip));
+
+        ESP_LOGI(MESH_TAG, "[STARTUP] IP address obtained - Node Type: %s",
+                 is_root ? "ROOT NODE" : "NON-ROOT NODE");
+
+        if (is_root) {
+            /* Root node: router connected - set GREEN base color */
+            is_router_connected = true;
+            mesh_light_set_colour(MESH_LIGHT_GREEN);
+            if (root_ip_callback) {
+                root_ip_callback(arg, event_base, event_id, event_data);
+            }
+        }
+    } else if (event_id == IP_EVENT_STA_LOST_IP) {
+        ESP_LOGI(MESH_TAG, "<IP_EVENT_STA_LOST_IP>");
+
+        if (is_root) {
+            /* Root node: router disconnected - set ORANGE */
+            is_router_connected = false;
+            mesh_light_set_colour(MESH_LIGHT_ORANGE);
+        }
     }
 }
 
@@ -477,6 +541,7 @@ esp_err_t mesh_common_init(void)
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&config));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &mesh_common_ip_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, &mesh_common_ip_event_handler, NULL));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
     ESP_ERROR_CHECK(esp_wifi_start());
     /*  mesh initialization */

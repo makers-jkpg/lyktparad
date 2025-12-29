@@ -102,14 +102,31 @@ static void heartbeat_timer_cb(void *arg)
     }
     ESP_LOGI(mesh_common_get_tag(), "[ROOT HEARTBEAT] sent - routing table size: %d ", route_table_size);
 
-    if (!(cnt%2)) {
-        /* even heartbeat: turn off light */
-        mesh_light_set_colour(0);
-        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu (even) - LED OFF", (unsigned long)cnt);
-    } else {
-        /* odd heartbeat: turn on light */
+    /* Root node LED behavior:
+     * - Base color indicates router connection: ORANGE (not connected) or GREEN (connected)
+     * - When router is connected AND mesh nodes are present: blink WHITE for 100ms on heartbeat
+     * - Base color (GREEN) is maintained to always show router connection status
+     */
+    bool router_connected = mesh_common_is_router_connected();
+
+    if (!router_connected) {
+        /* Router not connected: maintain ORANGE base */
+        mesh_light_set_colour(MESH_LIGHT_ORANGE);
+        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - LED ORANGE (router not connected)", (unsigned long)cnt);
+    } else if (route_table_size == 0) {
+        /* Router connected, no mesh nodes: steady GREEN */
         mesh_light_set_colour(MESH_LIGHT_GREEN);
-        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu (odd) - LED GREEN", (unsigned long)cnt);
+        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - LED GREEN (router connected, no mesh nodes)", (unsigned long)cnt);
+    } else {
+        /* Router connected with mesh nodes: GREEN base with WHITE blink on heartbeat */
+        /* Ensure GREEN base is set first */
+        mesh_light_set_colour(MESH_LIGHT_GREEN);
+        /* Blink white for 100ms to indicate heartbeat activity */
+        mesh_light_set_colour(MESH_LIGHT_WHITE);
+        vTaskDelay(pdMS_TO_TICKS(100)); /* 100ms delay */
+        /* Return to GREEN base to maintain router connection indication */
+        mesh_light_set_colour(MESH_LIGHT_GREEN);
+        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - LED GREEN with WHITE blink (router connected, %d mesh nodes)", (unsigned long)cnt, route_table_size);
     }
 }
 

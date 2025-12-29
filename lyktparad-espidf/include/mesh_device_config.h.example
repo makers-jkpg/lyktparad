@@ -113,13 +113,13 @@
  * These pins are read at startup to determine if root node behavior should be forced.
  * Both pins have internal pull-up resistors enabled, so they read HIGH when not connected to GND.
  *
- * Truth Table:
- * - Pin A=HIGH, Pin B=HIGH: Default to mesh node (normal operation)
- * - Pin A=LOW, Pin B=HIGH: Force root node
- * - Pin A=HIGH, Pin B=LOW: Force mesh node
- * - Pin A=LOW, Pin B=LOW: Default to mesh node (conflict resolution)
+ * Simplified Logic (only one pin tied to GND at a time, other floating with pull-up):
+ * - GPIO 5 (Force Root) LOW (tied to GND): Force root node
+ * - GPIO 4 (Force Mesh) LOW (tied to GND): Force mesh node
+ * - Both HIGH (both floating): Default to mesh node (normal operation)
+ * - Both LOW: Conflict - defaults to mesh node (safe default, should not occur)
  *
- * Default: GPIO 4 (Force Root), GPIO 5 (Force Mesh)
+ * Default: GPIO 5 (Force Root), GPIO 4 (Force Mesh)
  * Valid range: Most GPIO pins (check ESP32 datasheet for restrictions)
  * Change these if you need to use different pins or avoid conflicts with other hardware
  * Note: Avoid strapping pins (GPIO 0, 2, 12, 15) and flash/PSRAM pins (GPIO 6-11)
@@ -127,15 +127,15 @@
 
 /* GPIO pin for forcing root node behavior (Pin A)
  * When this pin is connected to GND, the node will be forced to root node behavior
- * Default: GPIO 4
+ * Default: GPIO 5
  */
-#define MESH_GPIO_FORCE_ROOT   4
+#define MESH_GPIO_FORCE_ROOT   5
 
 /* GPIO pin for forcing mesh node behavior (Pin B)
  * When this pin is connected to GND, the node will be forced to mesh node behavior
- * Default: GPIO 5
+ * Default: GPIO 4
  */
-#define MESH_GPIO_FORCE_MESH   5
+#define MESH_GPIO_FORCE_MESH   4
 
 #endif /* __MESH_DEVICE_CONFIG_H__ */
 

@@ -53,8 +53,8 @@ esp_err_t mesh_light_init(void)
         return err;
     }
 
-    /* set default initial color */
-    mesh_light_set_colour(MESH_LIGHT_INIT);
+    /* set default initial color - RED for unconnected state */
+    mesh_light_set_colour(MESH_LIGHT_RED);
     return ESP_OK;
 }
 
@@ -81,6 +81,10 @@ esp_err_t mesh_light_set_colour(int color)
         r = 0; g = 155; b = 155; break;
     case MESH_LIGHT_WARNING:
         r = 155; g = 155; b = 155; break;
+    case MESH_LIGHT_WHITE:
+        r = 255; g = 255; b = 255; break;
+    case MESH_LIGHT_ORANGE:
+        r = 255; g = 165; b = 0; break;
     default:
         r = 0; g = 0; b = 0; break;
     }
@@ -102,23 +106,6 @@ esp_err_t mesh_light_set_rgb(uint8_t r, uint8_t g, uint8_t b)
     return led_strip_refresh(s_led_strip);
 }
 
-void mesh_connected_indicator(int layer)
-{
-    switch (layer) {
-    case 1: mesh_light_set_colour(MESH_LIGHT_PINK); break;
-    case 2: mesh_light_set_colour(MESH_LIGHT_YELLOW); break;
-    case 3: mesh_light_set_colour(MESH_LIGHT_RED); break;
-    case 4: mesh_light_set_colour(MESH_LIGHT_BLUE); break;
-    case 5: mesh_light_set_colour(MESH_LIGHT_GREEN); break;
-    case 6: mesh_light_set_colour(MESH_LIGHT_WARNING); break;
-    default: mesh_light_set_colour(0); break;
-    }
-}
-
-void mesh_disconnected_indicator(void)
-{
-    mesh_light_set_colour(MESH_LIGHT_WARNING);
-}
 
 esp_err_t mesh_light_process(mesh_addr_t *from, uint8_t *buf, uint16_t len)
 {
@@ -149,9 +136,9 @@ esp_err_t mesh_light_process(mesh_addr_t *from, uint8_t *buf, uint16_t len)
     }
     if (in->cmd == MESH_CMD_LIGHT_ON_OFF) {
         if (in->on) {
-            mesh_connected_indicator(esp_mesh_get_layer());
+            mesh_light_set_colour(0); /* Turn on - use default/current color */
         } else {
-            mesh_light_set_colour(0);
+            mesh_light_set_colour(0); /* Turn off */
         }
         return ESP_OK;
     }

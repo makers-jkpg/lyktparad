@@ -1,6 +1,6 @@
 # ESP-IDF Mesh Network with LED Control
 
-A WiFi mesh network implementation using ESP-IDF on ESP32/ESP32-C3 devices. The mesh network enables communication between nodes with visual feedback provided through LEDs. The project supports two LED driver types: WS2812/Neopixel LED strips (using RMT) and common-cathode RGB LEDs (using LEDC PWM). The root node periodically sends heartbeat messages to all connected nodes, and nodes respond by changing LED colors based on the mesh state.
+A WiFi mesh network implementation using ESP-IDF on ESP32/ESP32-C3 devices. The mesh network enables communication between nodes with visual feedback provided through LEDs. The project supports two LED driver types: WS2812/Neopixel LED strips (using RMT) and common-cathode RGB LEDs (using LEDC PWM). The root node periodically sends heartbeat messages to all connected nodes. LED colors indicate connection status: root node base color shows router connection (ORANGE = not connected, GREEN = connected), with white blink indicating heartbeat activity to mesh nodes. Non-root nodes use heartbeat-based color changes to show mesh connectivity.
 
 ## Quick Start
 
@@ -27,7 +27,6 @@ Before building, you need to configure two files:
 - **Web Interface**: Root node hosts a web server for monitoring and control
 - **Heartbeat System**: Periodic synchronization messages from root to all nodes
 - **RGB Color Control**: Web-based color picker to set LED colors across the mesh
-- **Layer-Based Indicators**: Different LED colors for different mesh layers
 - **Serial Logging**: Comprehensive logging for debugging and monitoring
 
 ## Hardware Requirements
@@ -39,8 +38,8 @@ Before building, you need to configure two files:
 - **WiFi Router** (for root node connection)
 - **USB cable** for programming and serial communication
 - **GPIO Pins for Root Node Forcing** (optional, configurable):
-  - **GPIO 4 (Pin A, default)**: Force Root Node - Connect to GND to force root node behavior
-  - **GPIO 5 (Pin B, default)**: Force Mesh Node - Connect to GND to force mesh node behavior
+- **GPIO 5 (Pin A, default)**: Force Root Node - Connect to GND to force root node behavior
+- **GPIO 4 (Pin B, default)**: Force Mesh Node - Connect to GND to force mesh node behavior
   - Both pins have internal pull-up resistors (read HIGH when not connected)
   - If neither or both pins are connected to GND, defaults to mesh node behavior
   - **Note**: GPIO pins are configurable in `include/mesh_device_config.h` (see Configuration section)
@@ -162,14 +161,14 @@ To enable common-cathode RGB LED support, uncomment `#define RGB_ENABLE` in `mes
 
 To configure GPIO pins for root node forcing, edit the following settings in `mesh_device_config.h`:
 
-- `MESH_GPIO_FORCE_ROOT`: GPIO pin for forcing root node behavior (default: 4)
-- `MESH_GPIO_FORCE_MESH`: GPIO pin for forcing mesh node behavior (default: 5)
+- `MESH_GPIO_FORCE_ROOT`: GPIO pin for forcing root node behavior (default: 5)
+- `MESH_GPIO_FORCE_MESH`: GPIO pin for forcing mesh node behavior (default: 4)
 
 **Important**:
 - Avoid strapping pins (GPIO 0, 2, 12, 15) and flash/PSRAM pins (GPIO 6-11)
 - Ensure the selected pins don't conflict with LED drivers or other peripherals
 - Both pins have internal pull-up resistors enabled
-- **Note**: If your LED uses GPIO 4, change `MESH_GPIO_FORCE_ROOT` to a different pin to avoid conflicts
+- **Note**: If your LED uses GPIO 5, change `MESH_GPIO_FORCE_ROOT` to a different pin to avoid conflicts
 
 ## Usage
 
@@ -179,27 +178,27 @@ To configure GPIO pins for root node forcing, edit the following settings in `me
    - This node will connect to your WiFi router
    - Once connected, it will obtain an IP address
    - The web server will start automatically
-   - **Optional**: Connect the Force Root GPIO pin (default: GPIO 4) to GND before power-on to force root node behavior
+   - **Optional**: Connect the Force Root GPIO pin (default: GPIO 5) to GND before power-on to force root node behavior
 
 2. **Mesh Nodes**: Flash the same firmware to additional ESP32 devices
    - These nodes will automatically join the mesh network
    - They will connect to the root node or other mesh nodes
    - No additional configuration needed (uses same Mesh ID)
-   - **Optional**: Connect the Force Mesh GPIO pin (default: GPIO 5) to GND before power-on to force mesh node behavior
+   - **Optional**: Connect the Force Mesh GPIO pin (default: GPIO 4) to GND before power-on to force mesh node behavior
 
 ### GPIO Root Node Forcing
 
 The firmware supports GPIO-based root node forcing using two configurable GPIO pins (default: GPIO 4 and GPIO 5).
 
 **Default Pin Configuration:**
-- **GPIO 4 (Force Root)**: When connected to GND at startup, forces the node to become root
-- **GPIO 5 (Force Mesh)**: When connected to GND at startup, forces the node to be a mesh node
+- **GPIO 5 (Force Root)**: When connected to GND at startup, forces the node to become root
+- **GPIO 4 (Force Mesh)**: When connected to GND at startup, forces the node to be a mesh node
 
-**Truth Table:**
-- Pin A=HIGH, Pin B=HIGH: Default behavior (normal root election)
-- Pin A=LOW, Pin B=HIGH: **Force root node**
-- Pin A=HIGH, Pin B=LOW: **Force mesh node**
-- Pin A=LOW, Pin B=LOW: Default to mesh node (conflict resolution)
+**Behavior:**
+- **GPIO 5 LOW** (connected to GND): Forces root node behavior
+- **GPIO 4 LOW** (connected to GND): Forces mesh node behavior
+- **Both HIGH** (not connected): Default behavior (normal root election)
+- **Both LOW** (both connected to GND): Conflict - defaults to mesh node behavior
 
 **Usage:**
 1. Configure GPIO pins in `include/mesh_device_config.h` if you need different pins (see Configuration section)
@@ -222,19 +221,21 @@ The root node hosts a web server accessible at `http://<root-node-ip>/`:
 
 ### LED Visual Indicators
 
-#### Heartbeat Response
-- **Root node**: Green (on) / Off (off) based on heartbeat parity
-- **Non-root nodes**: Blue (on) / Off (off) based on heartbeat parity, or last RGB color if set
+#### Connection States
 
-#### Connection States (Layer-Based)
-- **Layer 1**: Pink (RGB: 155, 0, 155) - Direct child of root
-- **Layer 2**: Yellow (RGB: 155, 155, 0)
-- **Layer 3**: Red (RGB: 155, 0, 0)
-- **Layer 4**: Blue (RGB: 0, 0, 155)
-- **Layer 5**: Green (RGB: 0, 155, 0)
-- **Layer 6+**: Warning/White (RGB: 155, 155, 155)
-- **Disconnected**: Warning/White (RGB: 155, 155, 155)
-- **Initial**: Cyan (RGB: 0, 155, 155)
+**Root Node LED Behavior:**
+The root node LED base color always indicates router connection status, independent of mesh node connections:
+- **Not Connected to Router**: Steady ORANGE (RGB: 255, 165, 0) - Base color indicates router is not connected
+- **Connected to Router (no mesh nodes)**: Steady GREEN (RGB: 0, 155, 0) - Base color indicates router is connected
+- **Connected to Router with Mesh Nodes**: Steady GREEN base with 100ms WHITE blink on each heartbeat (every 500ms)
+  - The GREEN base color is always maintained to show router connection status
+  - The white blink (RGB: 255, 255, 255) occurs when sending heartbeats to mesh nodes
+  - Base color does not change during heartbeat - it always reflects router connection state
+
+**Non-Root Node LED Behavior:**
+- **Startup/Unconnected**: Steady RED (RGB: 155, 0, 0) - Node is not connected to mesh
+- **Connected**: LED turns OFF, then heartbeat system takes control
+- **Heartbeat Response**: Alternates between OFF and BLUE (RGB: 0, 0, 155) based on heartbeat parity, or custom RGB color if set via web interface
 
 ### Serial Monitoring
 
@@ -285,9 +286,18 @@ lyktparad-espidf/
 
 ### Heartbeat System
 
-- Root node sends heartbeat counter every 500ms
-- Even heartbeats: LED off
-- Odd heartbeats: LED on (with color based on state)
+- Root node sends heartbeat counter every 500ms to all connected mesh nodes
+- **Root node LED behavior**:
+  - **Base color indicates router connection status** (not mesh node status):
+    - ORANGE: Router not connected
+    - GREEN: Router connected
+  - **Heartbeat activity indication** (when router is connected):
+    - No mesh nodes: Steady GREEN (no blink)
+    - With mesh nodes: GREEN base with 100ms WHITE blink on each heartbeat
+  - The base color (GREEN/ORANGE) is always maintained to show router connection status, regardless of heartbeat activity
+- **Non-root node LED behavior**:
+  - Even heartbeats: LED off
+  - Odd heartbeats: LED on (BLUE by default, or custom RGB if set)
 - Counter increments with each heartbeat
 
 ## Troubleshooting

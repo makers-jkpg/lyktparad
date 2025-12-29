@@ -26,6 +26,8 @@
 #define MESH_LIGHT_PINK      (0xfb)
 #define MESH_LIGHT_INIT      (0xfa)
 #define MESH_LIGHT_WARNING   (0xf9)
+#define MESH_LIGHT_WHITE     (0xf8)
+#define MESH_LIGHT_ORANGE    (0xf7)
 
 /* Token constants are now defined in mesh_config.h:
  *   MESH_CONFIG_TOKEN_ID
@@ -62,8 +64,6 @@ esp_err_t mesh_light_init(void);
 esp_err_t mesh_light_set_colour(int color);
 esp_err_t mesh_light_set_rgb(uint8_t r, uint8_t g, uint8_t b);
 esp_err_t mesh_light_process(mesh_addr_t *from, uint8_t *buf, uint16_t len);
-void mesh_connected_indicator(int layer);
-void mesh_disconnected_indicator(void);
 
 /* State access functions for web interface (root node only) */
 /* These functions are implemented in mesh_root.c */
