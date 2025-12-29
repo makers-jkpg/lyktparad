@@ -366,16 +366,24 @@ void esp_mesh_p2p_rx_main(void *arg)
         data.tos = MESH_TOS_P2P;
 
         esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+
+        /* Log routing table size changes for debugging */
+        static int last_route_table_size = -1;
+        if (route_table_size != last_route_table_size) {
+            ESP_LOGI(MESH_TAG, "[ROUTING TABLE CHANGE] Size changed: %d -> %d", last_route_table_size, route_table_size);
+            last_route_table_size = route_table_size;
+        }
+
         for (i = 0; i < route_table_size; i++) {
             err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
 
         /* single broadcast to all children */
 //        err = esp_mesh_send(NULL, &data, MESH_DATA_P2P, NULL, 0);
             if (err) {
-                ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x", err);
+                ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
             }
         }
-        ESP_LOGI(MESH_TAG, "[ROOT HEARTBEAT] sent - routing table size: %d ", esp_mesh_get_routing_table_size());
+        ESP_LOGI(MESH_TAG, "[ROOT HEARTBEAT] sent - routing table size: %d ", route_table_size);
 
     if (!(cnt%2)) {
         /* even heartbeat: turn off light */
@@ -525,6 +533,11 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "<MESH_EVENT_CHILD_DISCONNECTED>aid:%d, "MACSTR"",
                  child_disconnected->aid,
                  MAC2STR(child_disconnected->mac));
+        if (esp_mesh_is_root()) {
+            int current_rt_size = esp_mesh_get_routing_table_size();
+            ESP_LOGI(MESH_TAG, "[CHILD DISCONNECTED] Child "MACSTR" disconnected - Current routing table size: %d",
+                     MAC2STR(child_disconnected->mac), current_rt_size);
+        }
     }
     break;
     case MESH_EVENT_ROUTING_TABLE_ADD: {
@@ -532,6 +545,9 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGW(MESH_TAG, "<MESH_EVENT_ROUTING_TABLE_ADD>add %d, new:%d, layer:%d",
                  routing_table->rt_size_change,
                  routing_table->rt_size_new, mesh_layer);
+        if (esp_mesh_is_root()) {
+            ESP_LOGI(MESH_TAG, "[ROUTING TABLE] Node added - Total nodes: %d", routing_table->rt_size_new);
+        }
     }
     break;
     case MESH_EVENT_ROUTING_TABLE_REMOVE: {
@@ -539,6 +555,9 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGW(MESH_TAG, "<MESH_EVENT_ROUTING_TABLE_REMOVE>remove %d, new:%d, layer:%d",
                  routing_table->rt_size_change,
                  routing_table->rt_size_new, mesh_layer);
+        if (esp_mesh_is_root()) {
+            ESP_LOGI(MESH_TAG, "[ROUTING TABLE] Node removed - Total nodes: %d", routing_table->rt_size_new);
+        }
     }
     break;
     case MESH_EVENT_NO_PARENT_FOUND: {
@@ -779,7 +798,8 @@ void app_main(void)
 #else
     /* Disable mesh PS function */
     ESP_ERROR_CHECK(esp_mesh_disable_ps());
-    ESP_ERROR_CHECK(esp_mesh_set_ap_assoc_expire(10));
+    /* Reduced from 10 to 3 seconds for faster disconnection detection */
+    ESP_ERROR_CHECK(esp_mesh_set_ap_assoc_expire(3));
 #endif
     mesh_cfg_t cfg = MESH_INIT_CONFIG_DEFAULT();
     /* mesh ID */
