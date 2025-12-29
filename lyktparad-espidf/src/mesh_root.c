@@ -87,6 +87,9 @@ static void heartbeat_timer_cb(void *arg)
 
     esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
 
+    /* Calculate actual child node count (excluding root node) */
+    int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
+
     /* Log routing table size changes for debugging */
     static int last_route_table_size = -1;
     if (route_table_size != last_route_table_size) {
@@ -100,7 +103,7 @@ static void heartbeat_timer_cb(void *arg)
             ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
         }
     }
-    ESP_LOGI(mesh_common_get_tag(), "[ROOT HEARTBEAT] sent - routing table size: %d ", route_table_size);
+    ESP_LOGI(mesh_common_get_tag(), "[ROOT HEARTBEAT] sent - routing table size: %d (child nodes: %d)", route_table_size, child_node_count);
 
     /* Root node LED behavior:
      * - Base color indicates router connection: ORANGE (not connected) or GREEN (connected)
@@ -113,7 +116,7 @@ static void heartbeat_timer_cb(void *arg)
         /* Router not connected: maintain ORANGE base */
         mesh_light_set_colour(MESH_LIGHT_ORANGE);
         ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - LED ORANGE (router not connected)", (unsigned long)cnt);
-    } else if (route_table_size == 0) {
+    } else if (child_node_count == 0) {
         /* Router connected, no mesh nodes: steady GREEN */
         mesh_light_set_colour(MESH_LIGHT_GREEN);
         ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - LED GREEN (router connected, no mesh nodes)", (unsigned long)cnt);
@@ -126,7 +129,7 @@ static void heartbeat_timer_cb(void *arg)
         vTaskDelay(pdMS_TO_TICKS(100)); /* 100ms delay */
         /* Return to GREEN base to maintain router connection indication */
         mesh_light_set_colour(MESH_LIGHT_GREEN);
-        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - LED GREEN with WHITE blink (router connected, %d mesh nodes)", (unsigned long)cnt, route_table_size);
+        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - LED GREEN with WHITE blink (router connected, %d mesh nodes)", (unsigned long)cnt, child_node_count);
     }
 }
 
@@ -160,6 +163,9 @@ esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
 
     esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
 
+    /* Calculate actual child node count (excluding root node) */
+    int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
+
     /* Update root node RGB state for web interface (even if no other nodes) */
     root_rgb_r = r;
     root_rgb_g = g;
@@ -173,8 +179,8 @@ esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
     }
     set_rgb_led(r, g, b);
 
-    if (route_table_size == 0) {
-        ESP_LOGD(mesh_common_get_tag(), "[RGB SENT] R:%d G:%d B:%d - no nodes in routing table", r, g, b);
+    if (child_node_count == 0) {
+        ESP_LOGD(mesh_common_get_tag(), "[RGB SENT] R:%d G:%d B:%d - no child nodes", r, g, b);
         return ESP_OK;
     }
     for (i = 0; i < route_table_size; i++) {
@@ -183,7 +189,7 @@ esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
             ESP_LOGD(MESH_TAG, "RGB send err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
         }
     }
-    ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] RGB command sent: R:%d G:%d B:%d to %d nodes", r, g, b, route_table_size);
+    ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] RGB command sent: R:%d G:%d B:%d to %d child nodes", r, g, b, child_node_count);
     return ESP_OK;
 }
 
@@ -213,7 +219,9 @@ int mesh_get_node_count(void)
     if (!esp_mesh_is_root()) {
         return 0;
     }
-    return esp_mesh_get_routing_table_size();
+    int total_size = esp_mesh_get_routing_table_size();
+    /* Subtract 1 to exclude root node from count - routing table size includes root node */
+    return (total_size > 0) ? (total_size - 1) : 0;
 }
 
 /*******************************************************

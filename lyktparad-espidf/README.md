@@ -41,7 +41,8 @@ Before building, you need to configure two files:
 - **GPIO 5 (Pin A, default)**: Force Root Node - Connect to GND to force root node behavior
 - **GPIO 4 (Pin B, default)**: Force Mesh Node - Connect to GND to force mesh node behavior
   - Both pins have internal pull-up resistors (read HIGH when not connected)
-  - If neither or both pins are connected to GND, defaults to mesh node behavior
+  - Both pins HIGH (not connected): Normal root election enabled
+  - Both pins LOW (conflict): Normal root election enabled
   - **Note**: GPIO pins are configurable in `include/mesh_device_config.h` (see Configuration section)
 
 ### LED Hardware Options
@@ -198,7 +199,7 @@ The firmware supports GPIO-based root node forcing using two configurable GPIO p
 - **GPIO 5 LOW** (connected to GND): Forces root node behavior
 - **GPIO 4 LOW** (connected to GND): Forces mesh node behavior
 - **Both HIGH** (not connected): Default behavior (normal root election)
-- **Both LOW** (both connected to GND): Conflict - defaults to mesh node behavior
+- **Both LOW** (both connected to GND): Conflict - normal root election
 
 **Usage:**
 1. Configure GPIO pins in `include/mesh_device_config.h` if you need different pins (see Configuration section)
@@ -296,7 +297,7 @@ lyktparad-espidf/
     - With mesh nodes: GREEN base with 100ms WHITE blink on each heartbeat
   - The base color (GREEN/ORANGE) is always maintained to show router connection status, regardless of heartbeat activity
 - **Non-root node LED behavior**:
-  - Even heartbeats: LED off
+- Even heartbeats: LED off
   - Odd heartbeats: LED on (BLUE by default, or custom RGB if set)
 - Counter increments with each heartbeat
 

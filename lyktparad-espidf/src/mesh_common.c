@@ -568,11 +568,23 @@ esp_err_t mesh_common_init(void)
     /* Reduced from 10 to 3 seconds for faster disconnection detection */
     ESP_ERROR_CHECK(esp_mesh_set_ap_assoc_expire(3));
 #endif
+    /* Apply GPIO-based root forcing before mesh starts */
+    /* Read GPIO pins directly to determine the desired behavior */
+    bool force_root = mesh_gpio_read_root_force();
+    int level_root = 1; /* Default to HIGH if GPIO not initialized */
+    int level_mesh = 1; /* Default to HIGH if GPIO not initialized */
+    if (mesh_gpio_is_initialized()) {
+        level_root = gpio_get_level(MESH_GPIO_FORCE_ROOT);
+        level_mesh = gpio_get_level(MESH_GPIO_FORCE_MESH);
+    }
+
     mesh_cfg_t cfg = MESH_INIT_CONFIG_DEFAULT();
     /* mesh ID */
     memcpy((uint8_t *) &cfg.mesh_id, MESH_ID, 6);
     /* router */
     cfg.channel = MESH_CONFIG_MESH_CHANNEL;
+    /* Configure router for all nodes (required by esp_mesh_set_config)
+     * For forced mesh nodes, router connection will be prevented by disabling self-organization below */
     cfg.router.ssid_len = strlen(MESH_CONFIG_ROUTER_SSID);
     memcpy((uint8_t *) &cfg.router.ssid, MESH_CONFIG_ROUTER_SSID, cfg.router.ssid_len);
     memcpy((uint8_t *) &cfg.router.password, MESH_CONFIG_ROUTER_PASSWORD,
@@ -583,16 +595,6 @@ esp_err_t mesh_common_init(void)
     cfg.mesh_ap.nonmesh_max_connection = CONFIG_MESH_NON_MESH_AP_CONNECTIONS;
     memcpy((uint8_t *) &cfg.mesh_ap.password, MESH_CONFIG_MESH_AP_PASSWORD, strlen(MESH_CONFIG_MESH_AP_PASSWORD));
     ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
-
-    /* Apply GPIO-based root forcing before mesh starts */
-    /* Read GPIO pins directly to determine the desired behavior */
-    bool force_root = mesh_gpio_read_root_force();
-    int level_root = 1; /* Default to HIGH if GPIO not initialized */
-    int level_mesh = 1; /* Default to HIGH if GPIO not initialized */
-    if (mesh_gpio_is_initialized()) {
-        level_root = gpio_get_level(MESH_GPIO_FORCE_ROOT);
-        level_mesh = gpio_get_level(MESH_GPIO_FORCE_MESH);
-    }
 
     if (force_root) {
         /* GPIO 5 LOW (and GPIO 4 HIGH): Force root node
@@ -628,9 +630,26 @@ esp_err_t mesh_common_init(void)
         ESP_ERROR_CHECK(fix_root_err);
         ESP_LOGI(MESH_TAG, "[GPIO ROOT FORCING] Root node behavior forced via GPIO (GPIO %d=LOW) - type=MESH_ROOT, self-organization disabled, fixed root enabled", MESH_GPIO_FORCE_ROOT);
     } else if (mesh_gpio_is_initialized() && level_mesh == 0 && level_root != 0) {
-        /* GPIO 4 LOW (and GPIO 5 HIGH): Force mesh/child node - prevent root election */
-        ESP_ERROR_CHECK(esp_mesh_set_self_organized(false, false));
-        ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Mesh node behavior forced via GPIO (GPIO %d=LOW) - self-organization disabled", MESH_GPIO_FORCE_MESH);
+        /* GPIO 4 LOW (and GPIO 5 HIGH): Force mesh/child node - prevent root election
+         * To allow connection to parent mesh nodes while preventing router connection, we:
+         * 1. Enable self-organization but disable router connection (esp_mesh_set_self_organized(true, false))
+         *    - This allows the node to connect to parent mesh nodes
+         *    - But prevents connection to the router (second parameter = false)
+         * 2. Release root fixing (ensures node can connect as child)
+         * Note: Router config must be set in mesh_cfg_t (required by esp_mesh_set_config),
+         * but with router connection disabled via self-organization, the node will not connect to router.
+         * The node will automatically connect to a parent mesh node if available.
+         */
+        ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Configuring for mesh node (GPIO %d=LOW, GPIO %d=HIGH/floating)",
+                 MESH_GPIO_FORCE_MESH, MESH_GPIO_FORCE_ROOT);
+        ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Enabling self-organization for parent connection, but disabling router connection...");
+        ESP_ERROR_CHECK(esp_mesh_set_self_organized(true, false));
+        ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Releasing root fixing to ensure non-root behavior...");
+        esp_err_t fix_root_err = esp_mesh_fix_root(false);
+        if (fix_root_err != ESP_OK && fix_root_err != ESP_ERR_MESH_NOT_INIT) {
+            ESP_LOGW(MESH_TAG, "[GPIO NODE FORCING] Warning: esp_mesh_fix_root(false) returned %s (0x%x) - this is usually fine", esp_err_to_name(fix_root_err), fix_root_err);
+        }
+        ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Mesh node behavior forced via GPIO (GPIO %d=LOW) - self-organization enabled for parent connection, router connection disabled", MESH_GPIO_FORCE_MESH);
     } else {
         /* Both HIGH, both LOW (conflict), or GPIO not initialized: Normal root election - ensure self-organization is enabled */
         ESP_ERROR_CHECK(esp_mesh_set_self_organized(true, true));
