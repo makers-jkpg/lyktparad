@@ -62,10 +62,13 @@
 #include "mesh_config.h"
 #include "mesh_light.h"
 #include "mesh_web.h"
+#include "mesh_device_config.h"
 #include "nvs_flash.h"
 #include "esp_timer.h"
+#ifdef RGB_ENABLE
 #include "driver/ledc.h"
 #include "driver/gpio.h"
+#endif /* RGB_ENABLE */
 
 #define RX_SIZE          (1500)
 #define TX_SIZE          (1460)
@@ -104,18 +107,7 @@ mesh_light_ctl_t light_off = {
     .token_value = MESH_CONFIG_TOKEN_VALUE,
 };
 
-/* RGB LED (GPIO0 = R, GPIO1 = G, GPIO2 = B) using LEDC PWM */
-#define RGB_LEDC_TIMER           LEDC_TIMER_0
-#define RGB_LEDC_MODE            LEDC_LOW_SPEED_MODE
-#define RGB_LEDC_RESOLUTION      LEDC_TIMER_8_BIT
-#define RGB_LEDC_FREQUENCY_HZ    5000
-#define RGB_CHANNEL_G            LEDC_CHANNEL_0
-#define RGB_CHANNEL_R            LEDC_CHANNEL_1
-#define RGB_CHANNEL_B            LEDC_CHANNEL_2
-#define RGB_GPIO_G               0
-#define RGB_GPIO_R               1
-#define RGB_GPIO_B               2
-
+#ifdef RGB_ENABLE
 void init_rgb_led(void)
 {
     ledc_timer_config_t ledc_timer = {
@@ -182,6 +174,21 @@ void set_rgb_led(int r, int g, int b)
     ledc_set_duty(RGB_LEDC_MODE, RGB_CHANNEL_B, (uint32_t)b);
     ledc_update_duty(RGB_LEDC_MODE, RGB_CHANNEL_B);
 }
+#else
+/* Stub functions when RGB LED is not enabled */
+void init_rgb_led(void)
+{
+    /* No-op: RGB LED not enabled */
+}
+
+void set_rgb_led(int r, int g, int b)
+{
+    /* No-op: RGB LED not enabled */
+    (void)r;
+    (void)g;
+    (void)b;
+}
+#endif /* RGB_ENABLE */
 
 void esp_mesh_p2p_tx_main(void *arg)
 {

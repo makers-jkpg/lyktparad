@@ -44,5 +44,64 @@
  */
 #define MESH_LED_RMT_RES_HZ      10000000
 
+/*******************************************************
+ *                RGB LED Configuration (LEDC PWM)
+ *******************************************************/
+
+/* Enable RGB LED support - Uncomment this if your device has a common-anode/cathode RGB LED
+ * If not defined, RGB LED functions will be stubbed out (no-op)
+ * This allows the code to compile and run on devices without RGB LEDs
+ */
+// #define RGB_ENABLE
+
+#ifdef RGB_ENABLE
+/* RGB LED Timer - LEDC timer used for PWM generation
+ * Default: LEDC_TIMER_0
+ * Valid values: LEDC_TIMER_0 through LEDC_TIMER_3
+ * Change if you need to use a different timer for other purposes
+ */
+#define RGB_LEDC_TIMER           LEDC_TIMER_0
+
+/* RGB LED Mode - LEDC speed mode
+ * Default: LEDC_LOW_SPEED_MODE
+ * Valid values: LEDC_LOW_SPEED_MODE or LEDC_HIGH_SPEED_MODE
+ * High speed mode uses more power but allows higher frequencies
+ */
+#define RGB_LEDC_MODE            LEDC_LOW_SPEED_MODE
+
+/* RGB LED Resolution - PWM duty cycle resolution in bits
+ * Default: LEDC_TIMER_8_BIT (256 levels)
+ * Valid values: LEDC_TIMER_1_BIT through LEDC_TIMER_20_BIT
+ * Higher resolution provides smoother color transitions but uses more memory
+ */
+#define RGB_LEDC_RESOLUTION      LEDC_TIMER_8_BIT
+
+/* RGB LED Frequency - PWM frequency in Hz
+ * Default: 5000 Hz
+ * Valid range: Depends on resolution and clock source
+ * Higher frequencies reduce visible flicker but may cause issues with some LEDs
+ */
+#define RGB_LEDC_FREQUENCY_HZ    5000
+
+/* RGB LED Channels - LEDC channel assignments for each color
+ * Default: Green=CHANNEL_0, Red=CHANNEL_1, Blue=CHANNEL_2
+ * Valid values: LEDC_CHANNEL_0 through LEDC_CHANNEL_7
+ * Change if you need to avoid conflicts with other LEDC usage
+ */
+#define RGB_CHANNEL_G            LEDC_CHANNEL_0
+#define RGB_CHANNEL_R            LEDC_CHANNEL_1
+#define RGB_CHANNEL_B            LEDC_CHANNEL_2
+
+/* RGB LED GPIO Pins - GPIO pins connected to RGB LED cathodes (common anode) or anodes (common cathode)
+ * Default: Green=GPIO 0, Red=GPIO 1, Blue=GPIO 2
+ * Valid range: Most GPIO pins support LEDC (check ESP32 datasheet for restrictions)
+ * Change these to match your hardware connections
+ * Note: Some GPIOs may have restrictions (e.g., GPIO 6-11 are typically flash/PSRAM)
+ */
+#define RGB_GPIO_G               0
+#define RGB_GPIO_R               1
+#define RGB_GPIO_B               2
+#endif /* RGB_ENABLE */
+
 #endif /* __MESH_DEVICE_CONFIG_H__ */
 
