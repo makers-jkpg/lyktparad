@@ -1,6 +1,6 @@
 # ESP-IDF Mesh Network with LED Control
 
-A WiFi mesh network implementation using ESP-IDF on ESP32/ESP32-C3 devices. The mesh network enables communication between nodes with visual feedback provided through WS2812 LED strips. The root node periodically sends heartbeat messages to all connected nodes, and nodes respond by changing LED colors based on the mesh state.
+A WiFi mesh network implementation using ESP-IDF on ESP32/ESP32-C3 devices. The mesh network enables communication between nodes with visual feedback provided through LEDs. The project supports two LED driver types: WS2812/Neopixel LED strips (using RMT) and common-cathode RGB LEDs (using LEDC PWM). The root node periodically sends heartbeat messages to all connected nodes, and nodes respond by changing LED colors based on the mesh state.
 
 ## Quick Start
 
@@ -14,16 +14,16 @@ Before building, you need to configure two files:
    - Configure authentication tokens
 
 2. **`include/mesh_device_config.h`** - Copy from `include/mesh_device_config.h.example`:
-   - Set LED GPIO pin (default: 10)
-   - Set number of pixels (default: 1)
-   - Set RMT resolution (default: 10 MHz, usually no change needed)
+   - **For WS2812/Neopixel LEDs**: Set LED GPIO pin (default: 10), number of pixels (default: 1), and RMT resolution (default: 10 MHz)
+   - **For common-cathode RGB LEDs**: Uncomment `RGB_ENABLE` and configure GPIO pins, LEDC timer, channels, and PWM settings
 
 **⚠️ Important**: These config files are in `.gitignore` - never commit them with real credentials!
 
 ## Features
 
 - **ESP-MESH Networking**: Self-organizing WiFi mesh network with tree topology
-- **Visual Feedback**: WS2812 LED strips provide real-time mesh status indication
+- **Visual Feedback**: LED indicators provide real-time mesh status indication
+- **Dual LED Support**: Supports both WS2812/Neopixel LED strips (RMT) and common-cathode RGB LEDs (LEDC PWM)
 - **Web Interface**: Root node hosts a web server for monitoring and control
 - **Heartbeat System**: Periodic synchronization messages from root to all nodes
 - **RGB Color Control**: Web-based color picker to set LED colors across the mesh
@@ -33,15 +33,28 @@ Before building, you need to configure two files:
 ## Hardware Requirements
 
 - **ESP32** or **ESP32-C3** development board
-- **WS2812 LED strip** (or single WS2812 LED)
+- **LED Hardware** (choose one):
+  - **WS2812/Neopixel LED strip** (or single WS2812 LED) - Recommended for addressable LED strips
+  - **Common-cathode RGB LED** - For simple RGB LEDs with separate R, G, B pins
 - **WiFi Router** (for root node connection)
 - **USB cable** for programming and serial communication
 
-### Default Hardware Configuration
+### LED Hardware Options
 
+#### Option 1: WS2812/Neopixel LEDs (Default)
 - **LED GPIO Pin**: GPIO 10 (configurable)
 - **Number of LEDs**: 1 (configurable)
 - **RMT Resolution**: 10 MHz (configurable)
+- **Power**: Requires 5V power supply
+- **Best for**: Addressable LED strips, multiple LEDs, complex patterns
+
+#### Option 2: Common-Cathode RGB LEDs
+- **RGB GPIO Pins**: GPIO 0 (Green), GPIO 1 (Red), GPIO 2 (Blue) - configurable
+- **LEDC Timer**: Timer 0 (configurable)
+- **PWM Frequency**: 5000 Hz (configurable)
+- **PWM Resolution**: 8-bit (256 levels, configurable)
+- **Power**: Typically 3.3V or 5V depending on LED
+- **Best for**: Simple RGB LEDs, single-color control, lower power consumption
 
 ## Software Requirements
 
@@ -72,14 +85,13 @@ Before building, you need to configure two files:
    - Mesh AP password
    - Authentication tokens
 
-4. **Configure LED Hardware** (if different from defaults):
+4. **Configure LED Hardware**:
    ```bash
    cp include/mesh_device_config.h.example include/mesh_device_config.h
    ```
-   Edit `include/mesh_device_config.h` and update:
-   - GPIO pin number
-   - Number of pixels
-   - RMT resolution (if needed)
+   Edit `include/mesh_device_config.h`:
+   - **For WS2812/Neopixel** (default): Update GPIO pin, number of pixels, and RMT resolution if needed
+   - **For common-cathode RGB LEDs**: Uncomment `#define RGB_ENABLE` and configure GPIO pins, LEDC timer, channels, and PWM settings
 
 ## Building and Flashing
 
@@ -116,10 +128,29 @@ Required settings:
 
 **⚠️ WARNING**: Never commit `mesh_device_config.h` to version control if it contains site-specific settings.
 
-Settings:
+The project supports two LED driver types. Configure the one that matches your hardware:
+
+#### WS2812/Neopixel LED Configuration (Default)
+
+These settings are always active and control the WS2812/Neopixel LED driver:
+
 - `MESH_LED_GPIO`: GPIO pin connected to WS2812 data line (default: 10)
 - `MESH_LED_NUM_PIXELS`: Number of LEDs in strip (default: 1)
 - `MESH_LED_RMT_RES_HZ`: RMT resolution in Hz (default: 10000000)
+
+#### Common-Cathode RGB LED Configuration (Optional)
+
+To enable common-cathode RGB LED support, uncomment `#define RGB_ENABLE` in `mesh_device_config.h`:
+
+- `RGB_ENABLE`: Uncomment to enable common-cathode RGB LED support
+- `RGB_LEDC_TIMER`: LEDC timer number (default: LEDC_TIMER_0)
+- `RGB_LEDC_MODE`: LEDC speed mode (default: LEDC_LOW_SPEED_MODE)
+- `RGB_LEDC_RESOLUTION`: PWM resolution in bits (default: LEDC_TIMER_8_BIT)
+- `RGB_LEDC_FREQUENCY_HZ`: PWM frequency in Hz (default: 5000)
+- `RGB_CHANNEL_R/G/B`: LEDC channel assignments (default: R=CHANNEL_1, G=CHANNEL_0, B=CHANNEL_2)
+- `RGB_GPIO_R/G/B`: GPIO pins for Red, Green, Blue (default: R=GPIO 1, G=GPIO 0, B=GPIO 2)
+
+**Note**: Both LED drivers can be enabled simultaneously. The WS2812 driver is used for mesh status indicators, while the RGB LED driver provides additional visual feedback when `RGB_ENABLE` is defined.
 
 ## Usage
 
@@ -178,11 +209,13 @@ lyktparad-espidf/
 ├── include/
 │   ├── mesh_config.h.example      # Mesh configuration template
 │   ├── mesh_device_config.h.example  # Device configuration template
-│   ├── mesh_light.h               # LED control API
+│   ├── light_neopixel.h           # WS2812/Neopixel LED control API
+│   ├── light_common_cathode.h     # Common-cathode RGB LED control API
 │   └── mesh_web.h                 # Web server API
 ├── src/
 │   ├── mesh.c                     # Core mesh network logic
-│   ├── mesh_light.c               # LED control implementation
+│   ├── light_neopixel.c           # WS2812/Neopixel LED driver implementation
+│   ├── light_common_cathode.c     # Common-cathode RGB LED driver implementation
 │   ├── mesh_web.c                 # Web server implementation
 │   └── CMakeLists.txt             # Build configuration
 ├── platformio.ini                 # PlatformIO project configuration
@@ -222,9 +255,20 @@ lyktparad-espidf/
 - Check serial output for error messages
 
 ### LED not working
+
+**For WS2812/Neopixel LEDs:**
 - Verify GPIO pin in `mesh_device_config.h` matches hardware
 - Check LED power supply (WS2812 requires 5V)
 - Verify data line connection
+- Check serial output for initialization errors
+
+**For common-cathode RGB LEDs:**
+- Verify `RGB_ENABLE` is uncommented in `mesh_device_config.h`
+- Check that GPIO pins match your hardware connections
+- Verify LED polarity (must be common-cathode, not common-anode)
+- Ensure GPIO pins support LEDC (check ESP32 datasheet)
+- Check LED power supply (typically 3.3V or 5V depending on LED)
+- Verify PWM frequency and resolution settings are appropriate
 - Check serial output for initialization errors
 
 ### Web interface not accessible
@@ -245,14 +289,19 @@ lyktparad-espidf/
 
 This project uses PlatformIO and **must be built within VS Code**. The build process:
 1. Compiles ESP-IDF components
-2. Links managed components (led_strip)
+2. Links managed components (led_strip for WS2812 support)
 3. Generates partition table
 4. Creates firmware binary
 
+**LED Driver Selection:**
+- WS2812/Neopixel driver (`light_neopixel.c`) is always compiled and active
+- Common-cathode RGB LED driver (`light_common_cathode.c`) is always compiled but only active when `RGB_ENABLE` is defined
+- Both drivers can operate simultaneously if both LED types are connected
+
 ### Adding New Features
 
-- **New message types**: Add command prefix in `include/mesh_light.h` and handle in `src/mesh.c` and `src/mesh_light.c`
-- **New LED patterns**: Extend `src/mesh_light.c` with new color functions
+- **New message types**: Add command prefix in `include/light_neopixel.h` and handle in `src/mesh.c` and `src/light_neopixel.c`
+- **New LED patterns**: Extend `src/light_neopixel.c` with new color functions
 - **Web API endpoints**: Add handlers in `src/mesh_web.c` and register in `mesh_web_server_start()`
 
 ## License
@@ -263,5 +312,5 @@ Copyright (c) 2025 the_louie
 
 - **ESP-IDF**: Espressif IoT Development Framework
 - **ESP-MESH**: Espressif's WiFi mesh networking solution
-- **led_strip component**: Espressif managed component for WS2812 control
+- **led_strip component**: Espressif managed component for WS2812/Neopixel control
 

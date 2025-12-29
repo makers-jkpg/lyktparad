@@ -48,9 +48,10 @@
  *                RGB LED Configuration (LEDC PWM)
  *******************************************************/
 
-/* Enable RGB LED support - Uncomment this if your device has a common-anode/cathode RGB LED
+/* Enable RGB LED support - Uncomment this if your device has a common-cathode RGB LED
  * If not defined, RGB LED functions will be stubbed out (no-op)
  * This allows the code to compile and run on devices without RGB LEDs
+ * Note: This implementation is for common-cathode LEDs only (cathodes to GND, anodes to GPIO)
  */
 // #define RGB_ENABLE
 
@@ -92,7 +93,8 @@
 #define RGB_CHANNEL_R            LEDC_CHANNEL_1
 #define RGB_CHANNEL_B            LEDC_CHANNEL_2
 
-/* RGB LED GPIO Pins - GPIO pins connected to RGB LED cathodes (common anode) or anodes (common cathode)
+/* RGB LED GPIO Pins - GPIO pins connected to RGB LED anodes (common cathode)
+ * Note: This implementation is for common-cathode LEDs (cathodes connected to GND)
  * Default: Green=GPIO 0, Red=GPIO 1, Blue=GPIO 2
  * Valid range: Most GPIO pins support LEDC (check ESP32 datasheet for restrictions)
  * Change these to match your hardware connections
