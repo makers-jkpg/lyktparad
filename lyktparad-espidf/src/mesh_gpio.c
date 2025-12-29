@@ -22,6 +22,11 @@
 /* Track initialization state to make function idempotent */
 static bool gpio_initialized = false;
 
+bool mesh_gpio_is_initialized(void)
+{
+    return gpio_initialized;
+}
+
 /*******************************************************
  *                GPIO Initialization
  *******************************************************/
@@ -77,17 +82,17 @@ bool mesh_gpio_read_root_force(void)
     ESP_LOGD(GPIO_TAG, "GPIO pin states: GPIO %d (Force Root)=%d, GPIO %d (Force Mesh)=%d",
              MESH_GPIO_FORCE_ROOT, level_root, MESH_GPIO_FORCE_MESH, level_mesh);
 
-    /* Simplified logic: Only one pin will be tied to GND at a time, the other will be floating (HIGH due to pull-up)
-     * - GPIO 5 (Force Root) LOW (tied to GND): Force root node -> return true
-     * - GPIO 4 (Force Mesh) LOW (tied to GND): Force mesh node -> return false
-     * - Both HIGH (both floating with pull-ups): Default to mesh node (normal operation) -> return false
-     * - Both LOW (should not happen in normal operation): Conflict - default to mesh node (safe default) -> return false
+    /* Simplified logic: Only one pin should be tied to GND at a time for forcing behavior
+     * - GPIO 5 (Force Root) LOW (and GPIO 4 HIGH): Force root node -> return true
+     * - GPIO 4 (Force Mesh) LOW (and GPIO 5 HIGH): Force mesh node -> return false
+     * - Both HIGH (both floating with pull-ups): Normal root election -> return false
+     * - Both LOW (conflict): Normal root election -> return false (handled as normal election in mesh_common.c)
      */
     bool force_root = false;
 
     if (level_root == 0 && level_mesh == 0) {
-        /* Both pins LOW - conflict condition (should not happen if only one pin is tied to GND) */
-        ESP_LOGW(GPIO_TAG, "GPIO conflict detected (both pins LOW), defaulting to mesh node behavior");
+        /* Both pins LOW - conflict condition, will default to normal root election */
+        ESP_LOGW(GPIO_TAG, "GPIO conflict detected (both pins LOW), will default to normal root election");
         force_root = false;
     } else if (level_root == 0) {
         /* Force Root pin is LOW (tied to GND), Force Mesh pin is HIGH (floating with pull-up) */
@@ -101,7 +106,7 @@ bool mesh_gpio_read_root_force(void)
         force_root = false;
     } else {
         /* Both pins HIGH - both floating with pull-ups active (normal operation, no forcing) */
-        ESP_LOGI(GPIO_TAG, "GPIO defaulting to mesh node behavior (both pins HIGH/floating, normal operation)");
+        ESP_LOGI(GPIO_TAG, "GPIO defaulting to normal root election (both pins HIGH/floating)");
         force_root = false;
     }
 

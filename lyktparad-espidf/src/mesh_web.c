@@ -3,8 +3,10 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_mesh.h"
+#include "esp_timer.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 static const char *WEB_TAG = "mesh_web";
 static httpd_handle_t server_handle = NULL;

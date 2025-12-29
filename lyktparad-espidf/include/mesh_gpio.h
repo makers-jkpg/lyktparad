@@ -8,11 +8,11 @@
  * - Default: GPIO 4 (Pin B) - Force Mesh Node - When connected to GND, forces mesh node behavior
  * - Pins can be changed via MESH_GPIO_FORCE_ROOT and MESH_GPIO_FORCE_MESH in mesh_device_config.h
  *
- * Simplified Logic (only one pin tied to GND at a time, other floating with pull-up):
- * - GPIO 5 (Pin A) LOW (tied to GND): Force root node
- * - GPIO 4 (Pin B) LOW (tied to GND): Force mesh node
- * - Both HIGH (both floating): Default to mesh node (normal operation)
- * - Both LOW: Conflict - defaults to mesh node (safe default, should not occur)
+ * Simplified Logic (only one pin should be tied to GND at a time for forcing behavior):
+ * - GPIO 5 (Pin A) LOW (and Pin B HIGH): Force root node (uses esp_mesh_fix_root(true))
+ * - GPIO 4 (Pin B) LOW (and Pin A HIGH): Force mesh node (uses esp_mesh_set_self_organized(false, false))
+ * - Both HIGH (both floating): Normal root election enabled (uses esp_mesh_set_self_organized(true, true))
+ * - Both LOW (conflict): Normal root election enabled (uses esp_mesh_set_self_organized(true, true))
  *
  * Both pins have internal pull-up resistors enabled, so they read HIGH when not connected to GND.
  *
@@ -53,6 +53,12 @@
  * @note GPIO pins are configurable via MESH_GPIO_FORCE_ROOT and MESH_GPIO_FORCE_MESH in mesh_device_config.h
  */
 esp_err_t mesh_gpio_init(void);
+
+/* Check if GPIO module is initialized
+ *
+ * @return true if GPIO module is initialized, false otherwise
+ */
+bool mesh_gpio_is_initialized(void);
 
 /* Read GPIO pins to determine if root node should be forced
  * Implements simplified logic: only one pin tied to GND at a time, other floating with pull-up
