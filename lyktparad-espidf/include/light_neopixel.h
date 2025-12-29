@@ -65,12 +65,14 @@ esp_err_t mesh_light_process(mesh_addr_t *from, uint8_t *buf, uint16_t len);
 void mesh_connected_indicator(int layer);
 void mesh_disconnected_indicator(void);
 
-/* State access functions for web interface */
+/* State access functions for web interface (root node only) */
+/* These functions are implemented in mesh_root.c */
 uint32_t mesh_get_heartbeat_count(void);
 void mesh_get_current_rgb(uint8_t *r, uint8_t *g, uint8_t *b, bool *is_set);
 int mesh_get_node_count(void);
 
 /* Send RGB color to all mesh nodes (root node only) */
+/* This function is implemented in mesh_root.c */
 esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b);
 
-#endif /* __LIGHT_NEOPIXEL_H__ */
+#endif /* __LIGHT_NEOPIXEL_H__ */ /* __LIGHT_NEOPIXEL_H__ */
