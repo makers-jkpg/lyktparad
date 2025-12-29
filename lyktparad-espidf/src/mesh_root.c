@@ -13,6 +13,8 @@
 
 #include <string.h>
 #include <inttypes.h>
+#include "esp_wifi.h"
+#include "esp_mac.h"
 #include "esp_log.h"
 #include "esp_mesh.h"
 #include "esp_timer.h"
@@ -26,9 +28,21 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#ifndef CONFIG_MESH_ROUTE_TABLE_SIZE
+#define CONFIG_MESH_ROUTE_TABLE_SIZE 50
+#endif
+
 /* Forward declaration - light_on and light_off are in mesh_common.c */
 extern mesh_light_ctl_t light_on;
 extern mesh_light_ctl_t light_off;
+
+/* Tag for logging - compile-time constant for MACSTR concatenation */
+#define MESH_TAG "mesh_main"
+
+/* Ensure MACSTR is defined - it should be in esp_mac.h */
+#ifndef MACSTR
+#define MACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
+#endif
 
 /* Root-specific static variables */
 static esp_timer_handle_t heartbeat_timer = NULL;
@@ -83,7 +97,7 @@ static void heartbeat_timer_cb(void *arg)
     for (i = 0; i < route_table_size; i++) {
         err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
         if (err) {
-            ESP_LOGD(mesh_common_get_tag(), "heartbeat broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
+            ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
         }
     }
     ESP_LOGI(mesh_common_get_tag(), "[ROOT HEARTBEAT] sent - routing table size: %d ", route_table_size);
@@ -149,7 +163,7 @@ esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
     for (i = 0; i < route_table_size; i++) {
         err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
         if (err) {
-            ESP_LOGD(mesh_common_get_tag(), "RGB send err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
+            ESP_LOGD(MESH_TAG, "RGB send err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
         }
     }
     ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] RGB command sent: R:%d G:%d B:%d to %d nodes", r, g, b, route_table_size);
@@ -195,9 +209,8 @@ static void mesh_root_event_callback(void *arg, esp_event_base_t event_base,
     switch (event_id) {
     case MESH_EVENT_CHILD_DISCONNECTED: {
         mesh_event_child_disconnected_t *child_disconnected = (mesh_event_child_disconnected_t *)event_data;
-        int current_rt_size = esp_mesh_get_routing_table_size();
-        ESP_LOGI(mesh_common_get_tag(), "[CHILD DISCONNECTED] Child "MACSTR" disconnected - Current routing table size: %d",
-                 MAC2STR(child_disconnected->mac), current_rt_size);
+        ESP_LOGI(MESH_TAG, "[CHILD DISCONNECTED] Child "MACSTR" disconnected - Current routing table size: %d",
+                 MAC2STR(child_disconnected->mac), esp_mesh_get_routing_table_size());
     }
     break;
     case MESH_EVENT_ROUTING_TABLE_ADD: {
@@ -310,16 +323,14 @@ void esp_mesh_p2p_tx_main(void *arg)
             if (err) {
                 mesh_addr_t parent_addr;
                 mesh_common_get_parent_addr(&parent_addr);
-                ESP_LOGE(mesh_common_get_tag(),
-                         "[ROOT-2-UNICAST:%d][L:%d]parent:"MACSTR" to "MACSTR", heap:%" PRId32 "[err:0x%x, proto:%d, tos:%d]",
+                ESP_LOGE(MESH_TAG, "[ROOT-2-UNICAST:%d][L:%d]parent:"MACSTR" to "MACSTR", heap:%" PRId32 "[err:0x%x, proto:%d, tos:%d]",
                          send_count, mesh_common_get_layer(), MAC2STR(parent_addr.addr),
                          MAC2STR(route_table[i].addr), esp_get_minimum_free_heap_size(),
                          err, data.proto, data.tos);
             } else if (!(send_count % 100)) {
                 mesh_addr_t parent_addr;
                 mesh_common_get_parent_addr(&parent_addr);
-                ESP_LOGW(mesh_common_get_tag(),
-                         "[ROOT-2-UNICAST:%d][L:%d][rtableSize:%d]parent:"MACSTR" to "MACSTR", heap:%" PRId32 "[err:0x%x, proto:%d, tos:%d]",
+                ESP_LOGW(MESH_TAG, "[ROOT-2-UNICAST:%d][L:%d][rtableSize:%d]parent:"MACSTR" to "MACSTR", heap:%" PRId32 "[err:0x%x, proto:%d, tos:%d]",
                          send_count, mesh_common_get_layer(),
                          esp_mesh_get_routing_table_size(),
                          MAC2STR(parent_addr.addr),

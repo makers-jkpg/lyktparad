@@ -12,6 +12,8 @@
 
 #include <string.h>
 #include <inttypes.h>
+#include "esp_wifi.h"
+#include "esp_mac.h"
 #include "esp_log.h"
 #include "esp_mesh.h"
 #include "mesh_common.h"
@@ -21,6 +23,14 @@
 #include "mesh_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+/* Tag for logging - compile-time constant for MACSTR concatenation */
+#define MESH_TAG "mesh_main"
+
+/* Ensure MACSTR is defined - it should be in esp_mac.h */
+#ifndef MACSTR
+#define MACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
+#endif
 
 /* Child-specific static variables */
 static uint8_t last_rgb_r = 0;
@@ -64,7 +74,7 @@ void esp_mesh_p2p_rx_main(void *arg)
                           ((uint32_t)(uint8_t)data.data[2] << 16) |
                           ((uint32_t)(uint8_t)data.data[3] << 8) |
                           ((uint32_t)(uint8_t)data.data[4] << 0);
-            ESP_LOGI(mesh_common_get_tag(), "[NODE ACTION] Heartbeat received from "MACSTR", count:%" PRIu32, MAC2STR(from.addr), hb);
+            ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat received from "MACSTR", count:%" PRIu32, MAC2STR(from.addr), hb);
             if (!(hb%2)) {
                 /* even heartbeat: turn off light */
                 mesh_light_set_colour(0);
@@ -90,7 +100,7 @@ void esp_mesh_p2p_rx_main(void *arg)
             uint8_t r = data.data[1];
             uint8_t g = data.data[2];
             uint8_t b = data.data[3];
-            ESP_LOGI(mesh_common_get_tag(), "[NODE ACTION] RGB command received from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
+            ESP_LOGI(MESH_TAG, "[NODE ACTION] RGB command received from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
             /* Store RGB values for use in heartbeat handler */
             last_rgb_r = r;
             last_rgb_g = g;
