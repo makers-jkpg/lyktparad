@@ -65,6 +65,7 @@
 #include "esp_mesh_internal.h"
 #include "mesh_config.h"
 #include "mesh_common.h"
+#include "mesh_gpio.h"
 #include "mesh_device_config.h"
 #include "light_neopixel.h"
 #include "light_common_cathode.h"
@@ -516,6 +517,21 @@ esp_err_t mesh_common_init(void)
     memcpy((uint8_t *) &cfg.mesh_ap.password, MESH_CONFIG_MESH_AP_PASSWORD, strlen(MESH_CONFIG_MESH_AP_PASSWORD));
     ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
 
+    /* Apply GPIO-based root forcing before mesh starts */
+    bool force_root = mesh_gpio_read_root_force();
+    if (force_root) {
+        ESP_ERROR_CHECK(esp_mesh_fix_root(true));
+        ESP_LOGI(MESH_TAG, "[GPIO ROOT FORCING] Root node behavior forced via GPIO");
+    } else {
+        /* Explicitly release root forcing to allow normal root election */
+        esp_err_t err = esp_mesh_fix_root(false);
+        if (err == ESP_OK) {
+            ESP_LOGI(MESH_TAG, "[GPIO ROOT FORCING] Root forcing released, normal root election enabled");
+        }
+        /* If root was not previously fixed, this may return ESP_ERR_MESH_NOT_INIT or similar,
+         * which is fine - we just want to ensure root forcing is disabled */
+    }
+
     // disable wifi power saving...
     esp_wifi_set_ps(WIFI_PS_NONE);
 
@@ -531,11 +547,21 @@ esp_err_t mesh_common_init(void)
     init_rgb_led();
 
     bool is_root = esp_mesh_is_root();
+    bool is_root_fixed = esp_mesh_is_root_fixed();
+    /* Reuse GPIO forcing state from earlier read (GPIO state doesn't change during operation) */
+    bool gpio_forced = force_root;
+
     ESP_LOGI(MESH_TAG, "mesh starts successfully, heap:%" PRId32 ", %s<%d>%s, ps:%d",  esp_get_minimum_free_heap_size(),
-             esp_mesh_is_root_fixed() ? "root fixed" : "root not fixed",
+             is_root_fixed ? "root fixed" : "root not fixed",
              esp_mesh_get_topology(), esp_mesh_get_topology() ? "(chain)":"(tree)", esp_mesh_is_ps_enabled());
-    ESP_LOGI(MESH_TAG, "[STARTUP] Mesh started - Node Type: %s | Heap: %" PRId32 " bytes",
-             is_root ? "ROOT NODE" : "NON-ROOT NODE", esp_get_minimum_free_heap_size());
+
+    if (is_root_fixed && gpio_forced) {
+        ESP_LOGI(MESH_TAG, "[STARTUP] Mesh started - Node Type: %s (GPIO-FORCED) | Heap: %" PRId32 " bytes",
+                 is_root ? "ROOT NODE" : "NON-ROOT NODE", esp_get_minimum_free_heap_size());
+    } else {
+        ESP_LOGI(MESH_TAG, "[STARTUP] Mesh started - Node Type: %s | Heap: %" PRId32 " bytes",
+                 is_root ? "ROOT NODE" : "NON-ROOT NODE", esp_get_minimum_free_heap_size());
+    }
     ESP_LOGI(MESH_TAG, "========================================");
 
     return ESP_OK;

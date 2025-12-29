@@ -38,6 +38,12 @@ Before building, you need to configure two files:
   - **Common-cathode RGB LED** - For simple RGB LEDs with separate R, G, B pins
 - **WiFi Router** (for root node connection)
 - **USB cable** for programming and serial communication
+- **GPIO Pins for Root Node Forcing** (optional, configurable):
+  - **GPIO 4 (Pin A, default)**: Force Root Node - Connect to GND to force root node behavior
+  - **GPIO 5 (Pin B, default)**: Force Mesh Node - Connect to GND to force mesh node behavior
+  - Both pins have internal pull-up resistors (read HIGH when not connected)
+  - If neither or both pins are connected to GND, defaults to mesh node behavior
+  - **Note**: GPIO pins are configurable in `include/mesh_device_config.h` (see Configuration section)
 
 ### LED Hardware Options
 
@@ -152,6 +158,19 @@ To enable common-cathode RGB LED support, uncomment `#define RGB_ENABLE` in `mes
 
 **Note**: Both LED drivers can be enabled simultaneously. The WS2812 driver is used for mesh status indicators, while the RGB LED driver provides additional visual feedback when `RGB_ENABLE` is defined.
 
+#### GPIO Root Node Forcing Configuration (Optional)
+
+To configure GPIO pins for root node forcing, edit the following settings in `mesh_device_config.h`:
+
+- `MESH_GPIO_FORCE_ROOT`: GPIO pin for forcing root node behavior (default: 4)
+- `MESH_GPIO_FORCE_MESH`: GPIO pin for forcing mesh node behavior (default: 5)
+
+**Important**:
+- Avoid strapping pins (GPIO 0, 2, 12, 15) and flash/PSRAM pins (GPIO 6-11)
+- Ensure the selected pins don't conflict with LED drivers or other peripherals
+- Both pins have internal pull-up resistors enabled
+- **Note**: If your LED uses GPIO 4, change `MESH_GPIO_FORCE_ROOT` to a different pin to avoid conflicts
+
 ## Usage
 
 ### Network Setup
@@ -160,11 +179,36 @@ To enable common-cathode RGB LED support, uncomment `#define RGB_ENABLE` in `mes
    - This node will connect to your WiFi router
    - Once connected, it will obtain an IP address
    - The web server will start automatically
+   - **Optional**: Connect the Force Root GPIO pin (default: GPIO 4) to GND before power-on to force root node behavior
 
 2. **Mesh Nodes**: Flash the same firmware to additional ESP32 devices
    - These nodes will automatically join the mesh network
    - They will connect to the root node or other mesh nodes
    - No additional configuration needed (uses same Mesh ID)
+   - **Optional**: Connect the Force Mesh GPIO pin (default: GPIO 5) to GND before power-on to force mesh node behavior
+
+### GPIO Root Node Forcing
+
+The firmware supports GPIO-based root node forcing using two configurable GPIO pins (default: GPIO 4 and GPIO 5).
+
+**Default Pin Configuration:**
+- **GPIO 4 (Force Root)**: When connected to GND at startup, forces the node to become root
+- **GPIO 5 (Force Mesh)**: When connected to GND at startup, forces the node to be a mesh node
+
+**Truth Table:**
+- Pin A=HIGH, Pin B=HIGH: Default behavior (normal root election)
+- Pin A=LOW, Pin B=HIGH: **Force root node**
+- Pin A=HIGH, Pin B=LOW: **Force mesh node**
+- Pin A=LOW, Pin B=LOW: Default to mesh node (conflict resolution)
+
+**Usage:**
+1. Configure GPIO pins in `include/mesh_device_config.h` if you need different pins (see Configuration section)
+2. Connect the desired GPIO pin(s) to GND before powering on the device
+3. The GPIO state is read during mesh initialization
+4. Root forcing is applied before the mesh network starts
+5. Check serial logs for GPIO forcing status messages
+
+**Note**: GPIO pins have internal pull-up resistors, so they read HIGH when not connected to GND. The GPIO state is only read once at startup and does not change during operation. The default pins (GPIO 4 and 5) can be changed in `include/mesh_device_config.h`.
 
 ### Web Interface
 
