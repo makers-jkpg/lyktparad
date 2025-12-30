@@ -14,6 +14,7 @@
 
 #include <string.h>
 #include <inttypes.h>
+#include <stdio.h>
 #include "esp_log.h"
 #include "esp_mesh.h"
 #include "esp_mac.h"
@@ -36,6 +37,14 @@
 #endif
 
 static const char *SEQ_ROOT_TAG = "mode_seq_root";
+
+// #region agent log
+static void debug_log(const char *location, const char *message, const char *data_json) {
+    int64_t timestamp = esp_timer_get_time() / 1000;
+    ESP_LOGI("DEBUG", "{\"location\":\"%s\",\"message\":\"%s\",\"data\":%s,\"timestamp\":%lld}", 
+             location, message, data_json, timestamp);
+}
+// #endregion
 
 /* Forward declarations */
 static void sequence_timer_cb(void *arg);
@@ -61,11 +70,21 @@ static bool sequence_active = false;  /* Playback state */
  */
 static void extract_square_rgb(uint8_t *packed_data, uint16_t square_index, uint8_t *r, uint8_t *g, uint8_t *b)
 {
+    // #region agent log
+    char data_buf[256];
+    snprintf(data_buf, sizeof(data_buf), "{\"square_index\":%d,\"sequence_length\":%d,\"max_squares\":%d,\"hypothesisId\":\"A\"}", 
+             square_index, sequence_length, sequence_length * 16);
+    debug_log("mode_sequence_root.c:62", "extract_square_rgb entry", data_buf);
+    // #endregion
     if (packed_data == NULL || r == NULL || g == NULL || b == NULL) {
         return;
     }
 
     if (square_index >= 256) {
+        // #region agent log
+        debug_log("mode_sequence_root.c:68", "extract_square_rgb hardcoded 256 check triggered", 
+                  "{\"square_index\":256,\"hypothesisId\":\"A\"}");
+        // #endregion
         return;
     }
 
@@ -174,9 +193,20 @@ static void sequence_timer_cb(void *arg)
 
     /* Calculate maximum squares for current sequence length */
     uint16_t max_squares = sequence_length * 16;
+    // #region agent log
+    char data_buf[256];
+    snprintf(data_buf, sizeof(data_buf), "{\"sequence_length\":%d,\"max_squares\":%d,\"old_pointer\":%d,\"hypothesisId\":\"D\"}", 
+             sequence_length, max_squares, sequence_pointer);
+    debug_log("mode_sequence_root.c:175", "timer_cb before pointer wrap", data_buf);
+    // #endregion
 
     /* Increment pointer and wrap at sequence length */
     sequence_pointer = (sequence_pointer + 1) % max_squares;
+    // #region agent log
+    snprintf(data_buf, sizeof(data_buf), "{\"new_pointer\":%d,\"max_squares\":%d,\"hypothesisId\":\"D\"}", 
+             sequence_pointer, max_squares);
+    debug_log("mode_sequence_root.c:179", "timer_cb after pointer wrap", data_buf);
+    // #endregion
 
     /* Check if pointer is at row boundary (every 16 squares) and within sequence */
     if ((sequence_pointer % 16) == 0 && sequence_pointer < max_squares) {
@@ -215,10 +245,28 @@ esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_row
     }
 
     /* Store sequence data with padding */
+    // #region agent log
+    char data_buf[256];
+    snprintf(data_buf, sizeof(data_buf), "{\"old_length\":%d,\"new_length\":%d,\"color_data_len\":%d,\"hypothesisId\":\"B\"}", 
+             sequence_length, num_rows, color_data_len);
+    debug_log("mode_sequence_root.c:217", "store_and_broadcast before update", data_buf);
+    // #endregion
     sequence_rhythm = rhythm;
     sequence_length = num_rows;
+    // #region agent log
+    snprintf(data_buf, sizeof(data_buf), "{\"sequence_length\":%d,\"hypothesisId\":\"B\"}", sequence_length);
+    debug_log("mode_sequence_root.c:219", "store_and_broadcast after sequence_length update", data_buf);
+    // #endregion
     memset(sequence_colors, 0, SEQUENCE_COLOR_DATA_SIZE);  /* Clear array (padding with zeros) */
+    // #region agent log
+    debug_log("mode_sequence_root.c:220", "store_and_broadcast after memset", 
+              "{\"action\":\"cleared\",\"hypothesisId\":\"C\"}");
+    // #endregion
     memcpy(sequence_colors, color_data, color_data_len);    /* Copy received data */
+    // #region agent log
+    snprintf(data_buf, sizeof(data_buf), "{\"color_data_len\":%d,\"hypothesisId\":\"C\"}", color_data_len);
+    debug_log("mode_sequence_root.c:221", "store_and_broadcast after memcpy", data_buf);
+    // #endregion
     ESP_LOGI(SEQ_ROOT_TAG, "Sequence data stored - rhythm: %d (%.1f ms), length: %d rows", rhythm, (float)rhythm * 10.0f, num_rows);
 
     /* Stop existing timer if running */
@@ -486,4 +534,9 @@ esp_err_t mode_sequence_root_reset(void)
 uint16_t mode_sequence_root_get_pointer(void)
 {
     return sequence_pointer;
+}
+
+bool mode_sequence_root_is_active(void)
+{
+    return sequence_active;
 }

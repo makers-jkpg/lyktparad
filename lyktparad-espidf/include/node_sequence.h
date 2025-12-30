@@ -17,6 +17,7 @@
 
 #include "esp_err.h"
 #include <stdint.h>
+#include <stdbool.h>
 
 /*******************************************************
  *                Constants
@@ -93,6 +94,12 @@ esp_err_t mode_sequence_root_broadcast_beat(void);
  */
 uint16_t mode_sequence_root_get_pointer(void);
 
+/**
+ * Check if sequence playback is currently active on root node
+ * @return true if sequence is active, false otherwise
+ */
+bool mode_sequence_root_is_active(void);
+
 /* Child node functions (implemented in mode_sequence_node.c) */
 
 /**
@@ -143,5 +150,11 @@ esp_err_t mode_sequence_node_reset(void);
  * @return ESP_OK on success, error code on failure (ignored if sequence not active)
  */
 esp_err_t mode_sequence_node_handle_beat(uint16_t received_pointer);
+
+/**
+ * Check if sequence playback is currently active on child node
+ * @return true if sequence is active, false otherwise
+ */
+bool mode_sequence_node_is_active(void);
 
 #endif /* __NODE_SEQUENCE_H__ */

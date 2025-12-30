@@ -779,6 +779,10 @@ static const char html_page[] =
 "}"
 ""
 "function updateGridRows() {"
+"  const gridContainer = document.getElementById('gridContainer');"
+"  if (gridContainer) {"
+"    gridContainer.style.gridTemplateRows = 'auto repeat(' + numRows + ', 1fr)';"
+"  }"
 "  for (let row = 0; row < 16; row++) {"
 "    const rowElements = document.querySelectorAll(`[data-row=\"${row}\"]`);"
 "    if (row < numRows) {"
@@ -1420,6 +1424,11 @@ static esp_err_t api_sequence_post_handler(httpd_req_t *req)
 
     /* Extract and validate length to calculate expected size */
     num_rows = content[1];
+    // #region agent log
+    int64_t timestamp = esp_timer_get_time() / 1000;
+    ESP_LOGI("DEBUG", "{\"location\":\"mesh_web.c:1422\",\"message\":\"api_sequence_post num_rows received\",\"data\":{\"num_rows\":%d,\"hypothesisId\":\"E\"},\"timestamp\":%lld}", 
+             num_rows, timestamp);
+    // #endregion
     if (num_rows < 1 || num_rows > 16) {
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_set_type(req, "application/json");

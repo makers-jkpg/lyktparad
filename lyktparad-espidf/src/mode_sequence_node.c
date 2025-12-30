@@ -450,3 +450,8 @@ esp_err_t mode_sequence_node_handle_control(uint8_t cmd, uint8_t *data, uint16_t
 
     return err;
 }
+
+bool mode_sequence_node_is_active(void)
+{
+    return sequence_active;
+}

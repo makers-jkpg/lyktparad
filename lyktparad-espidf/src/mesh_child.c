@@ -76,7 +76,10 @@ void esp_mesh_p2p_rx_main(void *arg)
                           ((uint32_t)(uint8_t)data.data[3] << 8) |
                           ((uint32_t)(uint8_t)data.data[4] << 0);
             ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat received from "MACSTR", count:%" PRIu32, MAC2STR(from.addr), hb);
-            if (!(hb%2)) {
+            /* Skip heartbeat LED changes if sequence mode is active (sequence controls LED) */
+            if (mode_sequence_node_is_active()) {
+                ESP_LOGD(mesh_common_get_tag(), "[NODE ACTION] Heartbeat #%lu - skipping LED change (sequence active)", (unsigned long)hb);
+            } else if (!(hb%2)) {
                 /* even heartbeat: turn off light */
                 mesh_light_set_colour(0);
                 set_rgb_led(0, 0, 0);
