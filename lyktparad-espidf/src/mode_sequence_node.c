@@ -52,7 +52,8 @@ static void extract_square_rgb(uint8_t *packed_data, uint16_t square_index, uint
         return;
     }
 
-    if (square_index >= 256) {
+    /* Validate square index against current sequence length */
+    if (square_index >= (sequence_length * 16)) {
         return;
     }
 
@@ -173,8 +174,11 @@ static void sequence_timer_cb(void *arg)
         ESP_LOGE(SEQ_NODE_TAG, "Failed to set LED in timer callback: 0x%x", err);
     }
 
-    /* Increment pointer and wrap at 256 */
-    sequence_pointer = (sequence_pointer + 1) % 256;
+    /* Calculate maximum squares for current sequence length */
+    uint16_t max_squares = sequence_length * 16;
+
+    /* Increment pointer and wrap at sequence length */
+    sequence_pointer = (sequence_pointer + 1) % max_squares;
 }
 
 /*******************************************************
@@ -200,9 +204,9 @@ esp_err_t mode_sequence_node_handle_command(uint8_t cmd, uint8_t *data, uint16_t
         return ESP_FAIL;
     }
 
-    /* Verify command format: 386 bytes total (1 byte command + 1 byte rhythm + 384 bytes color data) */
-    if (len != SEQUENCE_MESH_CMD_SIZE) {
-        ESP_LOGE(SEQ_NODE_TAG, "Invalid sequence command size: %d (expected %d)", len, SEQUENCE_MESH_CMD_SIZE);
+    /* Verify minimum command size (cmd + rhythm + length = 3 bytes) */
+    if (len < 3) {
+        ESP_LOGE(SEQ_NODE_TAG, "Invalid sequence command size: %d (need at least 3 bytes)", len);
         return ESP_FAIL;
     }
 
@@ -221,12 +225,35 @@ esp_err_t mode_sequence_node_handle_command(uint8_t cmd, uint8_t *data, uint16_t
         return ESP_FAIL;
     }
 
+    /* Extract sequence length (number of rows, 1-16) */
+    uint8_t num_rows = data[2];
+
+    /* Validate sequence length (1-16) - reject if invalid */
+    if (num_rows < 1 || num_rows > 16) {
+        ESP_LOGE(SEQ_NODE_TAG, "Invalid sequence length received: %d (must be 1-16 rows)", num_rows);
+        return ESP_FAIL;
+    }
+
+    /* Calculate expected command size */
+    uint16_t expected_size = sequence_mesh_cmd_size(num_rows);
+
+    /* Verify command format matches expected size */
+    if (len != expected_size) {
+        ESP_LOGE(SEQ_NODE_TAG, "Invalid sequence command size: %d (expected %d for %d rows)", len, expected_size, num_rows);
+        return ESP_FAIL;
+    }
+
+    /* Calculate color data length */
+    uint16_t color_data_len = len - 3;
+
     /* Stop and delete existing timer if any */
     sequence_timer_stop();
 
-    /* Store rhythm and color data */
+    /* Store rhythm, length, and color data with padding */
     sequence_rhythm = rhythm;
-    memcpy(sequence_colors, &data[2], SEQUENCE_COLOR_DATA_SIZE);
+    sequence_length = num_rows;
+    memset(sequence_colors, 0, SEQUENCE_COLOR_DATA_SIZE);  /* Clear array (padding with zeros) */
+    memcpy(sequence_colors, &data[3], color_data_len);      /* Copy received data */
 
     /* Reset pointer to start of sequence */
     sequence_pointer = 0;
@@ -238,8 +265,8 @@ esp_err_t mode_sequence_node_handle_command(uint8_t cmd, uint8_t *data, uint16_t
         return err;
     }
 
-    ESP_LOGI(SEQ_NODE_TAG, "Sequence command received and timer started - rhythm: %d (%.1f ms)",
-             rhythm, (float)rhythm * 10.0f);
+    ESP_LOGI(SEQ_NODE_TAG, "Sequence command received and timer started - rhythm: %d (%.1f ms), length: %d rows",
+             rhythm, (float)rhythm * 10.0f, num_rows);
 
     return ESP_OK;
 }
@@ -342,9 +369,12 @@ esp_err_t mode_sequence_node_handle_beat(uint16_t received_pointer)
         return ESP_OK;
     }
 
-    /* Validate received pointer */
-    if (received_pointer > 255) {
-        ESP_LOGE(SEQ_NODE_TAG, "Invalid pointer value in BEAT: %d (must be 0-255)", received_pointer);
+    /* Calculate maximum squares for current sequence length */
+    uint16_t max_squares = sequence_length * 16;
+
+    /* Validate received pointer against sequence length */
+    if (received_pointer >= max_squares) {
+        ESP_LOGE(SEQ_NODE_TAG, "Invalid pointer value in BEAT: %d (must be 0-%d for %d-row sequence)", received_pointer, max_squares - 1, sequence_length);
         return ESP_ERR_INVALID_ARG;
     }
 

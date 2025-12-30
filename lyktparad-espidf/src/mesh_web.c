@@ -17,6 +17,7 @@ static esp_err_t api_nodes_handler(httpd_req_t *req);
 static esp_err_t api_color_get_handler(httpd_req_t *req);
 static esp_err_t api_color_post_handler(httpd_req_t *req);
 static esp_err_t api_sequence_post_handler(httpd_req_t *req);
+static esp_err_t api_sequence_pointer_handler(httpd_req_t *req);
 static esp_err_t index_handler(httpd_req_t *req);
 
 /* HTML page with embedded CSS and JavaScript */
@@ -120,6 +121,39 @@ static const char html_page[] =
 "}"
 ".grid-square:active {"
 "  transform: scale(0.95);"
+"}"
+".grid-square.current {"
+"  border: 3px solid #ff6b6b;"
+"  box-shadow: 0 0 8px rgba(255, 107, 107, 0.6);"
+"  z-index: 10;"
+"  transition: all 0.1s ease;"
+"}"
+".row-count-control {"
+"  margin-bottom: 20px;"
+"  text-align: center;"
+"}"
+".row-count-control label {"
+"  display: block;"
+"  font-size: 14px;"
+"  color: #666;"
+"  margin-bottom: 8px;"
+"}"
+".row-count-control select {"
+"  padding: 8px 12px;"
+"  border: 2px solid #ddd;"
+"  border-radius: 8px;"
+"  font-size: 16px;"
+"  background: white;"
+"  cursor: pointer;"
+"  min-width: 120px;"
+"}"
+".row-count-control select:hover {"
+"  border-color: #667eea;"
+"}"
+".row-count-control select:focus {"
+"  outline: none;"
+"  border-color: #667eea;"
+"  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);"
 "}"
 ".rhythm-control {"
 "  margin-top: 20px;"
@@ -302,6 +336,27 @@ static const char html_page[] =
 "<div class=\"node-count\">"
 "<div class=\"node-count-label\">Node Count</div>"
 "<div class=\"node-count-value\" id=\"nodeCount\">0</div>"
+"</div>"
+"<div class=\"row-count-control\">"
+"<label for=\"rowCountSelect\">Rows:</label>"
+"<select id=\"rowCountSelect\">"
+"<option value=\"1\">1 row</option>"
+"<option value=\"2\">2 rows</option>"
+"<option value=\"3\">3 rows</option>"
+"<option value=\"4\" selected>4 rows</option>"
+"<option value=\"5\">5 rows</option>"
+"<option value=\"6\">6 rows</option>"
+"<option value=\"7\">7 rows</option>"
+"<option value=\"8\">8 rows</option>"
+"<option value=\"9\">9 rows</option>"
+"<option value=\"10\">10 rows</option>"
+"<option value=\"11\">11 rows</option>"
+"<option value=\"12\">12 rows</option>"
+"<option value=\"13\">13 rows</option>"
+"<option value=\"14\">14 rows</option>"
+"<option value=\"15\">15 rows</option>"
+"<option value=\"16\">16 rows</option>"
+"</select>"
 "</div>"
 "<div class=\"grid-section\">"
 "<div class=\"grid-container\" id=\"gridContainer\">"
@@ -630,11 +685,13 @@ static const char html_page[] =
 "<script>"
 "let gridData = new Uint8Array(768);"
 "let tempo = 250;"
+"let numRows = 4;"
 "let selectedRow = null;"
 "let selectedCol = null;"
 "let selectedAction = null;"
 "let updateInterval;"
 "let importHideTimeout = null;"
+"let sequenceIndicatorInterval = null;"
 ""
 "function updateNodeCount() {"
 "  fetch('/api/nodes')"
@@ -721,6 +778,17 @@ static const char html_page[] =
 "  }"
 "}"
 ""
+"function updateGridRows() {"
+"  for (let row = 0; row < 16; row++) {"
+"    const rowElements = document.querySelectorAll(`[data-row=\"${row}\"]`);"
+"    if (row < numRows) {"
+"      rowElements.forEach(el => el.style.display = '');"
+"    } else {"
+"      rowElements.forEach(el => el.style.display = 'none');"
+"    }"
+"  }"
+"}"
+""
 "function renderGrid() {"
 "  const squares = document.querySelectorAll('.grid-square');"
 "  squares.forEach(function(square) {"
@@ -756,9 +824,11 @@ static const char html_page[] =
 "  colorPicker.click();"
 "}"
 ""
-"function packGridData() {"
-"  const packed = new Uint8Array(384);"
-"  for (let i = 0; i < 256; i += 2) {"
+"function packGridData(numRows) {"
+"  const numSquares = numRows * 16;"
+"  const packedSize = (numSquares / 2) * 3;"
+"  const packed = new Uint8Array(packedSize);"
+"  for (let i = 0; i < numSquares; i += 2) {"
 "    const row0 = Math.floor(i / 16);"
 "    const col0 = i % 16;"
 "    const row1 = Math.floor((i + 1) / 16);"
@@ -774,12 +844,12 @@ static const char html_page[] =
 "}"
 ""
 "function unpackGridData(packed) {"
-"  if (packed.length !== 384) {"
-"    throw new Error('Invalid packed data length');"
-"  }"
 "  gridData = new Uint8Array(768);"
-"  for (let i = 0; i < 256; i += 2) {"
+"  const numPairs = Math.floor(packed.length / 3);"
+"  const numSquares = numPairs * 2;"
+"  for (let i = 0; i < numSquares; i += 2) {"
 "    const byteIdx = Math.floor(i / 2) * 3;"
+"    if (byteIdx + 2 >= packed.length) break;"
 "    const byte0 = packed[byteIdx];"
 "    const byte1 = packed[byteIdx + 1];"
 "    const byte2 = packed[byteIdx + 2];"
@@ -856,8 +926,8 @@ static const char html_page[] =
 "    for (let i = 0; i < binaryString.length; i++) {"
 "      bytes[i] = binaryString.charCodeAt(i);"
 "    }"
-"    if (bytes.length !== 385) {"
-"      importFeedback.textContent = 'Invalid data length: expected 385 bytes, got ' + bytes.length;"
+"    if (bytes.length < 2) {"
+"      importFeedback.textContent = 'Invalid data length: need at least 2 bytes (rhythm + length)';"
 "      importFeedback.className = 'import-feedback-error';"
 "      return;"
 "    }"
@@ -867,18 +937,30 @@ static const char html_page[] =
 "      importFeedback.className = 'import-feedback-error';"
 "      return;"
 "    }"
-"    const packedData = bytes.slice(1, 385);"
-"    if (packedData.length !== 384) {"
-"      importFeedback.textContent = 'Invalid packed data length: expected 384 bytes, got ' + packedData.length;"
+"    const importedRows = bytes[1];"
+"    if (importedRows < 1 || importedRows > 16) {"
+"      importFeedback.textContent = 'Invalid row count: must be 1-16';"
+"      importFeedback.className = 'import-feedback-error';"
+"      return;"
+"    }"
+"    const expectedColorSize = (importedRows * 16 / 2) * 3;"
+"    const packedData = bytes.slice(2);"
+"    if (packedData.length !== expectedColorSize) {"
+"      importFeedback.textContent = 'Invalid packed data length: expected ' + expectedColorSize + ' bytes for ' + importedRows + ' rows, got ' + packedData.length;"
 "      importFeedback.className = 'import-feedback-error';"
 "      return;"
 "    }"
 "    unpackGridData(packedData);"
 "    tempo = importedTempo * 10;"
+"    numRows = importedRows;"
 "    const rhythmInput = document.getElementById('rhythmInput');"
 "    rhythmInput.value = tempo;"
+"    const rowCountSelect = document.getElementById('rowCountSelect');"
+"    rowCountSelect.value = numRows;"
 "    updateRhythmDisplay();"
+"    updateGridRows();"
 "    renderGrid();"
+"    stopSequenceIndicator();"
 "    importFeedback.textContent = 'Import successful!';"
 "    importFeedback.className = 'import-feedback-success';"
 "    if (importHideTimeout) {"
@@ -897,14 +979,19 @@ static const char html_page[] =
 ""
 "function exportSequence() {"
 "  try {"
-"    const packedData = packGridData();"
-"    const payload = new Uint8Array(385);"
+"    const packedData = packGridData(numRows);"
+"    const payloadSize = 2 + packedData.length;"
+"    const payload = new Uint8Array(payloadSize);"
 "    const backendValue = Math.floor(tempo / 10);"
 "    if (backendValue < 1 || backendValue > 255) {"
 "      throw new Error('Tempo value out of range (10-2550ms)');"
 "    }"
+"    if (numRows < 1 || numRows > 16) {"
+"      throw new Error('Row count out of range (1-16)');"
+"    }"
 "    payload[0] = backendValue;"
-"    payload.set(packedData, 1);"
+"    payload[1] = numRows;"
+"    payload.set(packedData, 2);"
 "    const binaryString = String.fromCharCode.apply(null, Array.from(payload));"
 "    const base64 = btoa(binaryString);"
 "    const exportTextarea = document.getElementById('exportTextarea');"
@@ -925,6 +1012,49 @@ static const char html_page[] =
 "  }"
 "}"
 ""
+"function updateSequenceIndicator() {"
+"  fetch('/api/sequence/pointer')"
+"    .then(response => {"
+"      if (!response.ok) {"
+"        return Promise.reject(new Error('HTTP error: ' + response.status));"
+"      }"
+"      return response.text();"
+"    })"
+"    .then(pointerText => {"
+"      const pointer = parseInt(pointerText, 10);"
+"      if (isNaN(pointer) || pointer < 0 || pointer > 255) {"
+"        return;"
+"      }"
+"      const row = Math.floor(pointer / 16);"
+"      const col = pointer % 16;"
+"      document.querySelectorAll('.grid-square.current').forEach(sq => sq.classList.remove('current'));"
+"      const currentSquare = document.querySelector(`[data-row=\"${row}\"][data-col=\"${col}\"]`);"
+"      if (currentSquare) {"
+"        currentSquare.classList.add('current');"
+"      }"
+"    })"
+"    .catch(err => {"
+"      console.error('Failed to fetch pointer:', err);"
+"    });"
+"}"
+""
+"function startSequenceIndicator() {"
+"  if (sequenceIndicatorInterval) {"
+"    clearInterval(sequenceIndicatorInterval);"
+"  }"
+"  const updateInterval = tempo * 16;"
+"  sequenceIndicatorInterval = setInterval(updateSequenceIndicator, updateInterval);"
+"  updateSequenceIndicator();"
+"}"
+""
+"function stopSequenceIndicator() {"
+"  if (sequenceIndicatorInterval) {"
+"    clearInterval(sequenceIndicatorInterval);"
+"    sequenceIndicatorInterval = null;"
+"  }"
+"  document.querySelectorAll('.grid-square.current').forEach(sq => sq.classList.remove('current'));"
+"}"
+""
 "function syncGridData() {"
 "  const syncButton = document.getElementById('syncButton');"
 "  const syncFeedback = document.getElementById('syncFeedback');"
@@ -933,14 +1063,19 @@ static const char html_page[] =
 "  syncFeedback.textContent = '';"
 "  syncFeedback.className = '';"
 "  try {"
-"    const packedData = packGridData();"
-"    const payload = new Uint8Array(385);"
+"    const packedData = packGridData(numRows);"
+"    const payloadSize = 2 + packedData.length;"
+"    const payload = new Uint8Array(payloadSize);"
 "    const backendValue = Math.floor(tempo / 10);"
 "    if (backendValue < 1 || backendValue > 255) {"
 "      throw new Error('Tempo value out of range (10-2550ms)');"
 "    }"
+"    if (numRows < 1 || numRows > 16) {"
+"      throw new Error('Row count out of range (1-16)');"
+"    }"
 "    payload[0] = backendValue;"
-"    payload.set(packedData, 1);"
+"    payload[1] = numRows;"
+"    payload.set(packedData, 2);"
 "    fetch('/api/sequence', {"
 "      method: 'POST',"
 "      body: payload"
@@ -950,6 +1085,8 @@ static const char html_page[] =
 "      if (result.success) {"
 "        syncFeedback.textContent = 'Synced successfully!';"
 "        syncFeedback.className = 'sync-feedback-success';"
+"        stopSequenceIndicator();"
+"        startSequenceIndicator();"
 "      } else {"
 "        syncFeedback.textContent = 'Error: ' + (result.error || 'Failed to sync');"
 "        syncFeedback.className = 'sync-feedback-error';"
@@ -978,6 +1115,7 @@ static const char html_page[] =
 "  renderGrid();"
 "  updateNodeCount();"
 "  updateRhythmDisplay();"
+"  updateGridRows();"
 "  updateInterval = setInterval(function() {"
 "    updateNodeCount();"
 "  }, 5000);"
@@ -1025,6 +1163,15 @@ static const char html_page[] =
 "    tempo = Math.round(clamped / 10) * 10;"
 "    e.target.value = tempo;"
 "    updateRhythmDisplay();"
+"    if (sequenceIndicatorInterval) {"
+"      startSequenceIndicator();"
+"    }"
+"  });"
+""
+"  const rowCountSelect = document.getElementById('rowCountSelect');"
+"  rowCountSelect.addEventListener('change', function(e) {"
+"    numRows = parseInt(e.target.value);"
+"    updateGridRows();"
 "  });"
 ""
 "  const syncButton = document.getElementById('syncButton');"
@@ -1202,16 +1349,45 @@ static esp_err_t api_color_post_handler(httpd_req_t *req)
     }
 }
 
-/* API: POST /api/sequence - Receives sequence data (385 bytes: rhythm + packed color array) */
+/* API: POST /api/sequence - Receives sequence data (variable length: rhythm + length + color data) */
 static esp_err_t api_sequence_post_handler(httpd_req_t *req)
 {
-    uint8_t content[SEQUENCE_PAYLOAD_SIZE];
+    /* Use maximum size buffer (386 bytes for 16 rows) */
+    uint8_t content[2 + 384];  /* rhythm + length + max color data */
     int total_received = 0;
     int ret;
+    uint8_t num_rows = 0;
+    uint16_t expected_size = 0;
 
-    /* Read full payload (may require multiple calls for 385 bytes) */
-    while (total_received < SEQUENCE_PAYLOAD_SIZE) {
-        int remaining = SEQUENCE_PAYLOAD_SIZE - total_received;
+    /* Read minimum payload first (rhythm + length = 2 bytes) */
+    while (total_received < 2) {
+        ret = httpd_req_recv(req, (char *)(content + total_received), 2 - total_received);
+        if (ret <= 0) {
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid request or connection closed\"}", -1);
+            return ESP_FAIL;
+        }
+        total_received += ret;
+    }
+
+    /* Extract and validate length to calculate expected size */
+    num_rows = content[1];
+    if (num_rows < 1 || num_rows > 16) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Sequence length must be 1-16 rows\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Calculate expected payload size */
+    expected_size = sequence_payload_size(num_rows);
+
+    /* Read remaining payload */
+    while (total_received < expected_size) {
+        int remaining = expected_size - total_received;
         ret = httpd_req_recv(req, (char *)(content + total_received), remaining);
         if (ret <= 0) {
             httpd_resp_set_status(req, "400 Bad Request");
@@ -1222,7 +1398,7 @@ static esp_err_t api_sequence_post_handler(httpd_req_t *req)
         }
         total_received += ret;
         /* Safety check: prevent reading more than expected */
-        if (total_received > SEQUENCE_PAYLOAD_SIZE) {
+        if (total_received > expected_size) {
             httpd_resp_set_status(req, "400 Bad Request");
             httpd_resp_set_type(req, "application/json");
             httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -1231,7 +1407,7 @@ static esp_err_t api_sequence_post_handler(httpd_req_t *req)
         }
     }
 
-    if (total_received != SEQUENCE_PAYLOAD_SIZE) {
+    if (total_received != expected_size) {
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -1251,11 +1427,21 @@ static esp_err_t api_sequence_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* Extract color data pointer (remaining 384 bytes) */
-    uint8_t *color_data = &content[1];
+    /* Extract color data pointer and length */
+    uint8_t *color_data = &content[2];
+    uint16_t color_data_len = total_received - 2;
+
+    /* Validate color data length */
+    if (color_data_len != sequence_color_data_size(num_rows)) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid color data size\"}", -1);
+        return ESP_FAIL;
+    }
 
     /* Store and broadcast sequence data */
-    esp_err_t err = mode_sequence_root_store_and_broadcast(rhythm, color_data);
+    esp_err_t err = mode_sequence_root_store_and_broadcast(rhythm, num_rows, color_data, color_data_len);
 
     if (err == ESP_OK) {
         httpd_resp_set_type(req, "application/json");
@@ -1269,6 +1455,34 @@ static esp_err_t api_sequence_post_handler(httpd_req_t *req)
         httpd_resp_send(req, "{\"success\":false,\"error\":\"Failed to store and broadcast sequence\"}", -1);
         return ESP_FAIL;
     }
+}
+
+/* API: GET /api/sequence/pointer - Returns current sequence pointer (0-255) as plain text */
+static esp_err_t api_sequence_pointer_handler(httpd_req_t *req)
+{
+    if (!esp_mesh_is_root()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "0", -1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint16_t pointer = mode_sequence_root_get_pointer();
+    char response[16];
+    int len = snprintf(response, sizeof(response), "%d", pointer);
+
+    if (len < 0 || len >= (int)sizeof(response)) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "0", -1);
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    return httpd_resp_send(req, response, len);
 }
 
 /* GET / - Serves main HTML page */
@@ -1354,6 +1568,20 @@ esp_err_t mesh_web_server_start(void)
         reg_err = httpd_register_uri_handler(server_handle, &sequence_post_uri);
         if (reg_err != ESP_OK) {
             ESP_LOGE(WEB_TAG, "Failed to register sequence POST URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t sequence_pointer_uri = {
+            .uri       = "/api/sequence/pointer",
+            .method    = HTTP_GET,
+            .handler   = api_sequence_pointer_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &sequence_pointer_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register sequence pointer URI: 0x%x", reg_err);
             httpd_stop(server_handle);
             server_handle = NULL;
             return ESP_FAIL;

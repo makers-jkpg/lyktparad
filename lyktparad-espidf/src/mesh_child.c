@@ -113,9 +113,22 @@ void esp_mesh_p2p_rx_main(void *arg)
             if (err != ESP_OK) {
                 ESP_LOGE(mesh_common_get_tag(), "[RGB] failed to set LED: 0x%x", err);
             }
-        } else if (data.proto == MESH_PROTO_BIN && data.size == SEQUENCE_MESH_CMD_SIZE && data.data[0] == MESH_CMD_SEQUENCE) {
-            /* detect SEQUENCE command: command prefix (0x04) + 1 byte rhythm + 384 bytes color data */
-            err = mode_sequence_node_handle_command(MESH_CMD_SEQUENCE, data.data, data.size);
+        } else if (data.proto == MESH_PROTO_BIN && data.size >= 3 && data.data[0] == MESH_CMD_SEQUENCE) {
+            /* detect SEQUENCE command: variable length (cmd + rhythm + length + color data) */
+            /* Extract length to validate size */
+            uint8_t num_rows = data.data[2];
+            if (num_rows >= 1 && num_rows <= 16) {
+                uint16_t expected_size = sequence_mesh_cmd_size(num_rows);
+                if (data.size == expected_size) {
+                    err = mode_sequence_node_handle_command(MESH_CMD_SEQUENCE, data.data, data.size);
+                } else {
+                    ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] size mismatch: got %d, expected %d for %d rows", data.size, expected_size, num_rows);
+                    err = ESP_ERR_INVALID_SIZE;
+                }
+            } else {
+                ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] invalid length: %d (must be 1-16)", num_rows);
+                err = ESP_ERR_INVALID_ARG;
+            }
             if (err != ESP_OK) {
                 ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] failed to handle command: 0x%x", err);
             }

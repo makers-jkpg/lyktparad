@@ -23,9 +23,24 @@
  *******************************************************/
 
 /* Sequence data sizes */
-#define SEQUENCE_COLOR_DATA_SIZE  (384)  /* Packed color array size (256 squares × 1.5 bytes) */
-#define SEQUENCE_PAYLOAD_SIZE     (386)  /* HTTP payload size (1 byte rhythm + 1 byte length + 384 bytes color data) */
-#define SEQUENCE_MESH_CMD_SIZE    (387)  /* Mesh command size (1 byte command + 1 byte rhythm + 1 byte length + 384 bytes color data) */
+#define SEQUENCE_COLOR_DATA_SIZE  (384)  /* Maximum packed color array size (256 squares × 1.5 bytes) - used for storage arrays */
+
+/* Helper functions for calculating variable-length sizes based on number of rows */
+static inline uint16_t sequence_color_data_size(uint8_t num_rows) {
+    /* Calculate packed size: (num_rows * 16 / 2) * 3 = num_rows * 24 */
+    /* Since we always have 16 squares per row, num_rows * 16 is always even */
+    return (uint16_t)((num_rows * 16 / 2) * 3);
+}
+
+static inline uint16_t sequence_payload_size(uint8_t num_rows) {
+    /* HTTP payload: rhythm(1) + length(1) + color_data(variable) */
+    return 2 + sequence_color_data_size(num_rows);
+}
+
+static inline uint16_t sequence_mesh_cmd_size(uint8_t num_rows) {
+    /* Mesh command: cmd(1) + rhythm(1) + length(1) + color_data(variable) */
+    return 3 + sequence_color_data_size(num_rows);
+}
 
 /*******************************************************
  *                Function Definitions
@@ -38,10 +53,11 @@
  *
  * @param rhythm Rhythm value in 10ms units (1-255, where 25 = 250ms)
  * @param num_rows Number of rows in sequence (1-16)
- * @param color_data Pointer to packed color array (384 bytes)
+ * @param color_data Pointer to packed color array (variable length, use sequence_color_data_size(num_rows))
+ * @param color_data_len Actual length of color_data in bytes
  * @return ESP_OK on success, error code on failure
  */
-esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_rows, uint8_t *color_data);
+esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_rows, uint8_t *color_data, uint16_t color_data_len);
 
 /**
  * Start sequence playback on root node and broadcast START command
@@ -83,8 +99,8 @@ uint16_t mode_sequence_root_get_pointer(void);
  * Handle sequence command received from mesh network
  *
  * @param cmd Command byte (should be MESH_CMD_SEQUENCE)
- * @param data Pointer to command data (should be 386 bytes total)
- * @param len Length of data (should be 386)
+ * @param data Pointer to command data (variable length: cmd + rhythm + length + color data)
+ * @param len Length of data (use sequence_mesh_cmd_size(num_rows) to calculate expected size)
  * @return ESP_OK on success, ESP_FAIL on validation failure
  */
 esp_err_t mode_sequence_node_handle_command(uint8_t cmd, uint8_t *data, uint16_t len);

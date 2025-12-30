@@ -189,7 +189,7 @@ static void sequence_timer_cb(void *arg)
  *                Root Node Functions
  *******************************************************/
 
-esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_rows, uint8_t *color_data)
+esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_rows, uint8_t *color_data, uint16_t color_data_len)
 {
     if (!esp_mesh_is_root()) {
         ESP_LOGE(SEQ_ROOT_TAG, "Not root node, cannot store and broadcast sequence");
@@ -214,10 +214,11 @@ esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_row
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Store sequence data */
+    /* Store sequence data with padding */
     sequence_rhythm = rhythm;
     sequence_length = num_rows;
-    memcpy(sequence_colors, color_data, SEQUENCE_COLOR_DATA_SIZE);
+    memset(sequence_colors, 0, SEQUENCE_COLOR_DATA_SIZE);  /* Clear array (padding with zeros) */
+    memcpy(sequence_colors, color_data, color_data_len);    /* Copy received data */
     ESP_LOGI(SEQ_ROOT_TAG, "Sequence data stored - rhythm: %d (%.1f ms), length: %d rows", rhythm, (float)rhythm * 10.0f, num_rows);
 
     /* Stop existing timer if running */
@@ -253,12 +254,12 @@ esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_row
     tx_buf[0] = MESH_CMD_SEQUENCE;  /* Command byte */
     tx_buf[1] = rhythm;             /* Rhythm byte */
     tx_buf[2] = num_rows;           /* Length byte (number of rows, 1-16) */
-    memcpy(&tx_buf[3], color_data, SEQUENCE_COLOR_DATA_SIZE);  /* Color data (384 bytes) */
+    memcpy(&tx_buf[3], color_data, color_data_len);  /* Color data (variable length) */
 
     /* Create mesh data structure */
     mesh_data_t data;
     data.data = tx_buf;
-    data.size = SEQUENCE_MESH_CMD_SIZE;  /* 387 bytes total */
+    data.size = 3 + color_data_len;  /* Variable size: cmd + rhythm + length + color data */
     data.proto = MESH_PROTO_BIN;
     data.tos = MESH_TOS_P2P;
 
@@ -286,6 +287,14 @@ esp_err_t mode_sequence_root_broadcast_beat(void)
     if (!esp_mesh_is_root()) {
         ESP_LOGE(SEQ_ROOT_TAG, "Not root node, cannot broadcast BEAT");
         return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Calculate maximum squares for current sequence length */
+    uint16_t max_squares = sequence_length * 16;
+
+    /* Safety check: ensure pointer is within valid range */
+    if (sequence_pointer >= max_squares) {
+        sequence_pointer = 0;
     }
 
     /* Get routing table */
