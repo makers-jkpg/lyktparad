@@ -42,6 +42,33 @@
  */
 esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t *color_data);
 
+/**
+ * Start sequence playback on root node and broadcast START command
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mode_sequence_root_start(void);
+
+/**
+ * Stop sequence playback on root node and broadcast STOP command
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mode_sequence_root_stop(void);
+
+/**
+ * Reset sequence pointer to 0 on root node and broadcast RESET command
+ * If sequence is active, restarts timer from beginning
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mode_sequence_root_reset(void);
+
+/**
+ * Broadcast BEAT command to all child nodes for tempo synchronization
+ * Includes root's current pointer position in the message
+ * Called automatically by root node timer at row boundaries
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mode_sequence_root_broadcast_beat(void);
+
 /* Child node functions (implemented in mode_sequence_node.c) */
 
 /**
@@ -59,5 +86,38 @@ esp_err_t mode_sequence_node_handle_command(uint8_t cmd, uint8_t *data, uint16_t
  * Stops and deletes the sequence timer, clearing the active state
  */
 void mode_sequence_node_stop(void);
+
+    /**
+     * Handle control command received from mesh network
+     * Supports START, STOP, RESET, and BEAT commands
+     * @param cmd Command byte (MESH_CMD_SEQUENCE_START, STOP, RESET, or BEAT)
+     * @param data Pointer to command data (for BEAT: includes 1-byte pointer)
+     * @param len Length of data (1 for START/STOP/RESET, 2 for BEAT)
+     * @return ESP_OK on success, error code on failure
+     */
+esp_err_t mode_sequence_node_handle_control(uint8_t cmd, uint8_t *data, uint16_t len);
+
+/**
+ * Start sequence playback on child node
+ * Starts timer and resets pointer to 0
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mode_sequence_node_start(void);
+
+/**
+ * Reset sequence pointer to 0 on child node
+ * If sequence is active, restarts timer from beginning
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mode_sequence_node_reset(void);
+
+/**
+ * Handle BEAT command for tempo synchronization
+ * Sets pointer to value from BEAT message and resets timer
+ * Child nodes continue playing independently even when BEAT messages are lost
+ * @param received_pointer Pointer position from BEAT message (0-255)
+ * @return ESP_OK on success, error code on failure (ignored if sequence not active)
+ */
+esp_err_t mode_sequence_node_handle_beat(uint16_t received_pointer);
 
 #endif /* __NODE_SEQUENCE_H__ */

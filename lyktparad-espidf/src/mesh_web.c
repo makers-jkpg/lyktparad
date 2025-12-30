@@ -957,7 +957,7 @@ static esp_err_t api_sequence_post_handler(httpd_req_t *req)
     /* Read full payload (may require multiple calls for 385 bytes) */
     while (total_received < SEQUENCE_PAYLOAD_SIZE) {
         int remaining = SEQUENCE_PAYLOAD_SIZE - total_received;
-        ret = httpd_req_recv(req, content + total_received, remaining);
+        ret = httpd_req_recv(req, (char *)(content + total_received), remaining);
         if (ret <= 0) {
             httpd_resp_set_status(req, "400 Bad Request");
             httpd_resp_set_type(req, "application/json");

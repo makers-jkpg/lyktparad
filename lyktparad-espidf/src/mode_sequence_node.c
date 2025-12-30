@@ -75,8 +75,12 @@ static void extract_square_rgb(uint8_t *packed_data, uint16_t square_index, uint
  *                Timer Management
  *******************************************************/
 
-/* Forward declaration */
+/* Forward declarations */
 static void sequence_timer_cb(void *arg);
+static esp_err_t sequence_timer_reset(void);
+esp_err_t mode_sequence_node_start(void);
+esp_err_t mode_sequence_node_reset(void);
+esp_err_t mode_sequence_node_handle_beat(uint16_t received_pointer);
 
 /**
  * Stop and delete sequence timer
@@ -246,4 +250,172 @@ esp_err_t mode_sequence_node_handle_command(uint8_t cmd, uint8_t *data, uint16_t
 void mode_sequence_node_stop(void)
 {
     sequence_timer_stop();
+}
+
+/**
+ * Reset sequence timer while preserving rhythm interval
+ * Internal helper function for BEAT synchronization
+ */
+static esp_err_t sequence_timer_reset(void)
+{
+    if (!sequence_active) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (sequence_rhythm == 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Stop current timer */
+    esp_err_t err = esp_timer_stop(sequence_timer);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(SEQ_NODE_TAG, "Failed to stop timer for reset: 0x%x", err);
+    }
+
+    /* Delete old timer before creating new one (prevents memory leak) */
+    err = esp_timer_delete(sequence_timer);
+    if (err != ESP_OK) {
+        ESP_LOGE(SEQ_NODE_TAG, "Failed to delete timer for reset: 0x%x", err);
+    }
+    sequence_timer = NULL;
+
+    /* Restart timer with same rhythm */
+    err = sequence_timer_start(sequence_rhythm);
+    if (err != ESP_OK) {
+        ESP_LOGE(SEQ_NODE_TAG, "Failed to restart timer: 0x%x", err);
+        sequence_active = false;  /* Ensure state is consistent on failure */
+        return err;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t mode_sequence_node_start(void)
+{
+    if (sequence_rhythm == 0) {
+        ESP_LOGE(SEQ_NODE_TAG, "No sequence data available");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Stop existing timer if running */
+    sequence_timer_stop();
+
+    /* Reset pointer to start of sequence */
+    sequence_pointer = 0;
+
+    /* Start timer */
+    esp_err_t err = sequence_timer_start(sequence_rhythm);
+    if (err != ESP_OK) {
+        ESP_LOGE(SEQ_NODE_TAG, "Failed to start sequence timer: 0x%x", err);
+        return err;
+    }
+
+    ESP_LOGI(SEQ_NODE_TAG, "Sequence playback started");
+    return ESP_OK;
+}
+
+esp_err_t mode_sequence_node_reset(void)
+{
+    /* Reset pointer to start of sequence */
+    sequence_pointer = 0;
+
+    /* If sequence is active, restart timer */
+    if (sequence_active && sequence_rhythm != 0) {
+        sequence_timer_stop();
+        esp_err_t err = sequence_timer_start(sequence_rhythm);
+        if (err != ESP_OK) {
+            ESP_LOGE(SEQ_NODE_TAG, "Failed to restart sequence timer: 0x%x", err);
+            return err;
+        }
+    }
+
+    ESP_LOGI(SEQ_NODE_TAG, "Sequence pointer reset to 0");
+    return ESP_OK;
+}
+
+esp_err_t mode_sequence_node_handle_beat(uint16_t received_pointer)
+{
+    /* If sequence is not active, ignore BEAT (not an error) */
+    if (!sequence_active) {
+        ESP_LOGD(SEQ_NODE_TAG, "BEAT received but sequence not active, ignoring");
+        return ESP_OK;
+    }
+
+    /* Validate received pointer */
+    if (received_pointer > 255) {
+        ESP_LOGE(SEQ_NODE_TAG, "Invalid pointer value in BEAT: %d (must be 0-255)", received_pointer);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint16_t old_pointer = sequence_pointer;
+
+    /* Set local pointer to received value (no calculation) */
+    sequence_pointer = received_pointer;
+
+    /* Reset timer to resynchronize */
+    esp_err_t err = sequence_timer_reset();
+    if (err != ESP_OK) {
+        ESP_LOGE(SEQ_NODE_TAG, "Failed to reset timer on BEAT: 0x%x", err);
+        return err;
+    }
+
+    ESP_LOGD(SEQ_NODE_TAG, "BEAT synchronization - pointer: %d -> %d", old_pointer, received_pointer);
+    return ESP_OK;
+}
+
+esp_err_t mode_sequence_node_handle_control(uint8_t cmd, uint8_t *data, uint16_t len)
+{
+    /* Validate command */
+    if (cmd != MESH_CMD_SEQUENCE_START && cmd != MESH_CMD_SEQUENCE_STOP &&
+        cmd != MESH_CMD_SEQUENCE_RESET && cmd != MESH_CMD_SEQUENCE_BEAT) {
+        ESP_LOGE(SEQ_NODE_TAG, "Invalid control command: 0x%02x", cmd);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Validate data pointer */
+    if (data == NULL) {
+        ESP_LOGE(SEQ_NODE_TAG, "Control command data pointer is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = ESP_OK;
+
+    /* Handle each command */
+    if (cmd == MESH_CMD_SEQUENCE_START) {
+        if (len != 1) {
+            ESP_LOGE(SEQ_NODE_TAG, "Invalid START command size: %d (expected 1)", len);
+            return ESP_ERR_INVALID_ARG;
+        }
+        err = mode_sequence_node_start();
+    } else if (cmd == MESH_CMD_SEQUENCE_STOP) {
+        if (len != 1) {
+            ESP_LOGE(SEQ_NODE_TAG, "Invalid STOP command size: %d (expected 1)", len);
+            return ESP_ERR_INVALID_ARG;
+        }
+        mode_sequence_node_stop();
+        err = ESP_OK;
+    } else if (cmd == MESH_CMD_SEQUENCE_RESET) {
+        if (len != 1) {
+            ESP_LOGE(SEQ_NODE_TAG, "Invalid RESET command size: %d (expected 1)", len);
+            return ESP_ERR_INVALID_ARG;
+        }
+        err = mode_sequence_node_reset();
+    } else if (cmd == MESH_CMD_SEQUENCE_BEAT) {
+        if (len != 2) {
+            ESP_LOGE(SEQ_NODE_TAG, "Invalid BEAT command size: %d (expected 2)", len);
+            return ESP_ERR_INVALID_ARG;
+        }
+        /* Extract pointer from BEAT message (single byte) */
+        uint16_t received_pointer = data[1];
+        err = mode_sequence_node_handle_beat(received_pointer);
+    }
+
+    if (err == ESP_OK) {
+        const char *cmd_name = (cmd == MESH_CMD_SEQUENCE_START) ? "START" :
+                              (cmd == MESH_CMD_SEQUENCE_STOP) ? "STOP" :
+                              (cmd == MESH_CMD_SEQUENCE_RESET) ? "RESET" : "BEAT";
+        ESP_LOGD(SEQ_NODE_TAG, "Control command received: %s", cmd_name);
+    }
+
+    return err;
 }

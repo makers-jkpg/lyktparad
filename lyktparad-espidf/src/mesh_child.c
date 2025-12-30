@@ -119,6 +119,16 @@ void esp_mesh_p2p_rx_main(void *arg)
             if (err != ESP_OK) {
                 ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] failed to handle command: 0x%x", err);
             }
+        } else if (data.proto == MESH_PROTO_BIN && 
+                   ((data.size == 1 && (data.data[0] == MESH_CMD_SEQUENCE_START ||
+                                        data.data[0] == MESH_CMD_SEQUENCE_STOP ||
+                                        data.data[0] == MESH_CMD_SEQUENCE_RESET)) ||
+                    (data.size == 2 && data.data[0] == MESH_CMD_SEQUENCE_BEAT))) {
+            /* Control command: START/STOP/RESET are single-byte, BEAT is 2-byte (command + 1-byte pointer) */
+            err = mode_sequence_node_handle_control(data.data[0], data.data, data.size);
+            if (err != ESP_OK) {
+                ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE CONTROL] failed to handle command 0x%02x: 0x%x", data.data[0], err);
+            }
         } else {
             /* process other light control messages */
             //mesh_light_process(&from, data.data, data.size);
