@@ -914,6 +914,14 @@ esp_err_t mesh_common_init(void)
     memcpy((uint8_t *) &cfg.mesh_id, MESH_ID, 6);
     /* router */
     cfg.channel = MESH_CONFIG_MESH_CHANNEL;
+
+    /* For root nodes: Override channel to 0 (auto-adapt) to match router channel immediately
+     * This prevents long delays when router channel differs from configured mesh channel */
+    if (force_root && cfg.channel != 0) {
+        ESP_LOGI(MESH_TAG, "[GPIO ROOT FORCING] Overriding mesh channel from %d to 0 (auto-adapt) for root node to match router channel", cfg.channel);
+        cfg.channel = 0;
+    }
+
     /* Configure router for all nodes (required by esp_mesh_set_config)
      * For forced mesh nodes, router connection will be prevented by disabling self-organization below */
     cfg.router.ssid_len = strlen(MESH_CONFIG_ROUTER_SSID);
@@ -971,12 +979,6 @@ esp_err_t mesh_common_init(void)
          * - The mesh AP will accept child connections automatically when the node is fixed as root */
         ESP_LOGI(MESH_TAG, "[GPIO ROOT FORCING] Root node behavior forced via GPIO (GPIO %d=LOW) - type=MESH_ROOT, fixed root enabled (self-organization disabled for router connection)", MESH_GPIO_FORCE_ROOT);
         is_root_node_forced = true; /* Mark that root node forcing is active */
-
-        /* For root node: Set channel to 0 to allow adaptation to router channel */
-        /* This ensures the mesh AP operates on the same channel as the router */
-        if (cfg.channel != 0) {
-            ESP_LOGW(MESH_TAG, "[ROOT NODE] WARNING: Mesh channel is fixed to %d. Consider setting MESH_CONFIG_MESH_CHANNEL to 0 for root node to adapt to router channel.", cfg.channel);
-        }
     } else if (mesh_gpio_is_initialized() && level_mesh == 0 && level_root != 0) {
         /* GPIO 4 LOW (and GPIO 5 HIGH): Force mesh/child node - prevent root election
          * To allow connection to parent mesh nodes, we:
