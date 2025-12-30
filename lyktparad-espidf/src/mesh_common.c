@@ -93,6 +93,9 @@ static mesh_addr_t mesh_parent_addr;
 static int mesh_layer = -1;
 static esp_netif_t *netif_sta = NULL;
 static TaskHandle_t led_restore_task_handle = NULL; /* Track LED restore task to prevent duplicates */
+static esp_timer_handle_t scan_fail_toggle_timer = NULL; /* Timer for toggling LED on scan failures */
+static uint8_t scan_toggle_r = 155, scan_toggle_g = 0, scan_toggle_b = 0; /* Stored RGB color for toggle (default RED) */
+static bool scan_toggle_state = false; /* Current toggle state (false = off, true = on) */
 
 /* Task function to restore red LED after 250ms delay */
 static void led_restore_red_task(void *arg)
@@ -104,6 +107,31 @@ static void led_restore_red_task(void *arg)
     }
     led_restore_task_handle = NULL; /* Clear handle before deleting */
     vTaskDelete(NULL);
+}
+
+/* Timer callback to toggle LED on each failed connection attempt during scanning */
+static void scan_fail_toggle_timer_cb(void *arg)
+{
+    /* Only toggle if we're still a non-root node and not connected */
+    if (esp_mesh_is_root() || is_mesh_connected) {
+        /* Stop timer if we became root or connected */
+        if (scan_fail_toggle_timer != NULL) {
+            esp_timer_stop(scan_fail_toggle_timer);
+            esp_timer_delete(scan_fail_toggle_timer);
+            scan_fail_toggle_timer = NULL;
+        }
+        return;
+    }
+
+    /* Toggle between stored color and off */
+    scan_toggle_state = !scan_toggle_state;
+    if (scan_toggle_state) {
+        /* Turn on with stored color */
+        mesh_light_set_rgb(scan_toggle_r, scan_toggle_g, scan_toggle_b);
+    } else {
+        /* Turn off */
+        mesh_light_set_colour(0);
+    }
 }
 
 /* Light control structures */
@@ -301,10 +329,23 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
     case MESH_EVENT_CHILD_CONNECTED: {
         mesh_event_child_connected_t *child_connected = (mesh_event_child_connected_t *)event_data;
         int routing_table_size = esp_mesh_get_routing_table_size();
+        int child_count_after_connect = (routing_table_size > 0) ? (routing_table_size - 1) : 0;
         ESP_LOGI(MESH_TAG, "<MESH_EVENT_CHILD_CONNECTED>aid:%d, "MACSTR", routing table size: %d",
                  child_connected->aid,
                  MAC2STR(child_connected->mac), routing_table_size);
         ESP_LOGI(MESH_TAG, "[ROOT ACTION] Child node connected - Total nodes in mesh: %d", routing_table_size);
+
+        // #region agent log
+        if (is_root) {
+            ESP_LOGI(MESH_TAG, "[DEBUG HYP-D] CHILD_CONNECTED event - route_size:%d child_count:%d",
+                     routing_table_size, child_count_after_connect);
+            /* Log root state when child connects */
+            bool is_root_fixed_now = esp_mesh_is_root_fixed();
+            bool self_org_now = esp_mesh_get_self_organized();
+            ESP_LOGI(MESH_TAG, "[DEBUG CHILD-CONN] Root state on child connect - is_root_fixed:%d, self_org:%d",
+                     is_root_fixed_now ? 1 : 0, self_org_now ? 1 : 0);
+        }
+        // #endregion
     }
     break;
     case MESH_EVENT_CHILD_DISCONNECTED: {
@@ -377,10 +418,29 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
                  (mesh_layer == 2) ? "<layer2>" : "", MAC2STR(id.addr), connected->duty);
         last_layer = mesh_layer;
         is_mesh_connected = true;
+
+        // #region agent log
+        if (is_root) {
+            esp_netif_t *netif_sta = mesh_common_get_netif_sta();
+            ESP_LOGI(MESH_TAG, "[DEBUG HYP-1] MESH_EVENT_PARENT_CONNECTED (root) - netif_sta:%p, will call root_event_callback", netif_sta);
+            if (netif_sta != NULL) {
+                esp_netif_ip_info_t ip_info;
+                esp_err_t get_ip_err = esp_netif_get_ip_info(netif_sta, &ip_info);
+                ESP_LOGI(MESH_TAG, "[DEBUG HYP-1] Current IP info before callback - get_ip_info:0x%x, ip:" IPSTR,
+                         get_ip_err, IP2STR(&ip_info.ip));
+            }
+        }
+        // #endregion
         /* Cancel any pending LED restore task since we're now connected */
         if (led_restore_task_handle != NULL) {
             vTaskDelete(led_restore_task_handle);
             led_restore_task_handle = NULL;
+        }
+        /* Stop scan failure toggle timer since we're now connected */
+        if (scan_fail_toggle_timer != NULL) {
+            esp_timer_stop(scan_fail_toggle_timer);
+            esp_timer_delete(scan_fail_toggle_timer);
+            scan_fail_toggle_timer = NULL;
         }
         /* Set LED state when connected - heartbeat will take over from here */
         if (is_root) {
@@ -409,10 +469,33 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             vTaskDelete(led_restore_task_handle);
             led_restore_task_handle = NULL;
         }
+        /* Stop scan failure toggle timer if running (non-root node disconnected) */
+        if (scan_fail_toggle_timer != NULL) {
+            esp_timer_stop(scan_fail_toggle_timer);
+            esp_timer_delete(scan_fail_toggle_timer);
+            scan_fail_toggle_timer = NULL;
+        }
         /* Turn LED back to unconnected state - check router connection for root */
         if (is_root) {
-            /* Root node: LED base color indicates router connection status */
-            if (is_router_connected) {
+            /* For forced root nodes: If router was connected, ensure root stays fixed
+             * and router connection is maintained. Parent disconnection can occur due to
+             * network issues, but router connection should persist (self-organization
+             * is enabled with select_parent=false to prevent router disconnection). */
+            if (is_root_node_forced && is_router_connected) {
+                /* Verify root is still fixed */
+                bool is_root_fixed = esp_mesh_is_root_fixed();
+                if (!is_root_fixed) {
+                    ESP_LOGW(MESH_TAG, "[ROOT ACTION] Parent disconnected - root became unfixed, re-fixing...");
+                    esp_err_t fix_err = esp_mesh_fix_root(true);
+                    if (fix_err != ESP_OK) {
+                        ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Failed to re-fix root: 0x%x", fix_err);
+                    } else {
+                        ESP_LOGI(MESH_TAG, "[ROOT ACTION] Root re-fixed successfully");
+                    }
+                }
+                /* Router connection should be maintained - LED stays GREEN if router still connected */
+                mesh_light_set_colour(MESH_LIGHT_GREEN);
+            } else if (is_router_connected) {
                 mesh_light_set_colour(MESH_LIGHT_GREEN);
             } else {
                 mesh_light_set_colour(MESH_LIGHT_ORANGE);
@@ -548,6 +631,39 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         mesh_event_find_network_t *find_network = (mesh_event_find_network_t *)event_data;
         ESP_LOGI(MESH_TAG, "<MESH_EVENT_FIND_NETWORK>new channel:%d, router BSSID:"MACSTR"",
                  find_network->channel, MAC2STR(find_network->router_bssid));
+
+        /* For non-root nodes: Start LED toggle timer on each scan attempt (failed connection) */
+        if (!esp_mesh_is_root() && !is_mesh_connected) {
+            /* Stop existing timer if any */
+            if (scan_fail_toggle_timer != NULL) {
+                esp_timer_stop(scan_fail_toggle_timer);
+                esp_timer_delete(scan_fail_toggle_timer);
+                scan_fail_toggle_timer = NULL;
+            }
+
+            /* Store current color (RED for non-root nodes scanning) */
+            scan_toggle_r = 155;
+            scan_toggle_g = 0;
+            scan_toggle_b = 0;
+            scan_toggle_state = false; /* Start with LED off */
+
+            /* Create and start periodic timer to toggle LED on each failed attempt (~300ms based on logs) */
+            esp_timer_create_args_t timer_args = {
+                .callback = scan_fail_toggle_timer_cb,
+                .name = "scan_fail_toggle"
+            };
+            esp_err_t timer_err = esp_timer_create(&timer_args, &scan_fail_toggle_timer);
+            if (timer_err == ESP_OK) {
+                esp_err_t start_err = esp_timer_start_periodic(scan_fail_toggle_timer, 300 * 1000); /* Toggle every 300ms (300000 microseconds) */
+                if (start_err != ESP_OK) {
+                    ESP_LOGE(MESH_TAG, "[SCAN FAIL TOGGLE] Failed to start timer: 0x%x", start_err);
+                    esp_timer_delete(scan_fail_toggle_timer);
+                    scan_fail_toggle_timer = NULL;
+                }
+            } else {
+                ESP_LOGE(MESH_TAG, "[SCAN FAIL TOGGLE] Failed to create timer: 0x%x", timer_err);
+            }
+        }
     }
     break;
     case MESH_EVENT_ROUTER_SWITCH: {
@@ -582,6 +698,11 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
 {
     bool is_root = esp_mesh_is_root();
 
+    // #region agent log
+    ESP_LOGI(MESH_TAG, "[DEBUG HYP-5] IP event handler called - event_id:%ld, is_root:%d",
+             (long)event_id, is_root ? 1 : 0);
+    // #endregion
+
     if (event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
         ESP_LOGI(MESH_TAG, "<IP_EVENT_STA_GOT_IP>IP:" IPSTR, IP2STR(&event->ip_info.ip));
@@ -600,22 +721,82 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
             esp_restart();
         }
 
+        // #region agent log
+        ESP_LOGI(MESH_TAG, "[DEBUG HYP-5] IP_EVENT_STA_GOT_IP received - is_root:%d, is_root_node_forced:%d",
+                 is_root ? 1 : 0, is_root_node_forced ? 1 : 0);
+        // #endregion
+
         if (is_root) {
             /* Root node: router connected - set GREEN base color */
             is_router_connected = true;
             mesh_light_set_colour(MESH_LIGHT_GREEN);
 
             /* Enable self-organization AFTER router connection is established
-             * This allows the root node to accept child connections without
-             * interfering with the router connection process */
+             * This allows the root node to accept child connections.
+             * For fixed root nodes, we ensure the root stays fixed to prevent router disconnection. */
             if (is_root_node_forced) {
+                // #region agent log
+                ESP_LOGI(MESH_TAG, "[DEBUG HYP-3] About to enable self-organization - is_root_fixed check");
+                // #endregion
+
+                /* Verify root is still fixed before enabling self-organization */
+                bool is_root_fixed = esp_mesh_is_root_fixed();
+                if (!is_root_fixed) {
+                    ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Root is not fixed! Re-fixing root before enabling self-organization...");
+                    esp_err_t fix_err = esp_mesh_fix_root(true);
+                    if (fix_err != ESP_OK) {
+                        ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Failed to re-fix root: 0x%x", fix_err);
+                    }
+                }
+
+                /* Small delay to ensure router connection is stable before enabling self-organization */
+                vTaskDelay(pdMS_TO_TICKS(100));
+
                 ESP_LOGI(MESH_TAG, "[ROOT ACTION] Router connected - enabling self-organization for child connections...");
-                ESP_ERROR_CHECK(esp_mesh_set_self_organized(true, true));
-                bool self_org_enabled = esp_mesh_get_self_organized();
-                if (!self_org_enabled) {
-                    ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Failed to enable self-organization after router connection!");
+                /* For fixed root nodes: Use select_parent=false to enable self-organization
+                 * without causing the root to disconnect from router and search for a parent.
+                 * This allows child nodes to connect while maintaining router connection. */
+                esp_err_t self_org_err = esp_mesh_set_self_organized(true, false);
+
+                // #region agent log
+                ESP_LOGI(MESH_TAG, "[DEBUG HYP-3] esp_mesh_set_self_organized(true, false) result:0x%x", self_org_err);
+                // #endregion
+
+                if (self_org_err != ESP_OK) {
+                    ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Failed to enable self-organization: 0x%x", self_org_err);
                 } else {
-                    ESP_LOGI(MESH_TAG, "[ROOT ACTION] Self-organization enabled - root node can now accept child connections");
+                    /* Verify root is still fixed after enabling self-organization */
+                    bool is_root_fixed_after = esp_mesh_is_root_fixed();
+                    if (!is_root_fixed_after) {
+                        ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Root became unfixed after enabling self-organization! Re-fixing...");
+                        esp_err_t fix_err = esp_mesh_fix_root(true);
+                        if (fix_err != ESP_OK) {
+                            ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Failed to re-fix root: 0x%x", fix_err);
+                        }
+                    }
+
+                    bool self_org_enabled = esp_mesh_get_self_organized();
+
+                    // #region agent log
+                    ESP_LOGI(MESH_TAG, "[DEBUG HYP-3] After self-org enable - is_root_fixed:%d, self_org_enabled:%d",
+                             is_root_fixed_after ? 1 : 0, self_org_enabled ? 1 : 0);
+                    // #endregion
+
+                    if (self_org_enabled) {
+                        ESP_LOGI(MESH_TAG, "[ROOT ACTION] Self-organization enabled - root node can now accept child connections");
+
+                        // #region agent log
+                        /* Log root node state for child connection debugging */
+                        uint8_t primary_channel = 0;
+                        wifi_second_chan_t second_channel = WIFI_SECOND_CHAN_NONE;
+                        esp_wifi_get_channel(&primary_channel, &second_channel);
+                        int routing_table_size = esp_mesh_get_routing_table_size();
+                        ESP_LOGI(MESH_TAG, "[DEBUG CHILD-CONN] Root ready for children - is_root_fixed:%d, self_org:%d, channel:%d, route_size:%d",
+                                 is_root_fixed_after ? 1 : 0, self_org_enabled ? 1 : 0, primary_channel, routing_table_size);
+                        // #endregion
+                    } else {
+                        ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Self-organization enable failed verification");
+                    }
                 }
             }
 
@@ -675,6 +856,20 @@ esp_err_t mesh_common_init(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     /*  create network interfaces for mesh (only station instance saved for further manipulation, soft AP instance ignored */
     ESP_ERROR_CHECK(esp_netif_create_default_wifi_mesh_netifs(&netif_sta, NULL));
+
+    // #region agent log
+    ESP_LOGI(MESH_TAG, "[DEBUG HYP-2] Netif created - netif_sta:%p", netif_sta);
+    if (netif_sta != NULL) {
+        esp_netif_ip_info_t ip_info;
+        esp_err_t get_ip_err = esp_netif_get_ip_info(netif_sta, &ip_info);
+        ESP_LOGI(MESH_TAG, "[DEBUG HYP-2] Initial netif IP info - get_ip_info result:0x%x, ip:" IPSTR,
+                 get_ip_err, IP2STR(&ip_info.ip));
+
+        /* Ensure DHCP client is enabled for STA interface (needed for root node to get IP) */
+        esp_err_t dhcp_start_err = esp_netif_dhcpc_start(netif_sta);
+        ESP_LOGI(MESH_TAG, "[DEBUG HYP-2] DHCP client start (initial) - result:0x%x", dhcp_start_err);
+    }
+    // #endregion
     /*  wifi initialization */
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&config));
@@ -784,14 +979,14 @@ esp_err_t mesh_common_init(void)
         }
     } else if (mesh_gpio_is_initialized() && level_mesh == 0 && level_root != 0) {
         /* GPIO 4 LOW (and GPIO 5 HIGH): Force mesh/child node - prevent root election
-         * To allow connection to parent mesh nodes while preventing router connection, we:
-         * 1. Enable self-organization but disable router connection (esp_mesh_set_self_organized(true, false))
-         *    - This allows the node to connect to parent mesh nodes
-         *    - But prevents connection to the router (second parameter = false)
-         * 2. Release root fixing (ensures node can connect as child)
+         * To allow connection to parent mesh nodes, we:
+         * 1. Enable self-organization with parent selection (esp_mesh_set_self_organized(true, true))
+         *    - This allows the node to search for and connect to parent mesh nodes
+         *    - select_parent=true enables parent selection/search functionality
+         * 2. Set device type to MESH_LEAF to prevent root election
+         * 3. Release root fixing (ensures node can connect as child)
          * Note: Router config must be set in mesh_cfg_t (required by esp_mesh_set_config),
-         * but with router connection disabled via self-organization, the node will not connect to router.
-         * The node will automatically connect to a parent mesh node if available.
+         * but the node will connect to a parent mesh node, not directly to the router.
          */
         ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Configuring for mesh node (GPIO %d=LOW, GPIO %d=HIGH/floating)",
                  MESH_GPIO_FORCE_MESH, MESH_GPIO_FORCE_ROOT);
@@ -799,10 +994,10 @@ esp_err_t mesh_common_init(void)
         ESP_LOGD(MESH_TAG, "[DEBUG] Before mesh node forcing config - router_ssid:%.*s, router_ssid_len:%d",
                  cfg.router.ssid_len, cfg.router.ssid, cfg.router.ssid_len);
 
-        ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Enabling self-organization for parent connection, but disabling router connection...");
-        esp_err_t self_org_err = esp_mesh_set_self_organized(true, false);
+        ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Enabling self-organization with parent selection for mesh connection...");
+        esp_err_t self_org_err = esp_mesh_set_self_organized(true, true);
 
-        ESP_LOGD(MESH_TAG, "[DEBUG] After esp_mesh_set_self_organized(true, false) - err:%s (0x%x)",
+        ESP_LOGD(MESH_TAG, "[DEBUG] After esp_mesh_set_self_organized(true, true) - err:%s (0x%x)",
                  esp_err_to_name(self_org_err), self_org_err);
 
         ESP_ERROR_CHECK(self_org_err);
@@ -821,8 +1016,8 @@ esp_err_t mesh_common_init(void)
 
         /* Note: esp_mesh_set_disallow_level() does not exist in ESP-IDF API.
          * Root election prevention is already handled by:
-         * - esp_mesh_set_type(MESH_LEAF) - sets device type to leaf
-         * - esp_mesh_set_self_organized(true, false) - enables self-organization but disables router connection
+         * - esp_mesh_set_type(MESH_LEAF) - sets device type to leaf (prevents root election)
+         * - esp_mesh_set_self_organized(true, true) - enables self-organization with parent selection
          * - esp_mesh_fix_root(false) - releases root fixing
          */
 
@@ -831,7 +1026,7 @@ esp_err_t mesh_common_init(void)
         if (fix_root_err != ESP_OK && fix_root_err != ESP_ERR_MESH_NOT_INIT) {
             ESP_LOGW(MESH_TAG, "[GPIO NODE FORCING] Warning: esp_mesh_fix_root(false) returned %s (0x%x) - this is usually fine", esp_err_to_name(fix_root_err), fix_root_err);
         }
-        ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Mesh node behavior forced via GPIO (GPIO %d=LOW) - self-organization enabled for parent connection, router connection disabled", MESH_GPIO_FORCE_MESH);
+        ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Mesh node behavior forced via GPIO (GPIO %d=LOW) - self-organization enabled with parent selection for mesh connection", MESH_GPIO_FORCE_MESH);
         is_mesh_node_forced = true; /* Mark that mesh node forcing is active */
     } else {
         /* Both HIGH, both LOW (conflict), or GPIO not initialized: Normal root election - ensure self-organization is enabled */
