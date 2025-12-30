@@ -24,6 +24,7 @@ static const char *SEQ_NODE_TAG = "mode_seq_node";
 /* Static storage for sequence data */
 static uint8_t sequence_rhythm = 0;  /* 0 = not set */
 static uint8_t sequence_colors[SEQUENCE_COLOR_DATA_SIZE];  /* Packed color data (384 bytes) */
+static uint8_t sequence_length = 16;  /* Sequence length in rows (1-16), default 16 for backward compatibility */
 static uint16_t sequence_pointer = 0;  /* Current position in sequence (0-255) */
 static esp_timer_handle_t sequence_timer = NULL;  /* Timer handle for sequence playback */
 static bool sequence_active = false;  /* Playback state */

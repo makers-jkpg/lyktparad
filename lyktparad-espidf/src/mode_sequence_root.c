@@ -46,6 +46,7 @@ esp_err_t mode_sequence_root_broadcast_beat(void);
 /* Static storage for sequence data */
 static uint8_t sequence_rhythm = 25;  /* Default: 25 (250ms) */
 static uint8_t sequence_colors[SEQUENCE_COLOR_DATA_SIZE];  /* Packed color data (384 bytes) */
+static uint8_t sequence_length = 16;  /* Sequence length in rows (1-16), default 16 for backward compatibility */
 static uint16_t sequence_pointer = 0;  /* Current position in sequence (0-255) */
 static esp_timer_handle_t sequence_timer = NULL;  /* Timer handle for sequence playback */
 static bool sequence_active = false;  /* Playback state */
@@ -171,11 +172,14 @@ static void sequence_timer_cb(void *arg)
         ESP_LOGE(SEQ_ROOT_TAG, "Failed to set LED in timer callback: 0x%x", err);
     }
 
-    /* Increment pointer and wrap at 256 */
-    sequence_pointer = (sequence_pointer + 1) % 256;
+    /* Calculate maximum squares for current sequence length */
+    uint16_t max_squares = sequence_length * 16;
 
-    /* Check if pointer is at row boundary (every 16 squares) */
-    if ((sequence_pointer % 16) == 0) {
+    /* Increment pointer and wrap at sequence length */
+    sequence_pointer = (sequence_pointer + 1) % max_squares;
+
+    /* Check if pointer is at row boundary (every 16 squares) and within sequence */
+    if ((sequence_pointer % 16) == 0 && sequence_pointer < max_squares) {
         /* Broadcast BEAT command with current pointer value */
         mode_sequence_root_broadcast_beat();
     }
@@ -185,7 +189,7 @@ static void sequence_timer_cb(void *arg)
  *                Root Node Functions
  *******************************************************/
 
-esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t *color_data)
+esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_rows, uint8_t *color_data)
 {
     if (!esp_mesh_is_root()) {
         ESP_LOGE(SEQ_ROOT_TAG, "Not root node, cannot store and broadcast sequence");
@@ -199,6 +203,12 @@ esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t *color_
         return ESP_ERR_INVALID_ARG;
     }
 
+    /* Validate sequence length (1-16 rows) */
+    if (num_rows < 1 || num_rows > 16) {
+        ESP_LOGE(SEQ_ROOT_TAG, "Invalid sequence length: %d (must be 1-16 rows)", num_rows);
+        return ESP_ERR_INVALID_ARG;
+    }
+
     if (color_data == NULL) {
         ESP_LOGE(SEQ_ROOT_TAG, "Color data pointer is NULL");
         return ESP_ERR_INVALID_ARG;
@@ -206,8 +216,9 @@ esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t *color_
 
     /* Store sequence data */
     sequence_rhythm = rhythm;
+    sequence_length = num_rows;
     memcpy(sequence_colors, color_data, SEQUENCE_COLOR_DATA_SIZE);
-    ESP_LOGI(SEQ_ROOT_TAG, "Sequence data stored - rhythm: %d (%.1f ms)", rhythm, (float)rhythm * 10.0f);
+    ESP_LOGI(SEQ_ROOT_TAG, "Sequence data stored - rhythm: %d (%.1f ms), length: %d rows", rhythm, (float)rhythm * 10.0f, num_rows);
 
     /* Stop existing timer if running */
     sequence_timer_stop();
@@ -241,12 +252,13 @@ esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t *color_
     uint8_t *tx_buf = mesh_common_get_tx_buf();
     tx_buf[0] = MESH_CMD_SEQUENCE;  /* Command byte */
     tx_buf[1] = rhythm;             /* Rhythm byte */
-    memcpy(&tx_buf[2], color_data, SEQUENCE_COLOR_DATA_SIZE);  /* Color data (384 bytes) */
+    tx_buf[2] = num_rows;           /* Length byte (number of rows, 1-16) */
+    memcpy(&tx_buf[3], color_data, SEQUENCE_COLOR_DATA_SIZE);  /* Color data (384 bytes) */
 
     /* Create mesh data structure */
     mesh_data_t data;
     data.data = tx_buf;
-    data.size = SEQUENCE_MESH_CMD_SIZE;  /* 386 bytes total */
+    data.size = SEQUENCE_MESH_CMD_SIZE;  /* 387 bytes total */
     data.proto = MESH_PROTO_BIN;
     data.tos = MESH_TOS_P2P;
 
@@ -263,8 +275,8 @@ esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t *color_
         }
     }
 
-    ESP_LOGI(SEQ_ROOT_TAG, "Sequence command broadcast - rhythm:%d, sent to %d/%d child nodes (success:%d, failed:%d)",
-             rhythm, success_count, child_node_count, success_count, fail_count);
+    ESP_LOGI(SEQ_ROOT_TAG, "Sequence command broadcast - rhythm:%d, length:%d rows, sent to %d/%d child nodes (success:%d, failed:%d)",
+             rhythm, num_rows, success_count, child_node_count, success_count, fail_count);
 
     return ESP_OK;
 }
@@ -460,4 +472,9 @@ esp_err_t mode_sequence_root_reset(void)
 
     ESP_LOGI(SEQ_ROOT_TAG, "Sequence pointer reset to 0");
     return ESP_OK;
+}
+
+uint16_t mode_sequence_root_get_pointer(void)
+{
+    return sequence_pointer;
 }
