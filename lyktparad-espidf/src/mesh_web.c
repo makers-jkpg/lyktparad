@@ -987,8 +987,8 @@ static esp_err_t api_sequence_post_handler(httpd_req_t *req)
     /* Extract rhythm byte (first byte) */
     uint8_t rhythm = content[0];
 
-    /* Validate rhythm range (1-255) */
-    if (rhythm == 0 || rhythm > 255) {
+    /* Validate rhythm range (1-255) - uint8_t cannot exceed 255 */
+    if (rhythm == 0) {
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");

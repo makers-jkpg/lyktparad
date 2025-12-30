@@ -52,7 +52,8 @@ esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t *color_
     }
 
     /* Validate inputs */
-    if (rhythm == 0 || rhythm > 255) {
+    /* Validate rhythm range (1-255) - uint8_t cannot exceed 255 */
+    if (rhythm == 0) {
         ESP_LOGE(SEQ_ROOT_TAG, "Invalid rhythm value: %d (must be 1-255)", rhythm);
         return ESP_ERR_INVALID_ARG;
     }
