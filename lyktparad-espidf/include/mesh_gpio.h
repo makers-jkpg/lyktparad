@@ -10,7 +10,7 @@
  *
  * Simplified Logic (only one pin should be tied to GND at a time for forcing behavior):
  * - GPIO 5 (Pin A) LOW (and Pin B HIGH): Force root node (uses esp_mesh_fix_root(true))
- * - GPIO 4 (Pin B) LOW (and Pin A HIGH): Force mesh node (uses esp_mesh_set_self_organized(false, false))
+ * - GPIO 4 (Pin B) LOW (and Pin A HIGH): Force mesh node (uses esp_mesh_set_self_organized(true, false))
  * - Both HIGH (both floating): Normal root election enabled (uses esp_mesh_set_self_organized(true, true))
  * - Both LOW (conflict): Normal root election enabled (uses esp_mesh_set_self_organized(true, true))
  *
