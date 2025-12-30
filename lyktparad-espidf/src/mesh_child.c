@@ -19,6 +19,7 @@
 #include "mesh_common.h"
 #include "mesh_child.h"
 #include "light_neopixel.h"
+#include "node_sequence.h"
 #include "light_common_cathode.h"
 #include "mesh_config.h"
 #include "freertos/FreeRTOS.h"
@@ -75,7 +76,10 @@ void esp_mesh_p2p_rx_main(void *arg)
                           ((uint32_t)(uint8_t)data.data[3] << 8) |
                           ((uint32_t)(uint8_t)data.data[4] << 0);
             ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat received from "MACSTR", count:%" PRIu32, MAC2STR(from.addr), hb);
-            if (!(hb%2)) {
+            /* Skip heartbeat LED changes if sequence mode is active (sequence controls LED) */
+            if (mode_sequence_node_is_active()) {
+                ESP_LOGD(mesh_common_get_tag(), "[NODE ACTION] Heartbeat #%lu - skipping LED change (sequence active)", (unsigned long)hb);
+            } else if (!(hb%2)) {
                 /* even heartbeat: turn off light */
                 mesh_light_set_colour(0);
                 set_rgb_led(0, 0, 0);
@@ -101,6 +105,8 @@ void esp_mesh_p2p_rx_main(void *arg)
             uint8_t g = data.data[2];
             uint8_t b = data.data[3];
             ESP_LOGI(MESH_TAG, "[NODE ACTION] RGB command received from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
+            /* Stop sequence playback if active */
+            mode_sequence_node_stop();
             /* Store RGB values for use in heartbeat handler */
             last_rgb_r = r;
             last_rgb_g = g;
@@ -109,6 +115,35 @@ void esp_mesh_p2p_rx_main(void *arg)
             err = mesh_light_set_rgb(r, g, b);
             if (err != ESP_OK) {
                 ESP_LOGE(mesh_common_get_tag(), "[RGB] failed to set LED: 0x%x", err);
+            }
+        } else if (data.proto == MESH_PROTO_BIN && data.size >= 3 && data.data[0] == MESH_CMD_SEQUENCE) {
+            /* detect SEQUENCE command: variable length (cmd + rhythm + length + color data) */
+            /* Extract length to validate size */
+            uint8_t num_rows = data.data[2];
+            if (num_rows >= 1 && num_rows <= 16) {
+                uint16_t expected_size = sequence_mesh_cmd_size(num_rows);
+                if (data.size == expected_size) {
+                    err = mode_sequence_node_handle_command(MESH_CMD_SEQUENCE, data.data, data.size);
+                } else {
+                    ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] size mismatch: got %d, expected %d for %d rows", data.size, expected_size, num_rows);
+                    err = ESP_ERR_INVALID_SIZE;
+                }
+            } else {
+                ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] invalid length: %d (must be 1-16)", num_rows);
+                err = ESP_ERR_INVALID_ARG;
+            }
+            if (err != ESP_OK) {
+                ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] failed to handle command: 0x%x", err);
+            }
+        } else if (data.proto == MESH_PROTO_BIN && 
+                   ((data.size == 1 && (data.data[0] == MESH_CMD_SEQUENCE_START ||
+                                        data.data[0] == MESH_CMD_SEQUENCE_STOP ||
+                                        data.data[0] == MESH_CMD_SEQUENCE_RESET)) ||
+                    (data.size == 2 && data.data[0] == MESH_CMD_SEQUENCE_BEAT))) {
+            /* Control command: START/STOP/RESET are single-byte, BEAT is 2-byte (command + 1-byte pointer) */
+            err = mode_sequence_node_handle_control(data.data[0], data.data, data.size);
+            if (err != ESP_OK) {
+                ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE CONTROL] failed to handle command 0x%02x: 0x%x", data.data[0], err);
             }
         } else {
             /* process other light control messages */

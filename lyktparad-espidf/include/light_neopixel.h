@@ -40,6 +40,11 @@
 #define  MESH_CMD_HEARTBEAT      (0x01)
 #define  MESH_CMD_LIGHT_ON_OFF   (0x02)
 #define  MESH_CMD_SET_RGB        (0x03)
+#define  MESH_CMD_SEQUENCE       (0x04)  /* Sequence command: 386 bytes total (1 byte command + 1 byte rhythm + 384 bytes color data) */
+#define  MESH_CMD_SEQUENCE_START (0x05)  /* Start sequence playback */
+#define  MESH_CMD_SEQUENCE_STOP  (0x06)  /* Stop sequence playback */
+#define  MESH_CMD_SEQUENCE_RESET (0x07)  /* Reset sequence pointer to 0 */
+#define  MESH_CMD_SEQUENCE_BEAT  (0x08)  /* Tempo synchronization beat (2 bytes: command + 1-byte pointer) */
 
 /*******************************************************
  *                Type Definitions
