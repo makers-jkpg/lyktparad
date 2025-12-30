@@ -13,7 +13,6 @@ static const char *WEB_TAG = "mesh_web";
 static httpd_handle_t server_handle = NULL;
 
 /* Forward declarations */
-static esp_err_t api_heartbeat_handler(httpd_req_t *req);
 static esp_err_t api_nodes_handler(httpd_req_t *req);
 static esp_err_t api_color_get_handler(httpd_req_t *req);
 static esp_err_t api_color_post_handler(httpd_req_t *req);
@@ -68,16 +67,6 @@ static const char html_page[] =
 "  color: #667eea;"
 "  font-family: 'Courier New', monospace;"
 "}"
-".heartbeat {"
-"  text-align: center;"
-"  margin-bottom: 30px;"
-"}"
-".heartbeat-label {"
-"  font-size: 14px;"
-"  color: #666;"
-"  margin-bottom: 8px;"
-"}"
-".heartbeat-value {"
 "  font-size: 48px;"
 "  font-weight: bold;"
 "  color: #667eea;"
@@ -239,10 +228,6 @@ static const char html_page[] =
 "<div class=\"node-count\">"
 "<div class=\"node-count-label\">Node Count</div>"
 "<div class=\"node-count-value\" id=\"nodeCount\">0</div>"
-"</div>"
-"<div class=\"heartbeat\">"
-"<div class=\"heartbeat-label\">Heartbeats</div>"
-"<div class=\"heartbeat-value\" id=\"heartbeat\">0</div>"
 "</div>"
 "<div class=\"grid-section\">"
 "<div class=\"grid-container\" id=\"gridContainer\">"
@@ -584,17 +569,6 @@ static const char html_page[] =
 "  } : null;"
 "}"
 ""
-"function updateHeartbeat() {"
-"  fetch('/api/heartbeat')"
-"    .then(response => response.json())"
-"    .then(data => {"
-"      document.getElementById('heartbeat').textContent = data.heartbeat;"
-"    })"
-"    .catch(err => {"
-"      console.error('Heartbeat update error:', err);"
-"    });"
-"}"
-""
 "function getChannelIndex(row, col, channel) {"
 "  return (row * 16 + col) * 3 + channel;"
 "}"
@@ -760,12 +734,10 @@ static const char html_page[] =
 "  initializeDefaultPattern();"
 "  renderGrid();"
 "  updateNodeCount();"
-"  updateHeartbeat();"
 "  updateRhythmDisplay();"
 "  updateInterval = setInterval(function() {"
 "    updateNodeCount();"
-"    updateHeartbeat();"
-"  }, 500);"
+"  }, 5000);"
 ""
 "  const gridContainer = document.getElementById('gridContainer');"
 "  gridContainer.addEventListener('click', function(e) {"
@@ -816,26 +788,6 @@ static const char html_page[] =
 "</script>"
 "</body>"
 "</html>";
-
-/* API: GET /api/heartbeat - Returns current heartbeat counter */
-static esp_err_t api_heartbeat_handler(httpd_req_t *req)
-{
-    uint32_t heartbeat = mesh_get_heartbeat_count();
-    char response[64];
-    int len = snprintf(response, sizeof(response), "{\"heartbeat\":%lu}", (unsigned long)heartbeat);
-
-    if (len < 0 || len >= (int)sizeof(response)) {
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_send(req, "{\"error\":\"Response formatting error\"}", -1);
-        return ESP_FAIL;
-    }
-
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    return httpd_resp_send(req, response, len);
-}
 
 /* API: GET /api/nodes - Returns number of nodes in mesh */
 static esp_err_t api_nodes_handler(httpd_req_t *req)
@@ -1039,7 +991,7 @@ esp_err_t mesh_web_server_start(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 9;  /* Updated: heartbeat, nodes, color_get, color_post, sequence_post, index = 6 handlers */
+    config.max_uri_handlers = 8;  /* Updated: nodes, color_get, color_post, sequence_post, index = 5 handlers */
     config.stack_size = 8192;
     config.server_port = 80;
 
@@ -1048,20 +1000,6 @@ esp_err_t mesh_web_server_start(void)
     if (httpd_start(&server_handle, &config) == ESP_OK) {
         esp_err_t reg_err;
         /* Register URI handlers */
-        httpd_uri_t heartbeat_uri = {
-            .uri       = "/api/heartbeat",
-            .method    = HTTP_GET,
-            .handler   = api_heartbeat_handler,
-            .user_ctx  = NULL
-        };
-        reg_err = httpd_register_uri_handler(server_handle, &heartbeat_uri);
-        if (reg_err != ESP_OK) {
-            ESP_LOGE(WEB_TAG, "Failed to register heartbeat URI: 0x%x", reg_err);
-            httpd_stop(server_handle);
-            server_handle = NULL;
-            return ESP_FAIL;
-        }
-
         httpd_uri_t nodes_uri = {
             .uri       = "/api/nodes",
             .method    = HTTP_GET,
