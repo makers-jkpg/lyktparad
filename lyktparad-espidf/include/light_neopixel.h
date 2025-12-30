@@ -40,6 +40,7 @@
 #define  MESH_CMD_HEARTBEAT      (0x01)
 #define  MESH_CMD_LIGHT_ON_OFF   (0x02)
 #define  MESH_CMD_SET_RGB        (0x03)
+#define  MESH_CMD_SEQUENCE       (0x04)  /* Sequence command: 386 bytes total (1 byte command + 1 byte rhythm + 384 bytes color data) */
 
 /*******************************************************
  *                Type Definitions

@@ -19,6 +19,7 @@
 #include "mesh_common.h"
 #include "mesh_child.h"
 #include "light_neopixel.h"
+#include "node_sequence.h"
 #include "light_common_cathode.h"
 #include "mesh_config.h"
 #include "freertos/FreeRTOS.h"
@@ -101,6 +102,8 @@ void esp_mesh_p2p_rx_main(void *arg)
             uint8_t g = data.data[2];
             uint8_t b = data.data[3];
             ESP_LOGI(MESH_TAG, "[NODE ACTION] RGB command received from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
+            /* Stop sequence playback if active */
+            mode_sequence_node_stop();
             /* Store RGB values for use in heartbeat handler */
             last_rgb_r = r;
             last_rgb_g = g;
@@ -109,6 +112,12 @@ void esp_mesh_p2p_rx_main(void *arg)
             err = mesh_light_set_rgb(r, g, b);
             if (err != ESP_OK) {
                 ESP_LOGE(mesh_common_get_tag(), "[RGB] failed to set LED: 0x%x", err);
+            }
+        } else if (data.proto == MESH_PROTO_BIN && data.size == SEQUENCE_MESH_CMD_SIZE && data.data[0] == MESH_CMD_SEQUENCE) {
+            /* detect SEQUENCE command: command prefix (0x04) + 1 byte rhythm + 384 bytes color data */
+            err = mode_sequence_node_handle_command(MESH_CMD_SEQUENCE, data.data, data.size);
+            if (err != ESP_OK) {
+                ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] failed to handle command: 0x%x", err);
             }
         } else {
             /* process other light control messages */
