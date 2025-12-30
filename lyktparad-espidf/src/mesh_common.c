@@ -604,6 +604,21 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
             /* Root node: router connected - set GREEN base color */
             is_router_connected = true;
             mesh_light_set_colour(MESH_LIGHT_GREEN);
+
+            /* Enable self-organization AFTER router connection is established
+             * This allows the root node to accept child connections without
+             * interfering with the router connection process */
+            if (is_root_node_forced) {
+                ESP_LOGI(MESH_TAG, "[ROOT ACTION] Router connected - enabling self-organization for child connections...");
+                ESP_ERROR_CHECK(esp_mesh_set_self_organized(true, true));
+                bool self_org_enabled = esp_mesh_get_self_organized();
+                if (!self_org_enabled) {
+                    ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Failed to enable self-organization after router connection!");
+                } else {
+                    ESP_LOGI(MESH_TAG, "[ROOT ACTION] Self-organization enabled - root node can now accept child connections");
+                }
+            }
+
             if (root_ip_callback) {
                 root_ip_callback(arg, event_base, event_id, event_data);
             }
@@ -615,6 +630,13 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
             /* Root node: router disconnected - set ORANGE */
             is_router_connected = false;
             mesh_light_set_colour(MESH_LIGHT_ORANGE);
+
+            /* Disable self-organization when router disconnects to prevent
+             * root from searching for a parent instead of reconnecting to router */
+            if (is_root_node_forced) {
+                ESP_LOGI(MESH_TAG, "[ROOT ACTION] Router disconnected - disabling self-organization to allow router reconnection...");
+                ESP_ERROR_CHECK(esp_mesh_set_self_organized(false, false));
+            }
         }
     }
 }
