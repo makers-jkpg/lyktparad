@@ -16,6 +16,7 @@
 #include "mesh_child.h"
 #include "mesh_gpio.h"
 #include "light_neopixel.h"
+#include "mesh_version.h"
 
 void app_main(void)
 {
@@ -32,8 +33,18 @@ void app_main(void)
     ESP_ERROR_CHECK(mesh_light_init());
     ESP_LOGI(mesh_common_get_tag(), "[STARTUP] LED strip initialized");
 
-    /* Initialize common mesh functionality */
+    /* Initialize common mesh functionality (includes NVS initialization) */
     ESP_ERROR_CHECK(mesh_common_init());
+
+    /* Initialize version management (after NVS is initialized) */
+    esp_err_t version_err = mesh_version_init();
+    if (version_err != ESP_OK) {
+        ESP_LOGW("mesh_main", "[STARTUP] Version management initialization failed: %s",
+                 esp_err_to_name(version_err));
+    } else {
+        const char *version = mesh_version_get_string();
+        ESP_LOGI("mesh_main", "[STARTUP] Firmware version: %s", version);
+    }
 
     /* Initialize root-specific functionality (safe to call on all nodes, checks internally) */
     ESP_ERROR_CHECK(mesh_root_init());
