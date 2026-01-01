@@ -34,7 +34,7 @@ static const char *TAG = "mesh_version";
 
 /**
  * Parse version string into components
- * 
+ *
  * @param version_str Version string in format "MAJOR.MINOR.PATCH"
  * @param major Pointer to store major version
  * @param minor Pointer to store minor version

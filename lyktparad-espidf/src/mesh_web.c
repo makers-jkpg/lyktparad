@@ -1,6 +1,8 @@
 #include "mesh_web.h"
 #include "light_neopixel.h"
 #include "node_sequence.h"
+#include "mesh_ota.h"
+#include "mesh_version.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_mesh.h"
@@ -18,6 +20,10 @@ static esp_err_t api_color_get_handler(httpd_req_t *req);
 static esp_err_t api_color_post_handler(httpd_req_t *req);
 static esp_err_t api_sequence_post_handler(httpd_req_t *req);
 static esp_err_t api_sequence_pointer_handler(httpd_req_t *req);
+static esp_err_t api_ota_download_post_handler(httpd_req_t *req);
+static esp_err_t api_ota_status_get_handler(httpd_req_t *req);
+static esp_err_t api_ota_cancel_post_handler(httpd_req_t *req);
+static esp_err_t api_ota_version_get_handler(httpd_req_t *req);
 static esp_err_t index_handler(httpd_req_t *req);
 
 /* HTML page with embedded CSS and JavaScript */
@@ -1449,7 +1455,7 @@ static esp_err_t api_sequence_post_handler(httpd_req_t *req)
     num_rows = content[1];
     // #region agent log
     int64_t timestamp = esp_timer_get_time() / 1000;
-    ESP_LOGI("DEBUG", "{\"location\":\"mesh_web.c:1422\",\"message\":\"api_sequence_post num_rows received\",\"data\":{\"num_rows\":%d,\"hypothesisId\":\"E\"},\"timestamp\":%lld}", 
+    ESP_LOGI("DEBUG", "{\"location\":\"mesh_web.c:1422\",\"message\":\"api_sequence_post num_rows received\",\"data\":{\"num_rows\":%d,\"hypothesisId\":\"E\"},\"timestamp\":%lld}",
              num_rows, timestamp);
     // #endregion
     if (num_rows < 1 || num_rows > 16) {
@@ -1563,6 +1569,180 @@ static esp_err_t api_sequence_pointer_handler(httpd_req_t *req)
     return httpd_resp_send(req, response, len);
 }
 
+/* API: POST /api/ota/download - Initiates firmware download */
+static esp_err_t api_ota_download_post_handler(httpd_req_t *req)
+{
+    if (!esp_mesh_is_root()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Only root node can download firmware\"}", -1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    char content[512];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+
+    if (ret <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid request\"}", -1);
+        return ESP_FAIL;
+    }
+
+    content[ret] = '\0';
+
+    /* Simple JSON parsing for {"url":"..."} */
+    char *url_str = strstr(content, "\"url\":");
+    if (url_str == NULL) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Missing url field\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Extract URL value */
+    url_str += 6;  /* Skip "url": */
+    while (*url_str == ' ' || *url_str == '\t') url_str++;  /* Skip whitespace */
+    if (*url_str == '"') {
+        url_str++;  /* Skip opening quote */
+        char *url_end = strchr(url_str, '"');
+        if (url_end == NULL) {
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid URL format\"}", -1);
+            return ESP_FAIL;
+        }
+        *url_end = '\0';  /* Null-terminate URL */
+    } else {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid URL format\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Validate URL length */
+    if (strlen(url_str) == 0 || strlen(url_str) > 400) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid URL length\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Start download */
+    esp_err_t err = mesh_ota_download_firmware(url_str);
+
+    if (err == ESP_OK) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":true}", -1);
+        return ESP_OK;
+    } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"Download failed: %s\"}", esp_err_to_name(err));
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+}
+
+/* API: GET /api/ota/status - Returns download status */
+static esp_err_t api_ota_status_get_handler(httpd_req_t *req)
+{
+    if (!esp_mesh_is_root()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"downloading\":false,\"progress\":0.0}", -1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    bool downloading = mesh_ota_is_downloading();
+    float progress = mesh_ota_get_download_progress();
+
+    char response[128];
+    int len = snprintf(response, sizeof(response), "{\"downloading\":%s,\"progress\":%.2f}",
+                      downloading ? "true" : "false", progress);
+
+    if (len < 0 || len >= (int)sizeof(response)) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"downloading\":false,\"progress\":0.0}", -1);
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, response, len);
+    return ESP_OK;
+}
+
+/* API: POST /api/ota/cancel - Cancels ongoing download */
+static esp_err_t api_ota_cancel_post_handler(httpd_req_t *req)
+{
+    if (!esp_mesh_is_root()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Only root node can cancel download\"}", -1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = mesh_ota_cancel_download();
+
+    if (err == ESP_OK) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":true}", -1);
+        return ESP_OK;
+    } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"Cancel failed: %s\"}", esp_err_to_name(err));
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+}
+
+/* API: GET /api/ota/version - Returns current firmware version */
+static esp_err_t api_ota_version_get_handler(httpd_req_t *req)
+{
+    if (!esp_mesh_is_root()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"version\":\"unknown\"}", -1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const char *version = mesh_version_get_string();
+    char response[64];
+    int len = snprintf(response, sizeof(response), "{\"version\":\"%s\"}", version);
+
+    if (len < 0 || len >= (int)sizeof(response)) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"version\":\"unknown\"}", -1);
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, response, len);
+    return ESP_OK;
+}
+
 /* GET / - Serves main HTML page */
 static esp_err_t index_handler(httpd_req_t *req)
 {
@@ -1586,7 +1766,7 @@ esp_err_t mesh_web_server_start(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 8;  /* Updated: nodes, color_get, color_post, sequence_post, index = 5 handlers */
+    config.max_uri_handlers = 12;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, ota_download, ota_status, ota_cancel, ota_version, index = 10 handlers */
     config.stack_size = 8192;
     config.server_port = 80;
 
@@ -1660,6 +1840,62 @@ esp_err_t mesh_web_server_start(void)
         reg_err = httpd_register_uri_handler(server_handle, &sequence_pointer_uri);
         if (reg_err != ESP_OK) {
             ESP_LOGE(WEB_TAG, "Failed to register sequence pointer URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t ota_download_uri = {
+            .uri       = "/api/ota/download",
+            .method    = HTTP_POST,
+            .handler   = api_ota_download_post_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &ota_download_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register OTA download URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t ota_status_uri = {
+            .uri       = "/api/ota/status",
+            .method    = HTTP_GET,
+            .handler   = api_ota_status_get_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &ota_status_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register OTA status URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t ota_cancel_uri = {
+            .uri       = "/api/ota/cancel",
+            .method    = HTTP_POST,
+            .handler   = api_ota_cancel_post_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &ota_cancel_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register OTA cancel URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t ota_version_uri = {
+            .uri       = "/api/ota/version",
+            .method    = HTTP_GET,
+            .handler   = api_ota_version_get_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &ota_version_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register OTA version URI: 0x%x", reg_err);
             httpd_stop(server_handle);
             server_handle = NULL;
             return ESP_FAIL;

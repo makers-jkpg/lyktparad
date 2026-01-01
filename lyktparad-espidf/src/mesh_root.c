@@ -25,6 +25,7 @@
 #include "light_neopixel.h"
 #include "light_common_cathode.h"
 #include "mesh_config.h"
+#include "mesh_ota.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -515,6 +516,14 @@ esp_err_t mesh_root_init(void)
     /* Only start timer if there are already child nodes connected */
     if (initial_child_count > 0) {
         heartbeat_timer_start();
+    }
+
+    /* Initialize OTA system (safe to call on all nodes, but only root will use it) */
+    esp_err_t ota_err = mesh_ota_init();
+    if (ota_err != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "[STARTUP] OTA initialization failed: %s", esp_err_to_name(ota_err));
+    } else {
+        ESP_LOGI(MESH_TAG, "[STARTUP] OTA system initialized");
     }
 
     return ESP_OK;

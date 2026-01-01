@@ -17,24 +17,29 @@
 
 Over-The-Air (OTA) firmware updates allow you to update the firmware on your mesh network nodes without physically connecting to each device. This feature enables you to deploy bug fixes, new features, and improvements to all nodes in your network remotely.
 
-> **For Developers**: See [Developer Guide](../dev-guides/ota-foundation.md) for technical implementation details.
+> **For Developers**: See [Developer Guide](../dev-guides/ota-mupdate/ota-download.md) for technical implementation details.
 
 ### What Can OTA Updates Do?
 
-- Update firmware on all mesh nodes remotely
+- Download firmware from remote servers (HTTP/HTTPS)
+- Update firmware on all mesh nodes remotely (mesh distribution coming soon)
 - Deploy bug fixes and new features without physical access
 - Maintain version consistency across all nodes
 - Roll back to previous firmware version if needed (when implemented)
 - Check current firmware version via web interface or serial logs
+- Monitor download progress in real-time
 
 ### Current Status
 
-The OTA foundation is currently implemented, providing:
+The OTA system is currently implemented with the following features:
 - Dual OTA partition support (app0 and app1)
 - Firmware version management and tracking
 - Version comparison to prevent downgrades
+- **Root node firmware download** (HTTP and HTTPS)
+- **Download progress monitoring** via API
+- **Download cancellation** support
 
-Full OTA update functionality (download, distribution, and coordinated reboot) will be available in future updates.
+Mesh firmware distribution and coordinated reboot will be available in future updates.
 
 ## Prerequisites
 
@@ -59,7 +64,20 @@ The version format is `MAJOR.MINOR.PATCH` (e.g., `1.0.0`).
 
 ### Via Web Interface
 
-When the OTA update interface is fully implemented, you will be able to check the firmware version through the web interface. The version will be displayed in the OTA update section.
+You can check the firmware version through the web API:
+
+```bash
+curl http://<root-node-ip>/api/ota/version
+```
+
+Response:
+```json
+{
+  "version": "1.0.0"
+}
+```
+
+Replace `<root-node-ip>` with the IP address of your root node.
 
 ### Version Format
 
@@ -98,17 +116,112 @@ Before performing an OTA update:
 4. **Prepare firmware binary** - Have the new firmware binary ready on your update server
 5. **Test on single node first** - If possible, test update on a single node before deploying to entire network
 
+## Downloading Firmware
+
+The root node can download firmware from remote servers over HTTP or HTTPS. The downloaded firmware is stored in the inactive OTA partition and validated before being marked as ready.
+
+### Prerequisites
+
+- Root node must be connected to the internet via router
+- Firmware binary must be accessible via HTTP or HTTPS URL
+- Root node must have sufficient flash space for the firmware
+
+### Initiating Download
+
+To start a firmware download, send a POST request to the root node's web API:
+
+```bash
+curl -X POST http://<root-node-ip>/api/ota/download \
+  -H "Content-Type: application/json" \
+  -d '{"url":"http://example.com/firmware.bin"}'
+```
+
+For HTTPS:
+```bash
+curl -X POST http://<root-node-ip>/api/ota/download \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/firmware.bin"}'
+```
+
+**Success Response:**
+```json
+{
+  "success": true
+}
+```
+
+**Error Response:**
+```json
+{
+  "success": false,
+  "error": "Download failed: ..."
+}
+```
+
+### Monitoring Download Progress
+
+Check the download status and progress:
+
+```bash
+curl http://<root-node-ip>/api/ota/status
+```
+
+**Response:**
+```json
+{
+  "downloading": true,
+  "progress": 0.45
+}
+```
+
+- `downloading`: `true` if download is in progress, `false` otherwise
+- `progress`: Float between 0.0 and 1.0 (0.0 = 0%, 1.0 = 100%)
+
+Progress is also logged to the serial console at 10% intervals.
+
+### Cancelling Download
+
+To cancel an ongoing download:
+
+```bash
+curl -X POST http://<root-node-ip>/api/ota/cancel
+```
+
+**Response:**
+```json
+{
+  "success": true
+}
+```
+
+### What Happens During Download
+
+1. **URL validation** - The URL is validated (must start with `http://` or `https://`)
+2. **Partition selection** - The inactive OTA partition is automatically selected (app1 if running from app0, or vice versa)
+3. **Download** - Firmware is downloaded in chunks (1024 bytes) and written to the partition
+4. **Progress tracking** - Progress is tracked and can be queried via API
+5. **Verification** - After download completes, the firmware is validated:
+   - Partition structure is verified
+   - Firmware size is verified (matches expected size)
+6. **Completion** - If validation passes, the firmware is ready (but device continues running from current partition until reboot)
+
+**Note**: The device does NOT automatically switch to the new firmware. This will be handled in a future update (coordinated reboot).
+
 ## Performing Updates
 
-> **Note**: Full OTA update functionality (download, distribution, and coordinated reboot) is not yet implemented. This section will be updated when the feature is available.
+The current OTA implementation supports downloading firmware to the root node. The full update process (including mesh distribution and coordinated reboot) will be available in future updates.
 
-When OTA updates are fully implemented, the update process will:
+**Current Process:**
 
-1. **Initiate update** - Start update from root node web interface or via leaf node request
-2. **Download firmware** - Root node downloads firmware from update server
-3. **Distribute to nodes** - Root node distributes firmware to all mesh nodes
-4. **Verify integrity** - All nodes verify firmware checksum
-5. **Coordinated reboot** - All nodes reboot simultaneously to new firmware
+1. **Download firmware** - Root node downloads firmware from update server (see [Downloading Firmware](#downloading-firmware))
+2. **Verify integrity** - Firmware is automatically validated after download
+
+**Future Process (coming soon):**
+
+1. **Download firmware** - Root node downloads firmware from update server
+2. **Distribute to nodes** - Root node distributes firmware to all mesh nodes
+3. **Verify integrity** - All nodes verify firmware checksum
+4. **Coordinated reboot** - All nodes reboot simultaneously to new firmware
 
 ## Troubleshooting
 
@@ -140,6 +253,50 @@ When OTA updates are fully implemented, the update process will:
 - Ensure app0 and app1 partitions are properly configured
 - Verify otadata partition exists
 
+### Download Fails to Start
+
+**Problem**: Download request returns an error immediately.
+
+**Solutions**:
+- Verify root node is accessible (check IP address)
+- Ensure URL is correct and accessible from root node
+- Check URL format (must start with `http://` or `https://`)
+- Verify OTA system is initialized (check serial logs)
+- Ensure no other download is in progress
+
+### Download Progress Stuck
+
+**Problem**: Download progress doesn't increase or gets stuck.
+
+**Solutions**:
+- Check network connection stability
+- Verify server is still accessible
+- Check serial logs for error messages
+- Try cancelling and restarting download
+- Check if firmware size exceeds partition size
+
+### Network Errors During Download
+
+**Problem**: Download fails with network errors.
+
+**Solutions**:
+- Verify root node has internet connectivity
+- Check DNS resolution (can root node resolve the hostname?)
+- Verify firewall rules allow outbound connections
+- Check server is accessible from root node's network
+- Try using HTTP instead of HTTPS (or vice versa)
+- Check for network timeouts (download may be too slow)
+
+### Partition Full Errors
+
+**Problem**: Download fails with "partition full" or "no space" error.
+
+**Solutions**:
+- Verify firmware size is smaller than partition size (typically 1.6MB per partition)
+- Check partition table configuration
+- Ensure sufficient flash memory (at least 4MB total)
+- Try downloading a smaller firmware binary
+
 ## FAQ
 
 ### Q: What is the current firmware version?
@@ -166,6 +323,36 @@ A: When fully implemented, OTA updates will update all nodes in the mesh network
 
 A: The firmware version is stored in NVS (Non-Volatile Storage) in the "mesh" namespace with the key "fw_version". This ensures the version persists across reboots.
 
+### Q: How long does a download take?
+
+A: Download time depends on firmware size and network speed. A typical 1MB firmware binary may take 10-30 seconds on a good connection. Progress can be monitored via the `/api/ota/status` endpoint.
+
+### Q: Can I cancel a download?
+
+A: Yes, you can cancel an ongoing download by sending a POST request to `/api/ota/cancel`. The download will be aborted and all resources will be cleaned up.
+
+### Q: What happens if download fails?
+
+A: If a download fails, the system will:
+- Automatically retry up to 3 times for transient network errors
+- Clean up partial downloads
+- Not mark the partition as valid
+- Log detailed error information
+
+You can check the error message in the API response or serial logs.
+
+### Q: How do I check download progress?
+
+A: Use the `/api/ota/status` endpoint to check if a download is in progress and get the current progress (0.0 to 1.0). Progress is also logged to the serial console at 10% intervals.
+
+### Q: Does the device automatically reboot after download?
+
+A: No, the device does NOT automatically reboot after download. The downloaded firmware is validated and ready, but the device continues running from the current partition. Automatic reboot will be available in a future update (coordinated reboot feature).
+
+### Q: Can I download firmware to non-root nodes?
+
+A: No, only the root node can download firmware because it's the only node with internet access via the router. In the future, the root node will distribute downloaded firmware to all mesh nodes.
+
 ---
 
-> **For Developers**: See [Developer Guide](../dev-guides/ota-foundation.md) for technical implementation details, API reference, and integration information.
+> **For Developers**: See [Developer Guide](../dev-guides/ota-mupdate/ota-download.md) for technical implementation details, API reference, and integration information.
