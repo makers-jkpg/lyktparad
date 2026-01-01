@@ -72,6 +72,7 @@
 #include "mesh_device_config.h"
 #include "light_neopixel.h"
 #include "light_common_cathode.h"
+#include "mesh_ota.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -462,6 +463,8 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG,
                  "<MESH_EVENT_PARENT_DISCONNECTED>reason:%d",
                  disconnected->reason);
+        /* Cleanup OTA reception if in progress */
+        mesh_ota_cleanup_on_disconnect();
         is_mesh_connected = false;
         mesh_layer = esp_mesh_get_layer();
         /* Cancel any pending LED restore task */

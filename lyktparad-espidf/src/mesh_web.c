@@ -28,6 +28,7 @@ static esp_err_t api_ota_distribute_post_handler(httpd_req_t *req);
 static esp_err_t api_ota_distribution_status_get_handler(httpd_req_t *req);
 static esp_err_t api_ota_distribution_progress_get_handler(httpd_req_t *req);
 static esp_err_t api_ota_distribution_cancel_post_handler(httpd_req_t *req);
+static esp_err_t api_ota_reboot_post_handler(httpd_req_t *req);
 static esp_err_t index_handler(httpd_req_t *req);
 
 /* HTML page with embedded CSS and JavaScript */
@@ -1882,6 +1883,57 @@ static esp_err_t api_ota_distribution_cancel_post_handler(httpd_req_t *req)
     }
 }
 
+/* API: POST /api/ota/reboot - Initiate coordinated reboot */
+static esp_err_t api_ota_reboot_post_handler(httpd_req_t *req)
+{
+    if (!esp_mesh_is_root()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Only root node can initiate reboot\"}", -1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Default timeout and delay values */
+    uint16_t timeout_seconds = 10;
+    uint16_t reboot_delay_ms = 1000;
+
+    /* Parse optional JSON body for timeout and delay */
+    char content[128];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+    if (ret > 0) {
+        content[ret] = '\0';
+        /* Simple JSON parsing - look for timeout and delay_ms */
+        char *timeout_str = strstr(content, "\"timeout\"");
+        char *delay_str = strstr(content, "\"delay\"");
+        if (timeout_str) {
+            int parsed = sscanf(timeout_str, "\"timeout\":%hu", &timeout_seconds);
+            if (parsed != 1) timeout_seconds = 10;
+        }
+        if (delay_str) {
+            int parsed = sscanf(delay_str, "\"delay\":%hu", &reboot_delay_ms);
+            if (parsed != 1) reboot_delay_ms = 1000;
+        }
+    }
+
+    esp_err_t err = mesh_ota_initiate_coordinated_reboot(timeout_seconds, reboot_delay_ms);
+
+    if (err == ESP_OK) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":true}", -1);
+        return ESP_OK;
+    } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"Reboot failed: %s\"}", esp_err_to_name(err));
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+}
+
 /* GET / - Serves main HTML page */
 static esp_err_t index_handler(httpd_req_t *req)
 {
@@ -1905,7 +1957,7 @@ esp_err_t mesh_web_server_start(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 16;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, ota_download, ota_status, ota_cancel, ota_version, ota_distribute, ota_distribution_status, ota_distribution_progress, ota_distribution_cancel, index = 14 handlers */
+    config.max_uri_handlers = 17;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, ota_download, ota_status, ota_cancel, ota_version, ota_distribute, ota_distribution_status, ota_distribution_progress, ota_distribution_cancel, ota_reboot, index = 15 handlers */
     config.stack_size = 8192;
     config.server_port = 80;
 
@@ -2091,6 +2143,20 @@ esp_err_t mesh_web_server_start(void)
         reg_err = httpd_register_uri_handler(server_handle, &ota_distribution_cancel_uri);
         if (reg_err != ESP_OK) {
             ESP_LOGE(WEB_TAG, "Failed to register OTA distribution cancel URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t ota_reboot_uri = {
+            .uri       = "/api/ota/reboot",
+            .method    = HTTP_POST,
+            .handler   = api_ota_reboot_post_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &ota_reboot_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register OTA reboot URI: 0x%x", reg_err);
             httpd_stop(server_handle);
             server_handle = NULL;
             return ESP_FAIL;

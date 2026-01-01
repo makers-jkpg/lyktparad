@@ -143,7 +143,7 @@ void esp_mesh_p2p_rx_main(void *arg)
             if (err != ESP_OK) {
                 ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] failed to handle command: 0x%x", err);
             }
-        } else if (data.proto == MESH_PROTO_BIN && 
+        } else if (data.proto == MESH_PROTO_BIN &&
                    ((data.size == 1 && (data.data[0] == MESH_CMD_SEQUENCE_START ||
                                         data.data[0] == MESH_CMD_SEQUENCE_STOP ||
                                         data.data[0] == MESH_CMD_SEQUENCE_RESET)) ||
@@ -152,6 +152,13 @@ void esp_mesh_p2p_rx_main(void *arg)
             err = mode_sequence_node_handle_control(data.data[0], data.data, data.size);
             if (err != ESP_OK) {
                 ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE CONTROL] failed to handle command 0x%02x: 0x%x", data.data[0], err);
+            }
+        } else if (data.proto == MESH_PROTO_BIN && data.size >= 1) {
+            /* Check for OTA messages (leaf nodes only) */
+            uint8_t cmd = data.data[0];
+            if (cmd == MESH_CMD_OTA_START || cmd == MESH_CMD_OTA_BLOCK ||
+                cmd == MESH_CMD_OTA_PREPARE_REBOOT || cmd == MESH_CMD_OTA_REBOOT) {
+                mesh_ota_handle_leaf_message(&from, data.data, data.size);
             }
         } else {
             /* process other light control messages */

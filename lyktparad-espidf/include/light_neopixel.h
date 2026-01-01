@@ -52,6 +52,8 @@
 #define  MESH_CMD_OTA_BLOCK      (0xF2)  /* Firmware block data */
 #define  MESH_CMD_OTA_ACK        (0xF3)  /* Block acknowledgment */
 #define  MESH_CMD_OTA_STATUS     (0xF4)  /* Update status query */
+#define  MESH_CMD_OTA_PREPARE_REBOOT (0xF5)  /* Prepare for coordinated reboot */
+#define  MESH_CMD_OTA_REBOOT     (0xF6)  /* Execute coordinated reboot */
 
 /*******************************************************
  *                Type Definitions

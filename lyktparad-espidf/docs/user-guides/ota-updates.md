@@ -40,8 +40,7 @@ The OTA system is currently implemented with the following features:
 - **Download cancellation** support
 - **Mesh firmware distribution** - Root node distributes firmware to all leaf nodes
 - **Distribution progress tracking** - Monitor distribution to all nodes via API
-
-Coordinated reboot will be available in future updates.
+- **Coordinated reboot** - Simultaneous reboot of all mesh nodes after firmware update
 
 ## Prerequisites
 
@@ -207,7 +206,7 @@ curl -X POST http://<root-node-ip>/api/ota/cancel
    - Firmware size is verified (matches expected size)
 6. **Completion** - If validation passes, the firmware is ready (but device continues running from current partition until reboot)
 
-**Note**: The device does NOT automatically switch to the new firmware. This will be handled in a future update (coordinated reboot).
+**Note**: The device does NOT automatically switch to the new firmware after download. You must initiate a coordinated reboot after distribution completes (see [Coordinated Reboot](#coordinated-reboot)).
 
 ## Distributing Firmware to Mesh Nodes
 
@@ -317,23 +316,90 @@ curl -X POST http://<root-node-ip>/api/ota/distribution/cancel
 6. **Progress tracking** - Progress is calculated based on blocks received by all nodes
 7. **Completion** - When all nodes have all blocks, distribution is complete
 
-**Note**: Nodes do NOT automatically switch to the new firmware. This will be handled in a future update (coordinated reboot).
+**Note**: After distribution completes, you can initiate a coordinated reboot to switch all nodes to the new firmware simultaneously (see [Coordinated Reboot](#coordinated-reboot)).
 
 ## Performing Updates
 
-The complete OTA update process now includes:
+The complete OTA update process includes:
 
 1. **Download firmware** - Root node downloads firmware from update server (see [Downloading Firmware](#downloading-firmware))
 2. **Verify integrity** - Firmware is automatically validated after download
 3. **Distribute to nodes** - Root node distributes firmware to all mesh nodes (see [Distributing Firmware to Mesh Nodes](#distributing-firmware-to-mesh-nodes))
 4. **Verify distribution** - Check that all nodes received all blocks successfully
+5. **Coordinated reboot** - Initiate simultaneous reboot of all nodes to switch to new firmware (see [Coordinated Reboot](#coordinated-reboot))
 
-**Future Process (coming soon):**
+## Coordinated Reboot
 
-1. **Download firmware** - Root node downloads firmware from update server
-2. **Distribute to nodes** - Root node distributes firmware to all mesh nodes
-3. **Verify integrity** - All nodes verify firmware checksum
-4. **Coordinated reboot** - All nodes reboot simultaneously to new firmware
+After firmware distribution is complete, you can initiate a coordinated reboot to switch all mesh nodes to the new firmware simultaneously. The reboot process ensures all nodes verify their firmware is ready before rebooting.
+
+### Prerequisites
+
+- Distribution must be complete (all nodes have received all blocks)
+- All nodes must have valid firmware in their inactive OTA partition
+- Mesh network must be stable
+
+### Initiating Coordinated Reboot
+
+To initiate a coordinated reboot, send a POST request to the root node's web API:
+
+```bash
+curl -X POST http://<root-node-ip>/api/ota/reboot
+```
+
+Optionally, you can specify timeout and delay parameters:
+
+```bash
+curl -X POST http://<root-node-ip>/api/ota/reboot \
+  -H "Content-Type: application/json" \
+  -d '{"timeout": 15, "delay": 2000}'
+```
+
+- `timeout`: Timeout for waiting for all nodes to be ready (in seconds, default: 10)
+- `delay`: Delay before reboot in milliseconds (default: 1000)
+
+**Success Response:**
+```json
+{
+  "success": true
+}
+```
+
+**Error Response:**
+```json
+{
+  "success": false,
+  "error": "Reboot failed: ..."
+}
+```
+
+### What Happens During Coordinated Reboot
+
+1. **Verification** - Root verifies distribution is complete (all nodes have all blocks)
+2. **Preparation** - Root sends PREPARE_REBOOT command to all nodes
+3. **Node verification** - Each node verifies its firmware is complete and valid
+4. **Acknowledgments** - Nodes send ACK when ready (status=0) or error (status=1)
+5. **Coordination** - Root waits for all ACKs (with timeout)
+6. **Reboot command** - If all nodes ready, root sends REBOOT command to all
+7. **Simultaneous reboot** - All nodes reboot and switch to new firmware partition
+
+### Troubleshooting Reboot Issues
+
+**Problem**: Reboot fails with timeout error.
+
+**Solutions**:
+- Check that distribution is complete (all nodes have all blocks)
+- Verify mesh network connectivity
+- Check serial logs for nodes that are not ready
+- Increase timeout value if nodes need more time to verify firmware
+- Ensure all nodes have sufficient flash space
+
+**Problem**: Some nodes don't reboot.
+
+**Solutions**:
+- Check serial logs on nodes that didn't reboot
+- Verify nodes received REBOOT command
+- Check for firmware validation errors
+- Ensure boot partition can be set correctly
 
 ## Troubleshooting
 
@@ -459,7 +525,7 @@ A: Use the `/api/ota/status` endpoint to check if a download is in progress and 
 
 ### Q: Does the device automatically reboot after download?
 
-A: No, the device does NOT automatically reboot after download. The downloaded firmware is validated and ready, but the device continues running from the current partition. Automatic reboot will be available in a future update (coordinated reboot feature).
+A: No, the device does NOT automatically reboot after download or distribution. After distribution completes, you must manually initiate a coordinated reboot using the `/api/ota/reboot` endpoint to switch all nodes to the new firmware simultaneously.
 
 ### Q: Can I download firmware to non-root nodes?
 
@@ -481,6 +547,18 @@ A: Distribution time depends on firmware size, number of nodes, and mesh network
 
 A: Yes, you can cancel an ongoing distribution by sending a POST request to `/api/ota/distribution/cancel`. The distribution will be aborted and nodes will retain whatever blocks they have received so far.
 
+### Q: How does coordinated reboot work?
+
+A: Coordinated reboot ensures all mesh nodes reboot simultaneously to switch to the new firmware. The root node first verifies all nodes have complete firmware, then sends a PREPARE_REBOOT command. Nodes verify their firmware is ready and send ACK. Once all nodes are ready, the root sends a REBOOT command and all nodes reboot within the specified delay.
+
+### Q: What happens if some nodes are not ready for reboot?
+
+A: If some nodes are not ready when the timeout expires, the reboot process fails and an error is returned. You should check the distribution status and verify all nodes have complete firmware before retrying the reboot. Individual nodes that aren't ready will log error messages.
+
+### Q: Can leaf nodes request updates?
+
+A: Yes, leaf nodes can send an OTA_REQUEST message to the root node to request a firmware update. If firmware is available and distribution is not already in progress, the root node will start distributing firmware to all nodes.
+
 ---
 
-> **For Developers**: See [OTA Download Guide](../dev-guides/ota-mupdate/ota-download.md) for download implementation details, and [OTA Distribution Guide](../dev-guides/ota-mupdate/ota-distribution.md) for mesh distribution protocol details.
+> **For Developers**: See [OTA Download Guide](../dev-guides/ota-mupdate/ota-download.md) for download implementation details, [OTA Distribution Guide](../dev-guides/ota-mupdate/ota-distribution.md) for mesh distribution protocol details, and [OTA Leaf Handler Guide](../dev-guides/ota-mupdate/ota-leaf-handler.md) for leaf node implementation details.

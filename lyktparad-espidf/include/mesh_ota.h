@@ -80,6 +80,25 @@ typedef struct {
 } __attribute__((packed)) mesh_ota_status_t;
 
 /**
+ * OTA_PREPARE_REBOOT message structure
+ * Sent from root to all nodes to prepare for coordinated reboot
+ */
+typedef struct {
+    uint8_t cmd;              /* MESH_CMD_OTA_PREPARE_REBOOT (0xF5) */
+    uint16_t timeout_seconds; /* Timeout for preparation in seconds (big-endian) */
+    char version[16];         /* Firmware version to verify (null-terminated) */
+} __attribute__((packed)) mesh_ota_prepare_reboot_t;
+
+/**
+ * OTA_REBOOT message structure
+ * Sent from root to all nodes to trigger coordinated reboot
+ */
+typedef struct {
+    uint8_t cmd;              /* MESH_CMD_OTA_REBOOT (0xF6) */
+    uint16_t delay_ms;        /* Delay before reboot in milliseconds (big-endian) */
+} __attribute__((packed)) mesh_ota_reboot_t;
+
+/**
  * Progress callback function type
  */
 typedef void (*mesh_ota_progress_callback_t)(float overall_progress, int nodes_complete, int nodes_total, int blocks_sent, int blocks_total);
@@ -221,5 +240,53 @@ esp_err_t mesh_ota_register_progress_callback(mesh_ota_progress_callback_t callb
  * @return ESP_OK on success, error code on failure
  */
 esp_err_t mesh_ota_handle_mesh_message(mesh_addr_t *from, uint8_t *data, uint16_t len);
+
+/**
+ * Handle OTA message from mesh (leaf node only)
+ *
+ * Processes incoming OTA messages from root node (OTA_START, OTA_BLOCK, PREPARE_REBOOT, REBOOT).
+ * This function should be called from the mesh receive handler.
+ *
+ * @param from Source node address
+ * @param data Message data
+ * @param len Message length
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_ota_handle_leaf_message(mesh_addr_t *from, uint8_t *data, uint16_t len);
+
+/**
+ * Request firmware update from root node
+ *
+ * Sends an OTA_REQUEST message to the root node to initiate firmware distribution.
+ * This function can only be called on leaf nodes.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_ota_request_update(void);
+
+/**
+ * Initiate coordinated reboot of all mesh nodes
+ *
+ * Coordinates a reboot of all nodes in the mesh network. First sends PREPARE_REBOOT
+ * to all nodes and waits for acknowledgments. If all nodes are ready, sends REBOOT
+ * command to trigger simultaneous reboot.
+ *
+ * This function can only be called on the root node after distribution is complete.
+ *
+ * @param timeout_seconds Timeout for waiting for PREPARE_REBOOT ACKs
+ * @param reboot_delay_ms Delay before reboot in milliseconds
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_ota_initiate_coordinated_reboot(uint16_t timeout_seconds, uint16_t reboot_delay_ms);
+
+/**
+ * Cleanup OTA reception on mesh disconnection
+ *
+ * This function should be called when the mesh connection is lost to clean up
+ * any ongoing OTA reception state. It's safe to call even if no OTA is in progress.
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t mesh_ota_cleanup_on_disconnect(void);
 
 #endif /* __MESH_OTA_H__ */

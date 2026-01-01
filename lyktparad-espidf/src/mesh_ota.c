@@ -77,6 +77,26 @@ static mesh_ota_progress_callback_t s_progress_callback = NULL;
 static int s_nodes_complete = 0;
 static int s_nodes_failed = 0;
 
+/* Leaf node OTA reception state management */
+static bool s_leaf_receiving = false;
+static esp_ota_handle_t s_leaf_ota_handle = 0;
+static const esp_partition_t *s_leaf_update_partition = NULL;
+static uint16_t s_leaf_total_blocks = 0;
+static uint32_t s_leaf_firmware_size = 0;
+static char s_leaf_version[16] = {0};
+static uint8_t *s_leaf_block_bitmap = NULL;  /* Bitmap to track received blocks */
+static size_t s_leaf_bytes_written = 0;
+static bool s_leaf_firmware_complete = false;
+static TickType_t s_leaf_last_block_time = 0;  /* Time of last block received */
+#define MESH_OTA_LEAF_BLOCK_TIMEOUT_MS 30000  /* 30 seconds timeout for block reception */
+
+/* Reboot coordination state (root node) */
+static bool s_reboot_coordinating = false;
+static EventGroupHandle_t s_reboot_prepare_event_group = NULL;
+static int s_reboot_nodes_ready = 0;
+static int s_reboot_nodes_total = 0;
+static uint8_t *s_reboot_nodes_ready_bitmap = NULL;  /* Bitmap to track which nodes have sent ready ACK */
+
 /*******************************************************
  *                Helper Functions
  *******************************************************/
@@ -772,7 +792,7 @@ static esp_err_t send_ota_start(void)
     start_msg.cmd = MESH_CMD_OTA_START;
     start_msg.total_blocks = __builtin_bswap16(s_total_blocks);  /* Big-endian */
     start_msg.firmware_size = __builtin_bswap32(s_firmware_size);  /* Big-endian */
-    
+
     const char *version = mesh_version_get_string();
     strncpy((char *)start_msg.version, version, sizeof(start_msg.version) - 1);
     start_msg.version[sizeof(start_msg.version) - 1] = '\0';
@@ -1010,10 +1030,25 @@ static void cleanup_distribution(void)
     s_nodes_complete = 0;
     s_nodes_failed = 0;
     s_distribution_task = NULL;  /* Task sets this to NULL on exit, but ensure it's cleared */
+
+    /* Cleanup reboot coordination state */
+    if (s_reboot_prepare_event_group != NULL) {
+        vEventGroupDelete(s_reboot_prepare_event_group);
+        s_reboot_prepare_event_group = NULL;
+    }
+    if (s_reboot_nodes_ready_bitmap != NULL) {
+        free(s_reboot_nodes_ready_bitmap);
+        s_reboot_nodes_ready_bitmap = NULL;
+    }
+    s_reboot_coordinating = false;
+    s_reboot_nodes_ready = 0;
+    s_reboot_nodes_total = 0;
 }
 
 esp_err_t mesh_ota_distribute_firmware(void)
 {
+    esp_err_t err;
+
     if (!esp_mesh_is_root()) {
         ESP_LOGE(TAG, "Only root node can distribute firmware");
         return ESP_ERR_INVALID_STATE;
@@ -1195,7 +1230,7 @@ esp_err_t mesh_ota_handle_mesh_message(mesh_addr_t *from, uint8_t *data, uint16_
     if (cmd == MESH_CMD_OTA_REQUEST) {
         /* Leaf node requesting update */
         ESP_LOGI(TAG, "OTA request received from "MACSTR, MAC2STR(from->addr));
-        
+
         /* Check if distribution is already in progress */
         if (!s_distributing) {
             /* Start distribution */
@@ -1208,7 +1243,66 @@ esp_err_t mesh_ota_handle_mesh_message(mesh_addr_t *from, uint8_t *data, uint16_
     }
 
     if (cmd == MESH_CMD_OTA_ACK) {
-        /* Block acknowledgment */
+        /* Check if this is a reboot ACK first */
+        if (s_reboot_coordinating && s_node_list != NULL && s_node_count > 0) {
+            /* PREPARE_REBOOT ACK handling during reboot coordination */
+            if (len < sizeof(mesh_ota_ack_t)) {
+                return ESP_OK;
+            }
+            mesh_ota_ack_t *ack = (mesh_ota_ack_t *)data;
+
+            /* Find node index */
+            int node_idx = -1;
+            for (int i = 0; i < s_node_count; i++) {
+                bool match = true;
+                for (int j = 0; j < 6; j++) {
+                    if (s_node_list[i].addr[j] != from->addr[j]) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) {
+                    node_idx = i;
+                    break;
+                }
+            }
+
+            if (node_idx >= 0) {
+                /* Check if we've already received ACK from this node */
+                bool already_acked = false;
+                if (s_reboot_nodes_ready_bitmap != NULL) {
+                    int byte_idx = node_idx / 8;
+                    int bit_offset = node_idx % 8;
+                    if ((s_reboot_nodes_ready_bitmap[byte_idx] & (1 << bit_offset)) != 0) {
+                        already_acked = true;
+                    }
+                }
+
+                if (ack->status == 0) {
+                    if (!already_acked) {
+                        /* Node is ready - mark as ACKed and increment counter */
+                        if (s_reboot_nodes_ready_bitmap != NULL) {
+                            int byte_idx = node_idx / 8;
+                            int bit_offset = node_idx % 8;
+                            s_reboot_nodes_ready_bitmap[byte_idx] |= (1 << bit_offset);
+                        }
+                        s_reboot_nodes_ready++;
+                        ESP_LOGI(TAG, "Node %d ready for reboot (%d/%d)",
+                                 node_idx, s_reboot_nodes_ready, s_reboot_nodes_total);
+                        if (s_reboot_prepare_event_group != NULL) {
+                            xEventGroupSetBits(s_reboot_prepare_event_group, 1);
+                        }
+                    } else {
+                        ESP_LOGD(TAG, "Node %d already acknowledged, ignoring duplicate ACK", node_idx);
+                    }
+                } else {
+                    ESP_LOGW(TAG, "Node %d not ready for reboot", node_idx);
+                }
+            }
+            return ESP_OK;
+        }
+
+        /* Block acknowledgment (during distribution) */
         if (len < sizeof(mesh_ota_ack_t)) {
             ESP_LOGW(TAG, "Invalid OTA_ACK message size: %d", len);
             return ESP_ERR_INVALID_SIZE;
@@ -1241,7 +1335,7 @@ esp_err_t mesh_ota_handle_mesh_message(mesh_addr_t *from, uint8_t *data, uint16_
             if (node_idx >= 0 && block_num < s_total_blocks) {
                 mark_node_has_block(node_idx, block_num);
                 ESP_LOGD(TAG, "ACK received: node %d, block %d", node_idx, block_num);
-                
+
                 /* Signal ACK received */
                 s_last_ack_block = block_num;
                 memcpy(&s_last_ack_node, from, sizeof(mesh_addr_t));
@@ -1263,4 +1357,710 @@ esp_err_t mesh_ota_handle_mesh_message(mesh_addr_t *from, uint8_t *data, uint16_
     }
 
     return ESP_ERR_NOT_SUPPORTED;
+}
+
+/*******************************************************
+ *                Leaf Node OTA Reception Implementation
+ *******************************************************/
+
+/**
+ * Cleanup leaf node OTA reception state
+ */
+static void cleanup_leaf_ota_reception(void)
+{
+    if (s_leaf_ota_handle != 0) {
+        esp_ota_abort(s_leaf_ota_handle);
+        s_leaf_ota_handle = 0;
+    }
+    if (s_leaf_block_bitmap != NULL) {
+        free(s_leaf_block_bitmap);
+        s_leaf_block_bitmap = NULL;
+    }
+    s_leaf_update_partition = NULL;
+    s_leaf_total_blocks = 0;
+    s_leaf_firmware_size = 0;
+    s_leaf_bytes_written = 0;
+    s_leaf_firmware_complete = false;
+    s_leaf_last_block_time = 0;
+    memset(s_leaf_version, 0, sizeof(s_leaf_version));
+    s_leaf_receiving = false;
+}
+
+/**
+ * Check for timeout during block reception
+ */
+static void check_leaf_reception_timeout(void)
+{
+    if (!s_leaf_receiving || s_leaf_firmware_complete) {
+        return;
+    }
+
+    if (s_leaf_last_block_time == 0) {
+        /* No blocks received yet, reset timeout when first block arrives */
+        return;
+    }
+
+    TickType_t current_time = xTaskGetTickCount();
+    TickType_t elapsed = current_time - s_leaf_last_block_time;
+
+    if (elapsed > pdMS_TO_TICKS(MESH_OTA_LEAF_BLOCK_TIMEOUT_MS)) {
+        ESP_LOGE(TAG, "Block reception timeout (%d ms), aborting OTA", MESH_OTA_LEAF_BLOCK_TIMEOUT_MS);
+        cleanup_leaf_ota_reception();
+    }
+}
+
+/**
+ * Check if all blocks have been received
+ */
+static bool leaf_all_blocks_received(void)
+{
+    if (s_leaf_block_bitmap == NULL || s_leaf_total_blocks == 0) {
+        return false;
+    }
+
+    for (uint16_t i = 0; i < s_leaf_total_blocks; i++) {
+        int byte_idx = i / 8;
+        int bit_offset = i % 8;
+        if ((s_leaf_block_bitmap[byte_idx] & (1 << bit_offset)) == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Mark block as received
+ */
+static void leaf_mark_block_received(uint16_t block_num)
+{
+    if (s_leaf_block_bitmap == NULL || block_num >= s_leaf_total_blocks) {
+        return;
+    }
+    int byte_idx = block_num / 8;
+    int bit_offset = block_num % 8;
+    s_leaf_block_bitmap[byte_idx] |= (1 << bit_offset);
+}
+
+/**
+ * Check if block was already received
+ */
+static bool leaf_block_received(uint16_t block_num)
+{
+    if (s_leaf_block_bitmap == NULL || block_num >= s_leaf_total_blocks) {
+        return false;
+    }
+    int byte_idx = block_num / 8;
+    int bit_offset = block_num % 8;
+    return (s_leaf_block_bitmap[byte_idx] & (1 << bit_offset)) != 0;
+}
+
+/**
+ * Send OTA_ACK to root node
+ */
+static esp_err_t send_ota_ack_to_root(uint16_t block_num, uint8_t status)
+{
+    mesh_ota_ack_t ack;
+    ack.cmd = MESH_CMD_OTA_ACK;
+    ack.block_number = __builtin_bswap16(block_num);
+    ack.status = status;
+
+    mesh_data_t data;
+    data.data = (uint8_t *)&ack;
+    data.size = sizeof(ack);
+    data.proto = MESH_PROTO_BIN;
+    data.tos = MESH_TOS_P2P;
+
+    /* Get root node address - try to get parent first */
+    mesh_addr_t root_addr;
+    esp_err_t err = esp_mesh_get_parent_bssid(&root_addr);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Could not get parent address, using broadcast");
+        /* Use broadcast address */
+        memset(root_addr.addr, 0xFF, 6);
+    }
+
+    err = esp_mesh_send(&root_addr, &data, MESH_DATA_P2P, NULL, 0);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to send ACK for block %d: %s", block_num, esp_err_to_name(err));
+    }
+    return err;
+}
+
+/**
+ * Handle OTA_START message (leaf node)
+ */
+static esp_err_t handle_ota_start_leaf(const mesh_ota_start_t *start_msg)
+{
+    if (s_leaf_receiving) {
+        ESP_LOGW(TAG, "OTA reception already in progress, aborting previous");
+        cleanup_leaf_ota_reception();
+    }
+
+    /* Convert from big-endian */
+    uint16_t total_blocks = __builtin_bswap16(start_msg->total_blocks);
+    uint32_t firmware_size = __builtin_bswap32(start_msg->firmware_size);
+
+    ESP_LOGI(TAG, "OTA_START received: %d blocks, %zu bytes, version: %s",
+             total_blocks, firmware_size, start_msg->version);
+
+    /* Get inactive OTA partition */
+    const esp_partition_t *update_part = esp_ota_get_next_update_partition(NULL);
+    if (update_part == NULL) {
+        ESP_LOGE(TAG, "No update partition available");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Initialize OTA operation */
+    esp_ota_handle_t ota_handle;
+    esp_err_t err = esp_ota_begin(update_part, firmware_size, &ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to begin OTA: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Allocate block bitmap */
+    int bitmap_size = (total_blocks + 7) / 8;  /* Round up to bytes */
+    uint8_t *bitmap = (uint8_t *)malloc(bitmap_size);
+    if (bitmap == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate block bitmap");
+        esp_ota_abort(ota_handle);
+        return ESP_ERR_NO_MEM;
+    }
+    memset(bitmap, 0, bitmap_size);
+
+    /* Store state */
+    s_leaf_receiving = true;
+    s_leaf_ota_handle = ota_handle;
+    s_leaf_update_partition = update_part;
+    s_leaf_total_blocks = total_blocks;
+    s_leaf_firmware_size = firmware_size;
+    s_leaf_block_bitmap = bitmap;
+    s_leaf_bytes_written = 0;
+    s_leaf_firmware_complete = false;
+    strncpy(s_leaf_version, start_msg->version, sizeof(s_leaf_version) - 1);
+    s_leaf_version[sizeof(s_leaf_version) - 1] = '\0';
+    s_leaf_last_block_time = 0;  /* Reset timeout timer */
+
+    ESP_LOGI(TAG, "OTA reception initialized, ready for blocks");
+    return ESP_OK;
+}
+
+/**
+ * Handle OTA_BLOCK message (leaf node)
+ */
+static esp_err_t handle_ota_block_leaf(const uint8_t *data, uint16_t len)
+{
+    if (!s_leaf_receiving) {
+        ESP_LOGW(TAG, "Received OTA_BLOCK but not receiving update");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (len < sizeof(mesh_ota_block_header_t)) {
+        ESP_LOGE(TAG, "OTA_BLOCK message too small: %d bytes", len);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    const mesh_ota_block_header_t *header = (const mesh_ota_block_header_t *)data;
+    uint16_t block_num = __builtin_bswap16(header->block_number);
+    uint16_t total_blocks = __builtin_bswap16(header->total_blocks);
+    uint16_t block_size = __builtin_bswap16(header->block_size);
+    uint32_t checksum = __builtin_bswap32(header->checksum);
+
+    /* Validate header */
+    if (total_blocks != s_leaf_total_blocks) {
+        ESP_LOGE(TAG, "Block %d: total_blocks mismatch (%d != %d)",
+                 block_num, total_blocks, s_leaf_total_blocks);
+        send_ota_ack_to_root(block_num, 1);  /* Error status */
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (block_num >= s_leaf_total_blocks) {
+        ESP_LOGE(TAG, "Block number out of range: %d >= %d", block_num, s_leaf_total_blocks);
+        send_ota_ack_to_root(block_num, 1);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Check for duplicate */
+    if (leaf_block_received(block_num)) {
+        ESP_LOGD(TAG, "Block %d already received, ignoring", block_num);
+        send_ota_ack_to_root(block_num, 0);  /* Send ACK anyway */
+        return ESP_OK;
+    }
+
+    /* Validate message size */
+    size_t expected_size = sizeof(mesh_ota_block_header_t) + block_size;
+    if (len < expected_size) {
+        ESP_LOGE(TAG, "Block %d: message size mismatch (%d < %zu)", block_num, len, expected_size);
+        send_ota_ack_to_root(block_num, 1);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    /* Get block data (after header) */
+    const uint8_t *block_data = data + sizeof(mesh_ota_block_header_t);
+
+    /* Verify checksum */
+    uint32_t calculated_crc = calculate_crc32(block_data, block_size);
+    if (calculated_crc != checksum) {
+        ESP_LOGE(TAG, "Block %d: checksum mismatch (calculated 0x%08X, expected 0x%08X)",
+                 block_num, calculated_crc, checksum);
+        send_ota_ack_to_root(block_num, 1);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Write block to partition */
+    esp_err_t err = esp_ota_write(s_leaf_ota_handle, block_data, block_size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write block %d: %s", block_num, esp_err_to_name(err));
+        send_ota_ack_to_root(block_num, 1);
+
+        /* Critical error - abort OTA */
+        if (err == ESP_ERR_OTA_VALIDATE_FAILED || err == ESP_ERR_INVALID_SIZE) {
+            ESP_LOGE(TAG, "Critical OTA error, aborting reception");
+            cleanup_leaf_ota_reception();
+        }
+        return err;
+    }
+
+    /* Mark block as received */
+    leaf_mark_block_received(block_num);
+    s_leaf_bytes_written += block_size;
+    s_leaf_last_block_time = xTaskGetTickCount();  /* Update last block time */
+
+    /* Send ACK */
+    send_ota_ack_to_root(block_num, 0);  /* Success status */
+
+    ESP_LOGD(TAG, "Block %d/%d written successfully (%zu bytes total)",
+             block_num + 1, s_leaf_total_blocks, s_leaf_bytes_written);
+
+    /* Check if all blocks received */
+    if (leaf_all_blocks_received()) {
+        ESP_LOGI(TAG, "All blocks received, finalizing OTA partition");
+
+        /* Finalize OTA partition */
+        err = esp_ota_end(s_leaf_ota_handle);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to finalize OTA partition: %s", esp_err_to_name(err));
+            cleanup_leaf_ota_reception();
+            return err;
+        }
+
+        /* Verify partition */
+        esp_ota_img_states_t ota_state;
+        err = esp_ota_get_state_partition(s_leaf_update_partition, &ota_state);
+        if (err == ESP_OK && ota_state == ESP_OTA_IMG_VALID) {
+            ESP_LOGI(TAG, "OTA partition validated successfully");
+            s_leaf_firmware_complete = true;
+        } else {
+            ESP_LOGE(TAG, "OTA partition validation failed: %s", esp_err_to_name(err));
+            cleanup_leaf_ota_reception();
+            return err;
+        }
+
+        /* Cleanup OTA handle, but keep state for reboot coordination */
+        s_leaf_ota_handle = 0;
+        s_leaf_receiving = false;  /* No longer receiving blocks */
+    } else {
+        /* Check for timeout if not complete */
+        check_leaf_reception_timeout();
+    }
+
+    return ESP_OK;
+}
+
+/**
+ * Handle leaf node OTA messages
+ */
+esp_err_t mesh_ota_handle_leaf_message(mesh_addr_t *from, uint8_t *data, uint16_t len)
+{
+    if (from == NULL || data == NULL || len < 1) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (esp_mesh_is_root()) {
+        /* Root node uses separate handler */
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint8_t cmd = data[0];
+
+    if (cmd == MESH_CMD_OTA_START) {
+        if (len < sizeof(mesh_ota_start_t)) {
+            ESP_LOGW(TAG, "Invalid OTA_START message size: %d", len);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        return handle_ota_start_leaf((const mesh_ota_start_t *)data);
+    }
+
+    if (cmd == MESH_CMD_OTA_BLOCK) {
+        return handle_ota_block_leaf(data, len);
+    }
+
+    if (cmd == MESH_CMD_OTA_PREPARE_REBOOT) {
+        if (len < sizeof(mesh_ota_prepare_reboot_t)) {
+            ESP_LOGW(TAG, "Invalid PREPARE_REBOOT message size: %d", len);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        const mesh_ota_prepare_reboot_t *msg = (const mesh_ota_prepare_reboot_t *)data;
+        uint16_t timeout = __builtin_bswap16(msg->timeout_seconds);
+
+        ESP_LOGI(TAG, "PREPARE_REBOOT received, timeout: %d seconds", timeout);
+
+        /* Verify firmware is complete and valid */
+        uint8_t ack_status = 1;  /* Error by default */
+        if (s_leaf_firmware_complete && s_leaf_update_partition != NULL) {
+            /* Verify partition state */
+            esp_ota_img_states_t ota_state;
+            esp_err_t err = esp_ota_get_state_partition(s_leaf_update_partition, &ota_state);
+            if (err == ESP_OK && ota_state == ESP_OTA_IMG_VALID) {
+                ack_status = 0;  /* Ready */
+                ESP_LOGI(TAG, "Firmware ready for reboot");
+            } else {
+                ESP_LOGE(TAG, "Firmware partition not valid: %s", esp_err_to_name(err));
+            }
+        } else {
+            ESP_LOGE(TAG, "Firmware not complete or partition not set");
+        }
+
+        /* Send ACK (reuse OTA_ACK structure) */
+        mesh_ota_ack_t ack;
+        ack.cmd = MESH_CMD_OTA_ACK;
+        ack.block_number = 0;  /* Not used for reboot ACK */
+        ack.status = ack_status;
+
+        mesh_data_t data;
+        data.data = (uint8_t *)&ack;
+        data.size = sizeof(ack);
+        data.proto = MESH_PROTO_BIN;
+        data.tos = MESH_TOS_P2P;
+
+        mesh_addr_t root_addr;
+        esp_err_t err = esp_mesh_get_parent_bssid(&root_addr);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Could not get parent address, using broadcast");
+            memset(root_addr.addr, 0xFF, 6);  /* Broadcast */
+        }
+
+        err = esp_mesh_send(&root_addr, &data, MESH_DATA_P2P, NULL, 0);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to send PREPARE_REBOOT ACK: %s", esp_err_to_name(err));
+        }
+        return ESP_OK;  /* Always return OK - ACK send failure is not critical */
+    }
+
+    if (cmd == MESH_CMD_OTA_REBOOT) {
+        if (len < sizeof(mesh_ota_reboot_t)) {
+            ESP_LOGW(TAG, "Invalid REBOOT message size: %d", len);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        const mesh_ota_reboot_t *msg = (const mesh_ota_reboot_t *)data;
+        uint16_t delay_ms = __builtin_bswap16(msg->delay_ms);
+
+        ESP_LOGI(TAG, "REBOOT command received, delay: %d ms", delay_ms);
+
+        /* Verify firmware is ready */
+        if (!s_leaf_firmware_complete || s_leaf_update_partition == NULL) {
+            ESP_LOGE(TAG, "Cannot reboot: firmware not ready");
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        /* Set boot partition */
+        esp_err_t err = esp_ota_set_boot_partition(s_leaf_update_partition);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to set boot partition: %s", esp_err_to_name(err));
+            return err;
+        }
+
+        /* Verify boot partition was set correctly */
+        const esp_partition_t *boot_partition = esp_ota_get_boot_partition();
+        if (boot_partition == NULL) {
+            ESP_LOGE(TAG, "Boot partition is NULL");
+            return ESP_ERR_INVALID_STATE;
+        }
+        /* Compare partition addresses/offsets to verify it's the same partition */
+        if (boot_partition->address != s_leaf_update_partition->address ||
+            boot_partition->size != s_leaf_update_partition->size) {
+            ESP_LOGE(TAG, "Boot partition verification failed (address/size mismatch)");
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        ESP_LOGI(TAG, "Boot partition set, rebooting in %d ms...", delay_ms);
+
+        /* Delay if specified */
+        if (delay_ms > 0) {
+            vTaskDelay(pdMS_TO_TICKS(delay_ms));
+        }
+
+        /* Reboot */
+        esp_restart();
+
+        /* Should never reach here */
+        return ESP_OK;
+    }
+
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+/**
+ * Request firmware update from root node
+ */
+esp_err_t mesh_ota_request_update(void)
+{
+    if (esp_mesh_is_root()) {
+        ESP_LOGW(TAG, "Root node should use mesh_ota_distribute_firmware() instead");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_leaf_receiving) {
+        ESP_LOGI(TAG, "Update already in progress");
+        return ESP_OK;
+    }
+
+    /* Create OTA_REQUEST message */
+    uint8_t request_byte = MESH_CMD_OTA_REQUEST;
+
+    mesh_data_t data;
+    data.data = &request_byte;
+    data.size = 1;
+    data.proto = MESH_PROTO_BIN;
+    data.tos = MESH_TOS_P2P;
+
+    /* Get root node address */
+    mesh_addr_t root_addr;
+    esp_err_t err = esp_mesh_get_parent_bssid(&root_addr);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Could not get parent address, using broadcast");
+        memset(root_addr.addr, 0xFF, 6);  /* Broadcast */
+    }
+
+    err = esp_mesh_send(&root_addr, &data, MESH_DATA_P2P, NULL, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to send OTA_REQUEST: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(TAG, "OTA update requested from root");
+    return ESP_OK;
+}
+
+/**
+ * Cleanup OTA reception on mesh disconnection
+ */
+esp_err_t mesh_ota_cleanup_on_disconnect(void)
+{
+    if (s_leaf_receiving) {
+        ESP_LOGW(TAG, "Mesh disconnected during OTA reception, cleaning up");
+        cleanup_leaf_ota_reception();
+    }
+    return ESP_OK;
+}
+
+/**
+ * Initiate coordinated reboot of all mesh nodes
+ */
+esp_err_t mesh_ota_initiate_coordinated_reboot(uint16_t timeout_seconds, uint16_t reboot_delay_ms)
+{
+    if (!esp_mesh_is_root()) {
+        ESP_LOGE(TAG, "Only root node can initiate coordinated reboot");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_reboot_coordinating) {
+        ESP_LOGE(TAG, "Reboot coordination already in progress");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Verify distribution is complete */
+    if (s_distributing) {
+        ESP_LOGE(TAG, "Distribution still in progress, cannot reboot");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_node_list == NULL || s_node_count == 0) {
+        ESP_LOGE(TAG, "No target nodes available");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Verify all nodes have all blocks */
+    bool all_complete = true;
+    for (int node_idx = 0; node_idx < s_node_count; node_idx++) {
+        bool node_complete = true;
+        for (uint16_t b = 0; b < s_total_blocks; b++) {
+            if (!node_has_block(node_idx, b)) {
+                node_complete = false;
+                break;
+            }
+        }
+        if (!node_complete) {
+            all_complete = false;
+            break;
+        }
+    }
+
+    if (!all_complete) {
+        ESP_LOGE(TAG, "Not all nodes have complete firmware");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(TAG, "Initiating coordinated reboot for %d nodes", s_node_count);
+
+    /* Allocate bitmap FIRST (before setting coordination flag) to avoid race condition */
+    int bitmap_size = (s_node_count + 7) / 8;  /* Round up to bytes */
+    s_reboot_nodes_ready_bitmap = (uint8_t *)malloc(bitmap_size);
+    if (s_reboot_nodes_ready_bitmap == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate reboot ACK bitmap");
+        return ESP_ERR_NO_MEM;
+    }
+    memset(s_reboot_nodes_ready_bitmap, 0, bitmap_size);
+
+    /* Create event group for ACK synchronization */
+    s_reboot_prepare_event_group = xEventGroupCreate();
+    if (s_reboot_prepare_event_group == NULL) {
+        ESP_LOGE(TAG, "Failed to create event group");
+        free(s_reboot_nodes_ready_bitmap);
+        s_reboot_nodes_ready_bitmap = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
+    /* Initialize reboot coordination state (set flag LAST to ensure state is ready) */
+    s_reboot_nodes_total = s_node_count;
+    s_reboot_nodes_ready = 0;
+    s_reboot_coordinating = true;  /* Set flag last to ensure all state is initialized */
+
+    /* Get firmware version */
+    const char *version = mesh_version_get_string();
+
+    /* Prepare PREPARE_REBOOT message */
+    mesh_ota_prepare_reboot_t prepare_msg;
+    prepare_msg.cmd = MESH_CMD_OTA_PREPARE_REBOOT;
+    prepare_msg.timeout_seconds = __builtin_bswap16(timeout_seconds);
+    strncpy((char *)prepare_msg.version, version, sizeof(prepare_msg.version) - 1);
+    prepare_msg.version[sizeof(prepare_msg.version) - 1] = '\0';
+
+    mesh_data_t data;
+    data.data = (uint8_t *)&prepare_msg;
+    data.size = sizeof(prepare_msg);
+    data.proto = MESH_PROTO_BIN;
+    data.tos = MESH_TOS_P2P;
+
+    /* Send PREPARE_REBOOT to all nodes */
+    esp_err_t err = ESP_OK;
+    for (int i = 0; i < s_node_count; i++) {
+        esp_err_t send_err = esp_mesh_send(&s_node_list[i], &data, MESH_DATA_P2P, NULL, 0);
+        if (send_err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to send PREPARE_REBOOT to node %d: %s", i, esp_err_to_name(send_err));
+            err = send_err;
+        }
+    }
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to send PREPARE_REBOOT to some nodes");
+        /* Cleanup reboot coordination state */
+        if (s_reboot_prepare_event_group != NULL) {
+            vEventGroupDelete(s_reboot_prepare_event_group);
+            s_reboot_prepare_event_group = NULL;
+        }
+        if (s_reboot_nodes_ready_bitmap != NULL) {
+            free(s_reboot_nodes_ready_bitmap);
+            s_reboot_nodes_ready_bitmap = NULL;
+        }
+        s_reboot_coordinating = false;
+        s_reboot_nodes_ready = 0;
+        s_reboot_nodes_total = 0;
+        return err;
+    }
+
+    ESP_LOGI(TAG, "Waiting for PREPARE_REBOOT ACKs (timeout: %d seconds)", timeout_seconds);
+
+    /* Wait for all nodes to ACK (with timeout) */
+    TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_seconds * 1000);
+    TickType_t start_time = xTaskGetTickCount();
+    TickType_t elapsed_time = 0;
+
+    while (s_reboot_nodes_ready < s_reboot_nodes_total && elapsed_time < timeout_ticks) {
+        /* Wait for ACK event with remaining timeout */
+        TickType_t remaining = timeout_ticks - elapsed_time;
+        if (remaining <= 0) {
+            break;  /* Timeout expired */
+        }
+
+        EventBits_t bits = xEventGroupWaitBits(
+            s_reboot_prepare_event_group,
+            0xFFFFFFFF,
+            pdTRUE,
+            pdFALSE,
+            remaining
+        );
+
+        /* Update elapsed time after wait */
+        elapsed_time = xTaskGetTickCount() - start_time;
+
+        /* Check if all nodes are ready (may have changed during wait) */
+        if (s_reboot_nodes_ready >= s_reboot_nodes_total) {
+            break;  /* All nodes ready, exit immediately */
+        }
+
+        /* Small delay only if not at timeout, to allow more ACKs */
+        if (elapsed_time < timeout_ticks) {
+            TickType_t delay_remaining = timeout_ticks - elapsed_time;
+            TickType_t delay_ticks = pdMS_TO_TICKS(100);
+            if (delay_ticks > delay_remaining) {
+                delay_ticks = delay_remaining;  /* Don't delay past timeout */
+            }
+            vTaskDelay(delay_ticks);
+            elapsed_time = xTaskGetTickCount() - start_time;
+        }
+    }
+
+    if (s_reboot_nodes_ready < s_reboot_nodes_total) {
+        ESP_LOGW(TAG, "Timeout: only %d/%d nodes ready for reboot",
+                 s_reboot_nodes_ready, s_reboot_nodes_total);
+        /* Cleanup reboot coordination state */
+        if (s_reboot_prepare_event_group != NULL) {
+            vEventGroupDelete(s_reboot_prepare_event_group);
+            s_reboot_prepare_event_group = NULL;
+        }
+        if (s_reboot_nodes_ready_bitmap != NULL) {
+            free(s_reboot_nodes_ready_bitmap);
+            s_reboot_nodes_ready_bitmap = NULL;
+        }
+        s_reboot_coordinating = false;
+        s_reboot_nodes_ready = 0;
+        s_reboot_nodes_total = 0;
+        return ESP_ERR_TIMEOUT;
+    }
+
+    ESP_LOGI(TAG, "All %d nodes ready for reboot", s_reboot_nodes_ready);
+
+    /* All nodes ready, send REBOOT command */
+    mesh_ota_reboot_t reboot_msg;
+    reboot_msg.cmd = MESH_CMD_OTA_REBOOT;
+    reboot_msg.delay_ms = __builtin_bswap16(reboot_delay_ms);
+
+    data.data = (uint8_t *)&reboot_msg;
+    data.size = sizeof(reboot_msg);
+
+    /* Send REBOOT to all nodes */
+    for (int i = 0; i < s_node_count; i++) {
+        esp_err_t send_err = esp_mesh_send(&s_node_list[i], &data, MESH_DATA_P2P, NULL, 0);
+        if (send_err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to send REBOOT to node %d: %s", i, esp_err_to_name(send_err));
+        }
+    }
+
+    ESP_LOGI(TAG, "REBOOT command sent to all nodes (delay: %d ms)", reboot_delay_ms);
+
+    /* Cleanup coordination state */
+    if (s_reboot_prepare_event_group != NULL) {
+        vEventGroupDelete(s_reboot_prepare_event_group);
+        s_reboot_prepare_event_group = NULL;
+    }
+    if (s_reboot_nodes_ready_bitmap != NULL) {
+        free(s_reboot_nodes_ready_bitmap);
+        s_reboot_nodes_ready_bitmap = NULL;
+    }
+    s_reboot_coordinating = false;
+    s_reboot_nodes_ready = 0;
+    s_reboot_nodes_total = 0;
+
+    return ESP_OK;
 }
