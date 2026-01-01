@@ -54,8 +54,9 @@ static esp_err_t parse_version(const char *version_str, int *major, int *minor, 
     }
 
     /* Parse major version */
-    *major = (int)strtol(version_copy, &endptr, 10);
-    if (*endptr != '.' || *major < 0) {
+    char *major_start = version_copy;
+    *major = (int)strtol(major_start, &endptr, 10);
+    if (endptr == major_start || *endptr != '.' || *major < 0) {
         free(version_copy);
         return ESP_ERR_INVALID_ARG;
     }
@@ -63,7 +64,7 @@ static esp_err_t parse_version(const char *version_str, int *major, int *minor, 
     /* Parse minor version */
     char *minor_start = endptr + 1;
     *minor = (int)strtol(minor_start, &endptr, 10);
-    if (*endptr != '.' || *minor < 0) {
+    if (endptr == minor_start || *endptr != '.' || *minor < 0) {
         free(version_copy);
         return ESP_ERR_INVALID_ARG;
     }
@@ -71,7 +72,7 @@ static esp_err_t parse_version(const char *version_str, int *major, int *minor, 
     /* Parse patch version */
     char *patch_start = endptr + 1;
     *patch = (int)strtol(patch_start, &endptr, 10);
-    if (*endptr != '\0' || *patch < 0) {
+    if (endptr == patch_start || *endptr != '\0' || *patch < 0) {
         free(version_copy);
         return ESP_ERR_INVALID_ARG;
     }
