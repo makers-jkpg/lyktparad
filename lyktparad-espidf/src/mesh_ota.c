@@ -1072,7 +1072,7 @@ esp_err_t mesh_ota_distribute_firmware(void)
     /* the partition was already validated during download, using partition size is safe */
     s_firmware_size = update_part->size;
 
-    if (s_firmware_size == 0 || s_firmware_size > update_part->size) {
+    if (s_firmware_size == 0) {
         ESP_LOGE(TAG, "Invalid firmware size: %zu", s_firmware_size);
         return ESP_ERR_INVALID_SIZE;
     }
@@ -2031,6 +2031,51 @@ esp_err_t mesh_ota_initiate_coordinated_reboot(uint16_t timeout_seconds, uint16_
 
     ESP_LOGI(TAG, "All %d nodes ready for reboot", s_reboot_nodes_ready);
 
+    /* Verify root node can reboot before sending REBOOT to leaf nodes */
+    /* This prevents leaf nodes from rebooting if root node cannot reboot */
+    if (s_update_partition != NULL) {
+        /* Verify root node boot partition can be set (pre-flight check) */
+        /* Note: We don't actually set it here, just verify it's possible */
+        const esp_partition_t *current_boot = esp_ota_get_boot_partition();
+        if (current_boot == NULL) {
+            ESP_LOGE(TAG, "Cannot get current boot partition for root node");
+            /* Cleanup and return error before sending REBOOT to leaf nodes */
+            if (s_reboot_prepare_event_group != NULL) {
+                vEventGroupDelete(s_reboot_prepare_event_group);
+                s_reboot_prepare_event_group = NULL;
+            }
+            if (s_reboot_nodes_ready_bitmap != NULL) {
+                free(s_reboot_nodes_ready_bitmap);
+                s_reboot_nodes_ready_bitmap = NULL;
+            }
+            s_reboot_coordinating = false;
+            s_reboot_nodes_ready = 0;
+            s_reboot_nodes_total = 0;
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        /* Verify update partition is valid and different from current boot partition */
+        if (s_update_partition->address == current_boot->address) {
+            ESP_LOGE(TAG, "Root node: update partition is same as boot partition");
+            /* Cleanup and return error before sending REBOOT to leaf nodes */
+            if (s_reboot_prepare_event_group != NULL) {
+                vEventGroupDelete(s_reboot_prepare_event_group);
+                s_reboot_prepare_event_group = NULL;
+            }
+            if (s_reboot_nodes_ready_bitmap != NULL) {
+                free(s_reboot_nodes_ready_bitmap);
+                s_reboot_nodes_ready_bitmap = NULL;
+            }
+            s_reboot_coordinating = false;
+            s_reboot_nodes_ready = 0;
+            s_reboot_nodes_total = 0;
+            return ESP_ERR_INVALID_STATE;
+        }
+    } else {
+        ESP_LOGW(TAG, "Root node: no update partition available");
+        /* Allow reboot coordination to proceed - root node will skip its own reboot */
+    }
+
     /* All nodes ready, send REBOOT command */
     mesh_ota_reboot_t reboot_msg;
     reboot_msg.cmd = MESH_CMD_OTA_REBOOT;
@@ -2061,6 +2106,39 @@ esp_err_t mesh_ota_initiate_coordinated_reboot(uint16_t timeout_seconds, uint16_
     s_reboot_coordinating = false;
     s_reboot_nodes_ready = 0;
     s_reboot_nodes_total = 0;
+
+    /* Root node must also reboot to use new firmware */
+    /* Verify root node has firmware ready (from download) */
+    if (s_update_partition != NULL) {
+        /* Set boot partition for root node */
+        esp_err_t err = esp_ota_set_boot_partition(s_update_partition);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Root node failed to set boot partition: %s", esp_err_to_name(err));
+            /* At this point REBOOT command has been sent, but we still return error */
+            /* This is an edge case - leaf nodes will reboot, root won't */
+            return err;
+        }
+
+        /* Verify boot partition was set correctly */
+        const esp_partition_t *boot_partition = esp_ota_get_boot_partition();
+        if (boot_partition == NULL || boot_partition->address != s_update_partition->address) {
+            ESP_LOGE(TAG, "Root node boot partition verification failed");
+            /* At this point REBOOT command has been sent, but we still return error */
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        ESP_LOGI(TAG, "Root node boot partition set, rebooting in %d ms", reboot_delay_ms);
+
+        /* Wait for delay (allows other nodes to receive REBOOT command first) */
+        vTaskDelay(pdMS_TO_TICKS(reboot_delay_ms));
+
+        /* Reboot root node */
+        ESP_LOGI(TAG, "Root node rebooting...");
+        esp_restart();
+        /* Never returns */
+    } else {
+        ESP_LOGW(TAG, "Root node: no update partition available, skipping reboot");
+    }
 
     return ESP_OK;
 }
