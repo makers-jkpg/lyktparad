@@ -24,6 +24,10 @@ static esp_err_t api_ota_download_post_handler(httpd_req_t *req);
 static esp_err_t api_ota_status_get_handler(httpd_req_t *req);
 static esp_err_t api_ota_cancel_post_handler(httpd_req_t *req);
 static esp_err_t api_ota_version_get_handler(httpd_req_t *req);
+static esp_err_t api_ota_distribute_post_handler(httpd_req_t *req);
+static esp_err_t api_ota_distribution_status_get_handler(httpd_req_t *req);
+static esp_err_t api_ota_distribution_progress_get_handler(httpd_req_t *req);
+static esp_err_t api_ota_distribution_cancel_post_handler(httpd_req_t *req);
 static esp_err_t index_handler(httpd_req_t *req);
 
 /* HTML page with embedded CSS and JavaScript */
@@ -1743,6 +1747,141 @@ static esp_err_t api_ota_version_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* API: POST /api/ota/distribute - Start firmware distribution */
+static esp_err_t api_ota_distribute_post_handler(httpd_req_t *req)
+{
+    if (!esp_mesh_is_root()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Only root node can distribute firmware\"}", -1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = mesh_ota_distribute_firmware();
+
+    if (err == ESP_OK) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":true}", -1);
+        return ESP_OK;
+    } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"Distribution failed: %s\"}", esp_err_to_name(err));
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+}
+
+/* API: GET /api/ota/distribution/status - Get distribution status */
+static esp_err_t api_ota_distribution_status_get_handler(httpd_req_t *req)
+{
+    if (!esp_mesh_is_root()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"distributing\":false,\"total_blocks\":0,\"current_block\":0,\"overall_progress\":0.0,\"nodes_total\":0,\"nodes_complete\":0,\"nodes_failed\":0}", -1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    mesh_ota_distribution_status_t status;
+    esp_err_t err = mesh_ota_get_distribution_status(&status);
+
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"distributing\":false,\"total_blocks\":0,\"current_block\":0,\"overall_progress\":0.0,\"nodes_total\":0,\"nodes_complete\":0,\"nodes_failed\":0}", -1);
+        return ESP_FAIL;
+    }
+
+    char response[256];
+    int len = snprintf(response, sizeof(response),
+                      "{\"distributing\":%s,\"total_blocks\":%d,\"current_block\":%d,\"overall_progress\":%.2f,\"nodes_total\":%d,\"nodes_complete\":%d,\"nodes_failed\":%d}",
+                      status.distributing ? "true" : "false",
+                      status.total_blocks,
+                      status.current_block,
+                      status.overall_progress,
+                      status.nodes_total,
+                      status.nodes_complete,
+                      status.nodes_failed);
+
+    if (len < 0 || len >= (int)sizeof(response)) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"distributing\":false,\"total_blocks\":0,\"current_block\":0,\"overall_progress\":0.0,\"nodes_total\":0,\"nodes_complete\":0,\"nodes_failed\":0}", -1);
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, response, len);
+    return ESP_OK;
+}
+
+/* API: GET /api/ota/distribution/progress - Get distribution progress */
+static esp_err_t api_ota_distribution_progress_get_handler(httpd_req_t *req)
+{
+    if (!esp_mesh_is_root()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"progress\":0.0}", -1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    float progress = mesh_ota_get_distribution_progress();
+
+    char response[64];
+    int len = snprintf(response, sizeof(response), "{\"progress\":%.2f}", progress);
+
+    if (len < 0 || len >= (int)sizeof(response)) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"progress\":0.0}", -1);
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, response, len);
+    return ESP_OK;
+}
+
+/* API: POST /api/ota/distribution/cancel - Cancel distribution */
+static esp_err_t api_ota_distribution_cancel_post_handler(httpd_req_t *req)
+{
+    if (!esp_mesh_is_root()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Only root node can cancel distribution\"}", -1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = mesh_ota_cancel_distribution();
+
+    if (err == ESP_OK) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":true}", -1);
+        return ESP_OK;
+    } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"Cancel failed: %s\"}", esp_err_to_name(err));
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+}
+
 /* GET / - Serves main HTML page */
 static esp_err_t index_handler(httpd_req_t *req)
 {
@@ -1766,7 +1905,7 @@ esp_err_t mesh_web_server_start(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 12;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, ota_download, ota_status, ota_cancel, ota_version, index = 10 handlers */
+    config.max_uri_handlers = 16;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, ota_download, ota_status, ota_cancel, ota_version, ota_distribute, ota_distribution_status, ota_distribution_progress, ota_distribution_cancel, index = 14 handlers */
     config.stack_size = 8192;
     config.server_port = 80;
 
@@ -1896,6 +2035,62 @@ esp_err_t mesh_web_server_start(void)
         reg_err = httpd_register_uri_handler(server_handle, &ota_version_uri);
         if (reg_err != ESP_OK) {
             ESP_LOGE(WEB_TAG, "Failed to register OTA version URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t ota_distribute_uri = {
+            .uri       = "/api/ota/distribute",
+            .method    = HTTP_POST,
+            .handler   = api_ota_distribute_post_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &ota_distribute_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register OTA distribute URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t ota_distribution_status_uri = {
+            .uri       = "/api/ota/distribution/status",
+            .method    = HTTP_GET,
+            .handler   = api_ota_distribution_status_get_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &ota_distribution_status_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register OTA distribution status URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t ota_distribution_progress_uri = {
+            .uri       = "/api/ota/distribution/progress",
+            .method    = HTTP_GET,
+            .handler   = api_ota_distribution_progress_get_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &ota_distribution_progress_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register OTA distribution progress URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t ota_distribution_cancel_uri = {
+            .uri       = "/api/ota/distribution/cancel",
+            .method    = HTTP_POST,
+            .handler   = api_ota_distribution_cancel_post_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &ota_distribution_cancel_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register OTA distribution cancel URI: 0x%x", reg_err);
             httpd_stop(server_handle);
             server_handle = NULL;
             return ESP_FAIL;

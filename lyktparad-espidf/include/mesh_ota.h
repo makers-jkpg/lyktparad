@@ -21,6 +21,81 @@
 #include <stddef.h>
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "esp_mesh.h"
+
+/*******************************************************
+ *                Constants
+ *******************************************************/
+#define MESH_OTA_BLOCK_SIZE           1024    /* Block size in bytes (1KB) */
+#define MESH_OTA_BLOCK_HEADER_SIZE    10      /* Block header size in bytes */
+#define MESH_OTA_MAX_BLOCKS           2048    /* Maximum number of blocks (supports up to 2MB firmware) */
+#define MESH_OTA_ACK_TIMEOUT_MS       5000    /* ACK timeout in milliseconds */
+#define MESH_OTA_MAX_RETRIES_PER_BLOCK 3     /* Maximum retries per block per node */
+#define MESH_OTA_PROGRESS_LOG_INTERVAL 10     /* Log progress every 10% */
+
+/*******************************************************
+ *                Data Structures
+ *******************************************************/
+
+/**
+ * OTA_START message structure
+ * Sent from root to all nodes to initiate distribution
+ */
+typedef struct {
+    uint8_t cmd;              /* MESH_CMD_OTA_START (0xF1) */
+    uint16_t total_blocks;    /* Total number of blocks (big-endian) */
+    uint32_t firmware_size;   /* Total firmware size in bytes (big-endian) */
+    char version[16];         /* Firmware version string (null-terminated) */
+} __attribute__((packed)) mesh_ota_start_t;
+
+/**
+ * Block header structure
+ * Prefix for each OTA_BLOCK message
+ */
+typedef struct {
+    uint8_t cmd;              /* MESH_CMD_OTA_BLOCK (0xF2) */
+    uint16_t block_number;    /* Block number (0-based, big-endian) */
+    uint16_t total_blocks;    /* Total number of blocks (big-endian) */
+    uint16_t block_size;      /* Size of this block in bytes (big-endian) */
+    uint32_t checksum;        /* Block checksum (CRC32, big-endian) */
+} __attribute__((packed)) mesh_ota_block_header_t;
+
+/**
+ * OTA_ACK message structure
+ * Sent from leaf nodes to root to acknowledge block receipt
+ */
+typedef struct {
+    uint8_t cmd;              /* MESH_CMD_OTA_ACK (0xF3) */
+    uint16_t block_number;    /* Block number being acknowledged (big-endian) */
+    uint8_t status;           /* Status: 0=OK, 1=ERROR */
+} __attribute__((packed)) mesh_ota_ack_t;
+
+/**
+ * OTA_STATUS message structure
+ * Query distribution status
+ */
+typedef struct {
+    uint8_t cmd;              /* MESH_CMD_OTA_STATUS (0xF4) */
+    uint8_t request_type;     /* 0=query progress, 1=query failed blocks */
+} __attribute__((packed)) mesh_ota_status_t;
+
+/**
+ * Progress callback function type
+ */
+typedef void (*mesh_ota_progress_callback_t)(float overall_progress, int nodes_complete, int nodes_total, int blocks_sent, int blocks_total);
+
+/**
+ * Distribution status structure
+ */
+typedef struct {
+    bool distributing;        /* Whether distribution is active */
+    uint16_t total_blocks;    /* Total number of blocks */
+    uint16_t current_block;   /* Current block being sent */
+    float overall_progress;   /* Overall progress (0.0-1.0) */
+    int nodes_total;          /* Total number of target nodes */
+    int nodes_complete;       /* Number of nodes that completed */
+    int nodes_failed;         /* Number of nodes that failed */
+} mesh_ota_distribution_status_t;
 
 /*******************************************************
  *                Function Definitions
@@ -83,5 +158,68 @@ float mesh_ota_get_download_progress(void);
  * @return ESP_OK on success, error code on failure
  */
 esp_err_t mesh_ota_cancel_download(void);
+
+/**
+ * Start firmware distribution to all mesh nodes
+ *
+ * Distributes the firmware from the inactive OTA partition to all leaf nodes in the mesh network.
+ * This function can only be called on the root node.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_ota_distribute_firmware(void);
+
+/**
+ * Get distribution status
+ *
+ * Returns the current distribution status including progress information.
+ *
+ * @param status Pointer to status structure to fill
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_ota_get_distribution_status(mesh_ota_distribution_status_t *status);
+
+/**
+ * Get distribution progress
+ *
+ * Returns the overall distribution progress as a float between 0.0 and 1.0.
+ *
+ * @return Progress value (0.0-1.0), or 0.0 if not distributing
+ */
+float mesh_ota_get_distribution_progress(void);
+
+/**
+ * Cancel ongoing distribution
+ *
+ * Cancels the current distribution operation if one is in progress.
+ * This function is idempotent and safe to call even if no distribution is active.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_ota_cancel_distribution(void);
+
+/**
+ * Register progress callback
+ *
+ * Registers a callback function that will be called during distribution to report progress.
+ * The callback will be invoked from the distribution task context.
+ *
+ * @param callback Callback function pointer, or NULL to unregister
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_ota_register_progress_callback(mesh_ota_progress_callback_t callback);
+
+/**
+ * Handle OTA message from mesh (root node only)
+ *
+ * Processes incoming OTA messages from leaf nodes (OTA_REQUEST, OTA_ACK, OTA_STATUS).
+ * This function should be called from the mesh receive handler.
+ *
+ * @param from Source node address
+ * @param data Message data
+ * @param len Message length
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_ota_handle_mesh_message(mesh_addr_t *from, uint8_t *data, uint16_t len);
 
 #endif /* __MESH_OTA_H__ */

@@ -22,6 +22,7 @@
 #include "node_sequence.h"
 #include "light_common_cathode.h"
 #include "mesh_config.h"
+#include "mesh_ota.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -63,6 +64,13 @@ void esp_mesh_p2p_rx_main(void *arg)
             continue;
         }
         if (esp_mesh_is_root()) {
+            /* Root node handles OTA messages */
+            if (data.proto == MESH_PROTO_BIN && data.size >= 1) {
+                uint8_t cmd = data.data[0];
+                if (cmd == MESH_CMD_OTA_REQUEST || cmd == MESH_CMD_OTA_ACK || cmd == MESH_CMD_OTA_STATUS) {
+                    mesh_ota_handle_mesh_message(&from, data.data, data.size);
+                }
+            }
             continue;
         }
 

@@ -22,12 +22,12 @@ Over-The-Air (OTA) firmware updates allow you to update the firmware on your mes
 ### What Can OTA Updates Do?
 
 - Download firmware from remote servers (HTTP/HTTPS)
-- Update firmware on all mesh nodes remotely (mesh distribution coming soon)
+- Distribute firmware to all mesh nodes automatically
 - Deploy bug fixes and new features without physical access
 - Maintain version consistency across all nodes
 - Roll back to previous firmware version if needed (when implemented)
 - Check current firmware version via web interface or serial logs
-- Monitor download progress in real-time
+- Monitor download and distribution progress in real-time
 
 ### Current Status
 
@@ -38,8 +38,10 @@ The OTA system is currently implemented with the following features:
 - **Root node firmware download** (HTTP and HTTPS)
 - **Download progress monitoring** via API
 - **Download cancellation** support
+- **Mesh firmware distribution** - Root node distributes firmware to all leaf nodes
+- **Distribution progress tracking** - Monitor distribution to all nodes via API
 
-Mesh firmware distribution and coordinated reboot will be available in future updates.
+Coordinated reboot will be available in future updates.
 
 ## Prerequisites
 
@@ -207,14 +209,124 @@ curl -X POST http://<root-node-ip>/api/ota/cancel
 
 **Note**: The device does NOT automatically switch to the new firmware. This will be handled in a future update (coordinated reboot).
 
+## Distributing Firmware to Mesh Nodes
+
+After downloading firmware to the root node, you can distribute it to all leaf nodes in the mesh network. The root node will automatically fragment the firmware into blocks and send them to all connected nodes, tracking acknowledgments and retrying failed blocks.
+
+### Prerequisites
+
+- Root node must have successfully downloaded firmware (see [Downloading Firmware](#downloading-firmware))
+- Mesh network must be active with leaf nodes connected
+- All nodes must have sufficient flash space for the firmware
+
+### Initiating Distribution
+
+To start firmware distribution, send a POST request to the root node's web API:
+
+```bash
+curl -X POST http://<root-node-ip>/api/ota/distribute
+```
+
+**Success Response:**
+```json
+{
+  "success": true
+}
+```
+
+**Error Response:**
+```json
+{
+  "success": false,
+  "error": "Distribution failed: ..."
+}
+```
+
+Distribution can also be triggered automatically when a leaf node sends an OTA_REQUEST message to the root node.
+
+### Monitoring Distribution Progress
+
+Check the distribution status and progress:
+
+```bash
+curl http://<root-node-ip>/api/ota/distribution/status
+```
+
+**Response:**
+```json
+{
+  "distributing": true,
+  "total_blocks": 150,
+  "current_block": 75,
+  "overall_progress": 0.50,
+  "nodes_total": 5,
+  "nodes_complete": 2,
+  "nodes_failed": 0
+}
+```
+
+- `distributing`: `true` if distribution is in progress, `false` otherwise
+- `total_blocks`: Total number of firmware blocks
+- `current_block`: Current block being distributed (approximate)
+- `overall_progress`: Float between 0.0 and 1.0 (0.0 = 0%, 1.0 = 100%)
+- `nodes_total`: Total number of target nodes
+- `nodes_complete`: Number of nodes that have received all blocks
+- `nodes_failed`: Number of nodes that failed to receive all blocks
+
+You can also get just the progress value:
+
+```bash
+curl http://<root-node-ip>/api/ota/distribution/progress
+```
+
+**Response:**
+```json
+{
+  "progress": 0.50
+}
+```
+
+Progress is also logged to the serial console at 10% intervals.
+
+### Cancelling Distribution
+
+To cancel an ongoing distribution:
+
+```bash
+curl -X POST http://<root-node-ip>/api/ota/distribution/cancel
+```
+
+**Response:**
+```json
+{
+  "success": true
+}
+```
+
+### What Happens During Distribution
+
+1. **Verification** - Root node verifies firmware is available in inactive partition
+2. **Node discovery** - Root node gets list of all leaf nodes from routing table
+3. **Fragmentation** - Firmware is fragmented into 1KB blocks
+4. **Distribution start** - Root sends OTA_START command to all nodes with metadata (total blocks, firmware size, version)
+5. **Block sending** - For each block:
+   - Root sends block to all nodes that need it
+   - Nodes receive block, verify checksum, and send ACK
+   - Root waits for ACKs with 5-second timeout
+   - Failed blocks are retried up to 3 times per node
+6. **Progress tracking** - Progress is calculated based on blocks received by all nodes
+7. **Completion** - When all nodes have all blocks, distribution is complete
+
+**Note**: Nodes do NOT automatically switch to the new firmware. This will be handled in a future update (coordinated reboot).
+
 ## Performing Updates
 
-The current OTA implementation supports downloading firmware to the root node. The full update process (including mesh distribution and coordinated reboot) will be available in future updates.
-
-**Current Process:**
+The complete OTA update process now includes:
 
 1. **Download firmware** - Root node downloads firmware from update server (see [Downloading Firmware](#downloading-firmware))
 2. **Verify integrity** - Firmware is automatically validated after download
+3. **Distribute to nodes** - Root node distributes firmware to all mesh nodes (see [Distributing Firmware to Mesh Nodes](#distributing-firmware-to-mesh-nodes))
+4. **Verify distribution** - Check that all nodes received all blocks successfully
 
 **Future Process (coming soon):**
 
@@ -351,8 +463,24 @@ A: No, the device does NOT automatically reboot after download. The downloaded f
 
 ### Q: Can I download firmware to non-root nodes?
 
-A: No, only the root node can download firmware because it's the only node with internet access via the router. In the future, the root node will distribute downloaded firmware to all mesh nodes.
+A: No, only the root node can download firmware because it's the only node with internet access via the router. However, after downloading, the root node automatically distributes the firmware to all mesh nodes via the mesh network.
+
+### Q: How does mesh distribution work?
+
+A: The root node fragments the downloaded firmware into 1KB blocks and sends them to all leaf nodes. Each node acknowledges receipt of each block, and the root retries failed blocks up to 3 times. Distribution progress can be monitored via the `/api/ota/distribution/status` endpoint.
+
+### Q: What happens if a node disconnects during distribution?
+
+A: If a node disconnects during distribution, the root node will continue distributing to remaining nodes. The disconnected node can reconnect and request the update again, or distribution can be restarted once the node reconnects.
+
+### Q: How long does distribution take?
+
+A: Distribution time depends on firmware size, number of nodes, and mesh network conditions. A typical 1MB firmware distributed to 5 nodes may take 2-5 minutes. Progress can be monitored via the API.
+
+### Q: Can I cancel distribution?
+
+A: Yes, you can cancel an ongoing distribution by sending a POST request to `/api/ota/distribution/cancel`. The distribution will be aborted and nodes will retain whatever blocks they have received so far.
 
 ---
 
-> **For Developers**: See [Developer Guide](../dev-guides/ota-mupdate/ota-download.md) for technical implementation details, API reference, and integration information.
+> **For Developers**: See [OTA Download Guide](../dev-guides/ota-mupdate/ota-download.md) for download implementation details, and [OTA Distribution Guide](../dev-guides/ota-mupdate/ota-distribution.md) for mesh distribution protocol details.
