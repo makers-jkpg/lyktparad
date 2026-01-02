@@ -46,6 +46,15 @@
 #define  MESH_CMD_SEQUENCE_RESET (0x07)  /* Reset sequence pointer to 0 */
 #define  MESH_CMD_SEQUENCE_BEAT  (0x08)  /* Tempo synchronization beat (2 bytes: command + 1-byte pointer) */
 
+/* OTA/MUPDATE commands: Commands with prefix 0xF are reserved for OTA/update functionality */
+#define  MESH_CMD_OTA_REQUEST    (0xF0)  /* Leaf node requests firmware update */
+#define  MESH_CMD_OTA_START      (0xF1)  /* Root starts OTA distribution */
+#define  MESH_CMD_OTA_BLOCK      (0xF2)  /* Firmware block data */
+#define  MESH_CMD_OTA_ACK        (0xF3)  /* Block acknowledgment */
+#define  MESH_CMD_OTA_STATUS     (0xF4)  /* Update status query */
+#define  MESH_CMD_OTA_PREPARE_REBOOT (0xF5)  /* Prepare for coordinated reboot */
+#define  MESH_CMD_OTA_REBOOT     (0xF6)  /* Execute coordinated reboot */
+
 /*******************************************************
  *                Type Definitions
  *******************************************************/

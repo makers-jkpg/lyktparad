@@ -72,6 +72,7 @@
 #include "mesh_device_config.h"
 #include "light_neopixel.h"
 #include "light_common_cathode.h"
+#include "mesh_ota.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -288,6 +289,23 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
                      mesh_layer, self_org_enabled ? "ENABLED" : "DISABLED");
         }
 
+        /* Start rollback timeout monitoring if rollback flag is set (for root nodes) */
+        /* This monitors mesh connection for 5 minutes after rollback */
+        /* Leaf nodes will start timeout in MESH_EVENT_PARENT_CONNECTED handler */
+        if (is_root) {
+            bool rollback_needed = false;
+            esp_err_t rollback_check_err = mesh_ota_get_rollback_flag(&rollback_needed);
+            if (rollback_check_err == ESP_OK && rollback_needed) {
+                /* Rollback flag is set - start timeout task to monitor mesh connection */
+                esp_err_t timeout_err = mesh_ota_start_rollback_timeout();
+                if (timeout_err != ESP_OK) {
+                    ESP_LOGW(MESH_TAG, "Failed to start rollback timeout task: %s", esp_err_to_name(timeout_err));
+                } else {
+                    ESP_LOGI(MESH_TAG, "Rollback timeout monitoring started (root node, mesh started)");
+                }
+            }
+        }
+
         /* Check if forced root node has become non-root (violation of GPIO forcing) */
         if (is_root_node_forced && !is_root) {
             ESP_LOGE(MESH_TAG, "[GPIO ROOT FORCING] ERROR: Forced root node (GPIO %d=LOW) has become NON-ROOT NODE - this violates GPIO forcing configuration!", MESH_GPIO_FORCE_ROOT);
@@ -419,6 +437,23 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         last_layer = mesh_layer;
         is_mesh_connected = true;
 
+        /* Start rollback timeout monitoring if rollback flag is set (for leaf nodes) */
+        /* This monitors mesh connection for 5 minutes after rollback */
+        /* Root nodes start timeout in MESH_EVENT_STARTED handler */
+        if (!is_root) {
+            bool rollback_needed = false;
+            esp_err_t rollback_check_err = mesh_ota_get_rollback_flag(&rollback_needed);
+            if (rollback_check_err == ESP_OK && rollback_needed) {
+                /* Rollback flag is set - start timeout task to monitor mesh connection */
+                esp_err_t timeout_err = mesh_ota_start_rollback_timeout();
+                if (timeout_err != ESP_OK) {
+                    ESP_LOGW(MESH_TAG, "Failed to start rollback timeout task: %s", esp_err_to_name(timeout_err));
+                } else {
+                    ESP_LOGI(MESH_TAG, "Rollback timeout monitoring started (leaf node, connected to mesh)");
+                }
+            }
+        }
+
         // #region agent log
         if (is_root) {
             esp_netif_t *netif_sta = mesh_common_get_netif_sta();
@@ -462,6 +497,8 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG,
                  "<MESH_EVENT_PARENT_DISCONNECTED>reason:%d",
                  disconnected->reason);
+        /* Cleanup OTA reception if in progress */
+        mesh_ota_cleanup_on_disconnect();
         is_mesh_connected = false;
         mesh_layer = esp_mesh_get_layer();
         /* Cancel any pending LED restore task */
