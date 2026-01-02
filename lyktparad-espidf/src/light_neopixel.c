@@ -10,7 +10,7 @@
 #include "esp_timer.h"
 #include "mesh_commands.h"
 #include "light_neopixel.h"
-#include "mesh_device_config.h"
+#include "config/mesh_device_config.h"
 #include "led_strip.h"
 #include "driver/rmt_tx.h"
 

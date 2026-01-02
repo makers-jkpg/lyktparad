@@ -1,7 +1,8 @@
 /* Mesh Configuration File - Example Template
  *
  * This is an example configuration file. To use it:
- * 1. Copy this file to mesh_config.h: cp mesh_config.h.example mesh_config.h
+ * 1. Copy this file to mesh_config.h (from project root):
+ *    cp include/config/mesh_config.h.example include/config/mesh_config.h
  * 2. Update the values below with your site-specific settings
  * 3. DO NOT commit mesh_config.h to version control (it's in .gitignore)
  *
@@ -67,4 +68,3 @@
 #define MESH_CONFIG_TOKEN_VALUE 0xbeef
 
 #endif /* __MESH_CONFIG_H__ */
-

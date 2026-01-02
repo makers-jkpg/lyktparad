@@ -6,14 +6,14 @@ A WiFi mesh network implementation using ESP-IDF on ESP32/ESP32-C3 devices. The 
 
 Before building, you need to configure two files:
 
-1. **`include/mesh_config.h`** - Copy from `include/mesh_config.h.example`:
+1. **`include/config/mesh_config.h`** - Copy from `include/config/mesh_config.h.example`:
    - Set WiFi router SSID and password (for root node)
    - Configure Mesh ID (6-byte identifier, must match all nodes)
    - Set Mesh channel (1-11 for 2.4GHz, or 0 for auto)
    - Set Mesh AP password (for node-to-node connections)
    - Configure authentication tokens
 
-2. **`include/mesh_device_config.h`** - Copy from `include/mesh_device_config.h.example`:
+2. **`include/config/mesh_device_config.h`** - Copy from `include/config/mesh_device_config.h.example`:
    - **For WS2812/Neopixel LEDs**: Set LED GPIO pin (default: 10), number of pixels (default: 1), and RMT resolution (default: 10 MHz)
    - **For common-cathode RGB LEDs**: Uncomment `RGB_ENABLE` and configure GPIO pins, LEDC timer, channels, and PWM settings
 
@@ -37,13 +37,6 @@ Before building, you need to configure two files:
   - **Common-cathode RGB LED** - For simple RGB LEDs with separate R, G, B pins
 - **WiFi Router** (for root node connection)
 - **USB cable** for programming and serial communication
-- **GPIO Pins for Root Node Forcing** (optional, configurable):
-- **GPIO 5 (Pin A, default)**: Force Root Node - Connect to GND to force root node behavior
-- **GPIO 4 (Pin B, default)**: Force Mesh Node - Connect to GND to force mesh node behavior
-  - Both pins have internal pull-up resistors (read HIGH when not connected)
-  - Both pins HIGH (not connected): Normal root election enabled
-  - Both pins LOW (conflict): Normal root election enabled
-  - **Note**: GPIO pins are configurable in `include/mesh_device_config.h` (see Configuration section)
 
 ### LED Hardware Options
 
@@ -82,9 +75,9 @@ Before building, you need to configure two files:
 
 3. **Configure Mesh Settings**:
    ```bash
-   cp include/mesh_config.h.example include/mesh_config.h
+   cp include/config/mesh_config.h.example include/config/mesh_config.h
    ```
-   Edit `include/mesh_config.h` and update:
+   Edit `include/config/mesh_config.h` and update:
    - WiFi router SSID and password
    - Mesh ID (6-byte identifier)
    - Mesh channel
@@ -93,9 +86,9 @@ Before building, you need to configure two files:
 
 4. **Configure LED Hardware**:
    ```bash
-   cp include/mesh_device_config.h.example include/mesh_device_config.h
+   cp include/config/mesh_device_config.h.example include/config/mesh_device_config.h
    ```
-   Edit `include/mesh_device_config.h`:
+   Edit `include/config/mesh_device_config.h`:
    - **For WS2812/Neopixel** (default): Update GPIO pin, number of pixels, and RMT resolution if needed
    - **For common-cathode RGB LEDs**: Uncomment `#define RGB_ENABLE` and configure GPIO pins, LEDC timer, channels, and PWM settings
 
@@ -116,7 +109,7 @@ This project **must be built within VS Code** using PlatformIO. Do not use comma
 
 ## Configuration
 
-### Mesh Configuration (`include/mesh_config.h`)
+### Mesh Configuration (`include/config/mesh_config.h`)
 
 **⚠️ WARNING**: Never commit `mesh_config.h` to version control! It contains sensitive credentials.
 
@@ -130,7 +123,7 @@ Required settings:
 - `MESH_CONFIG_TOKEN_ID`: Token ID for command authentication
 - `MESH_CONFIG_TOKEN_VALUE`: Token value for command authentication
 
-### LED Configuration (`include/mesh_device_config.h`)
+### LED Configuration (`include/config/mesh_device_config.h`)
 
 **⚠️ WARNING**: Never commit `mesh_device_config.h` to version control if it contains site-specific settings.
 
@@ -146,7 +139,7 @@ These settings are always active and control the WS2812/Neopixel LED driver:
 
 #### Common-Cathode RGB LED Configuration (Optional)
 
-To enable common-cathode RGB LED support, uncomment `#define RGB_ENABLE` in `mesh_device_config.h`:
+To enable common-cathode RGB LED support, uncomment `#define RGB_ENABLE` in `include/config/mesh_device_config.h`:
 
 - `RGB_ENABLE`: Uncomment to enable common-cathode RGB LED support
 - `RGB_LEDC_TIMER`: LEDC timer number (default: LEDC_TIMER_0)
@@ -158,19 +151,6 @@ To enable common-cathode RGB LED support, uncomment `#define RGB_ENABLE` in `mes
 
 **Note**: Both LED drivers can be enabled simultaneously. The WS2812 driver is used for mesh status indicators, while the RGB LED driver provides additional visual feedback when `RGB_ENABLE` is defined.
 
-#### GPIO Root Node Forcing Configuration (Optional)
-
-To configure GPIO pins for root node forcing, edit the following settings in `mesh_device_config.h`:
-
-- `MESH_GPIO_FORCE_ROOT`: GPIO pin for forcing root node behavior (default: 5)
-- `MESH_GPIO_FORCE_MESH`: GPIO pin for forcing mesh node behavior (default: 4)
-
-**Important**:
-- Avoid strapping pins (GPIO 0, 2, 12, 15) and flash/PSRAM pins (GPIO 6-11)
-- Ensure the selected pins don't conflict with LED drivers or other peripherals
-- Both pins have internal pull-up resistors enabled
-- **Note**: If your LED uses GPIO 5, change `MESH_GPIO_FORCE_ROOT` to a different pin to avoid conflicts
-
 ## Usage
 
 ### Network Setup
@@ -179,36 +159,13 @@ To configure GPIO pins for root node forcing, edit the following settings in `me
    - This node will connect to your WiFi router
    - Once connected, it will obtain an IP address
    - The web server will start automatically
-   - **Optional**: Connect the Force Root GPIO pin (default: GPIO 5) to GND before power-on to force root node behavior
+   - Root node selection is automatic via ESP-MESH self-organization
 
 2. **Mesh Nodes**: Flash the same firmware to additional ESP32 devices
    - These nodes will automatically join the mesh network
    - They will connect to the root node or other mesh nodes
    - No additional configuration needed (uses same Mesh ID)
-   - **Optional**: Connect the Force Mesh GPIO pin (default: GPIO 4) to GND before power-on to force mesh node behavior
-
-### GPIO Root Node Forcing
-
-The firmware supports GPIO-based root node forcing using two configurable GPIO pins (default: GPIO 4 and GPIO 5).
-
-**Default Pin Configuration:**
-- **GPIO 5 (Force Root)**: When connected to GND at startup, forces the node to become root
-- **GPIO 4 (Force Mesh)**: When connected to GND at startup, forces the node to be a mesh node
-
-**Behavior:**
-- **GPIO 5 LOW** (connected to GND): Forces root node behavior
-- **GPIO 4 LOW** (connected to GND): Forces mesh node behavior
-- **Both HIGH** (not connected): Default behavior (normal root election)
-- **Both LOW** (both connected to GND): Conflict - normal root election
-
-**Usage:**
-1. Configure GPIO pins in `include/mesh_device_config.h` if you need different pins (see Configuration section)
-2. Connect the desired GPIO pin(s) to GND before powering on the device
-3. The GPIO state is read during mesh initialization
-4. Root forcing is applied before the mesh network starts
-5. Check serial logs for GPIO forcing status messages
-
-**Note**: GPIO pins have internal pull-up resistors, so they read HIGH when not connected to GND. The GPIO state is only read once at startup and does not change during operation. The default pins (GPIO 4 and 5) can be changed in `include/mesh_device_config.h`.
+   - All nodes use automatic root election
 
 ### Web Interface
 
@@ -253,8 +210,10 @@ Monitor at 115200 baud to see real-time device activity.
 ```
 lyktparad-espidf/
 ├── include/
-│   ├── mesh_config.h.example      # Mesh configuration template
-│   ├── mesh_device_config.h.example  # Device configuration template
+│   ├── config/
+│   │   ├── mesh_config.h.example      # Mesh configuration template
+│   │   └── mesh_device_config.h.example  # Device configuration template
+│   ├── mesh_commands.h            # Mesh protocol command definitions
 │   ├── light_neopixel.h           # WS2812/Neopixel LED control API
 │   ├── light_common_cathode.h     # Common-cathode RGB LED control API
 │   └── mesh_web.h                 # Web server API
@@ -312,13 +271,13 @@ lyktparad-espidf/
 ### LED not working
 
 **For WS2812/Neopixel LEDs:**
-- Verify GPIO pin in `mesh_device_config.h` matches hardware
+- Verify GPIO pin in `include/config/mesh_device_config.h` matches hardware
 - Check LED power supply (WS2812 requires 5V)
 - Verify data line connection
 - Check serial output for initialization errors
 
 **For common-cathode RGB LEDs:**
-- Verify `RGB_ENABLE` is uncommented in `mesh_device_config.h`
+- Verify `RGB_ENABLE` is uncommented in `include/config/mesh_device_config.h`
 - Check that GPIO pins match your hardware connections
 - Verify LED polarity (must be common-cathode, not common-anode)
 - Ensure GPIO pins support LEDC (check ESP32 datasheet)
@@ -355,7 +314,7 @@ This project uses PlatformIO and **must be built within VS Code**. The build pro
 
 ### Adding New Features
 
-- **New message types**: Add command prefix in `include/light_neopixel.h` and handle in `src/mesh.c` and `src/light_neopixel.c`
+- **New message types**: Add command prefix in `include/mesh_commands.h` and handle in `src/mesh.c` and `src/light_neopixel.c`
 - **New LED patterns**: Extend `src/light_neopixel.c` with new color functions
 - **Web API endpoints**: Add handlers in `src/mesh_web.c` and register in `mesh_web_server_start()`
 

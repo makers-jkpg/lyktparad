@@ -35,8 +35,8 @@ Thumbs.db
 # Secrets
 *.pem
 *.key
-include/mesh_config.h
-include/mesh_device_config.h
+include/config/mesh_config.h
+include/config/mesh_device_config.h
 
 # Misc
 .idea/

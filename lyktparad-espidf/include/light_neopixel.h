@@ -16,7 +16,7 @@
 
 #include "esp_err.h"
 #include "esp_mesh.h"
-#include "mesh_config.h"
+#include "config/mesh_config.h"
 #include <stdint.h>
 #include <stdbool.h>
 

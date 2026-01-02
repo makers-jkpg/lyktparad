@@ -6,7 +6,7 @@
  */
 
 #include "light_common_cathode.h"
-#include "mesh_device_config.h"
+#include "config/mesh_device_config.h"
 
 #ifdef RGB_ENABLE
 #include "driver/ledc.h"

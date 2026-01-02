@@ -22,7 +22,7 @@
 #include "light_neopixel.h"
 #include "node_sequence.h"
 #include "light_common_cathode.h"
-#include "mesh_config.h"
+#include "config/mesh_config.h"
 #include "mesh_ota.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
