@@ -28,6 +28,10 @@
 #include "nvs.h"
 #include <string.h>
 #include <strings.h>  /* for strncasecmp */
+
+#ifndef CONFIG_MESH_ROUTE_TABLE_SIZE
+#define CONFIG_MESH_ROUTE_TABLE_SIZE 50
+#endif
 #include <stdlib.h>   /* for malloc/free */
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -228,7 +232,7 @@ static esp_err_t download_firmware_https(const char *url)
         /* Update progress using ESP-IDF API functions */
         total_bytes_read = esp_https_ota_get_image_len_read(s_https_ota_handle);
         /* Try to get total image length (may return 0 if unknown) */
-        image_len = esp_https_ota_get_image_len(s_https_ota_handle);
+        image_len = esp_https_ota_get_image_size(s_https_ota_handle);
 
         if (image_len > 0) {
             /* Calculate progress percentage */
@@ -257,7 +261,7 @@ static esp_err_t download_firmware_https(const char *url)
     if (err == ESP_OK) {
         /* Get final bytes read count */
         total_bytes_read = esp_https_ota_get_image_len_read(s_https_ota_handle);
-        image_len = esp_https_ota_get_image_len(s_https_ota_handle);
+        image_len = esp_https_ota_get_image_size(s_https_ota_handle);
 
         /* Verify size if available */
         if (image_len > 0 && total_bytes_read != image_len) {
@@ -553,12 +557,10 @@ const esp_partition_t* mesh_ota_get_update_partition(void)
  *                Downgrade Prevention
  *******************************************************/
 
-/* Note: ESP_ERR_INVALID_VERSION is defined as ESP_ERR_INVALID_ARG for downgrade detection
- * This is because ESP-IDF doesn't define ESP_ERR_INVALID_VERSION.
- * Callers should check for ESP_ERR_INVALID_VERSION specifically to detect downgrades.
- * Other errors (NULL partition, read failures) also return ESP_ERR_INVALID_ARG directly.
+/* Note: ESP_ERR_INVALID_VERSION is now defined by ESP-IDF (0x10A).
+ * We use ESP-IDF's definition directly. Callers should check for ESP_ERR_INVALID_VERSION
+ * specifically to detect downgrades.
  */
-#define ESP_ERR_INVALID_VERSION  ESP_ERR_INVALID_ARG  /* Downgrade detected - reuse ESP_ERR_INVALID_ARG */
 
 esp_err_t mesh_ota_check_downgrade(const esp_partition_t *partition)
 {
@@ -729,12 +731,6 @@ esp_err_t mesh_ota_download_firmware(const char *url)
 static uint32_t calculate_crc32(const uint8_t *data, size_t len)
 {
     uint32_t crc = 0xFFFFFFFF;
-    static const uint32_t crc_table[16] = {
-        0x00000000, 0x1DB71064, 0x3B6E20C8, 0x26D930AC,
-        0x76DC4190, 0x6B6B51F4, 0x4DB26158, 0x5005713C,
-        0xEDB88320, 0xF00F9344, 0xD6D6A3E8, 0xCB61B38C,
-        0x9B64C2B0, 0x86D3D2D4, 0xA00AE278, 0xBDBDF21C
-    };
 
     for (size_t i = 0; i < len; i++) {
         uint8_t byte = data[i];
@@ -1307,7 +1303,6 @@ esp_err_t mesh_ota_cancel_distribution(void)
 
     /* Wait for task to finish (with timeout) */
     if (s_distribution_task != NULL) {
-        TickType_t timeout = pdMS_TO_TICKS(5000);
         if (xTaskGetHandle("ota_distribute") != NULL) {
             /* Task still exists, wait a bit for it to finish */
             vTaskDelay(pdMS_TO_TICKS(1000));
@@ -2135,7 +2130,7 @@ esp_err_t mesh_ota_initiate_coordinated_reboot(uint16_t timeout_seconds, uint16_
             break;  /* Timeout expired */
         }
 
-        EventBits_t bits = xEventGroupWaitBits(
+        (void)xEventGroupWaitBits(
             s_reboot_prepare_event_group,
             0xFFFFFFFF,
             pdTRUE,
