@@ -35,6 +35,8 @@ This module is the second step in the OTA implementation, building on the founda
 
 **No automatic partition switch**: The downloaded firmware is validated but the device continues running from the current partition. Partition switching will be handled in a future phase (coordinated reboot).
 
+**Downgrade prevention**: After download completion, the firmware version is compared with the current version. Downgrades (older versions) are rejected to prevent security issues and feature loss. See [OTA Downgrade Prevention](ota-downgrade-prevention.md) for details.
+
 ## Architecture
 
 ### Data Flow

@@ -17,6 +17,7 @@
 #include "mesh_gpio.h"
 #include "light_neopixel.h"
 #include "mesh_version.h"
+#include "mesh_ota.h"
 
 void app_main(void)
 {
@@ -45,6 +46,14 @@ void app_main(void)
         const char *version = mesh_version_get_string();
         ESP_LOGI("mesh_main", "[STARTUP] Firmware version: %s", version);
     }
+
+    /* Check for rollback before starting mesh (after NVS and version init) */
+    esp_err_t rollback_err = mesh_ota_check_rollback();
+    if (rollback_err != ESP_OK && rollback_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW("mesh_main", "[STARTUP] Rollback check failed: %s", esp_err_to_name(rollback_err));
+        /* Continue boot even if rollback check fails (shouldn't happen, but be safe) */
+    }
+    /* Note: If rollback is needed, mesh_ota_check_rollback() will reboot and never return */
 
     /* Initialize root-specific functionality (safe to call on all nodes, checks internally) */
     ESP_ERROR_CHECK(mesh_root_init());

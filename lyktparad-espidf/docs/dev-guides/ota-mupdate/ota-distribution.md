@@ -30,6 +30,8 @@ The Mesh Firmware Distribution Protocol enables the root node to distribute down
 
 **Golden Image pattern**: Root downloads firmware once and distributes it to all nodes, minimizing bandwidth usage.
 
+**Downgrade prevention**: Before distribution starts, the firmware version is verified to ensure it's not older than the current version. See [OTA Downgrade Prevention](ota-downgrade-prevention.md) for details.
+
 > **For Users**: See [User Guide](../../user-guides/ota-updates.md) for usage instructions.
 
 ## Architecture

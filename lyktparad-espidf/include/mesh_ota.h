@@ -289,4 +289,87 @@ esp_err_t mesh_ota_initiate_coordinated_reboot(uint16_t timeout_seconds, uint16_
  */
 esp_err_t mesh_ota_cleanup_on_disconnect(void);
 
+/**
+ * Set rollback flag in NVS
+ *
+ * Sets the "ota_rollback" flag in NVS to indicate that a rollback may be needed
+ * if mesh connection fails after firmware update. This flag is checked on boot
+ * to determine if rollback to previous firmware partition is needed.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_ota_set_rollback_flag(void);
+
+/**
+ * Clear rollback flag in NVS
+ *
+ * Clears the "ota_rollback" flag in NVS, indicating that rollback is no longer needed.
+ * This should be called after successful mesh connection after firmware update.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_ota_clear_rollback_flag(void);
+
+/**
+ * Get rollback flag status from NVS
+ *
+ * Reads the "ota_rollback" flag from NVS to determine if rollback is needed.
+ *
+ * @param rollback_needed Pointer to boolean to store flag status
+ * @return ESP_OK on success, error code on failure (rollback_needed will be false on error)
+ */
+esp_err_t mesh_ota_get_rollback_flag(bool *rollback_needed);
+
+/**
+ * Check for rollback and perform rollback if needed
+ *
+ * Checks NVS for rollback flag on boot. If flag is set, switches to previous
+ * OTA partition and reboots. This function should be called early in boot sequence,
+ * after NVS initialization but before mesh start.
+ *
+ * @return ESP_OK if no rollback needed or rollback completed, error code on failure
+ */
+esp_err_t mesh_ota_check_rollback(void);
+
+/**
+ * Start rollback timeout monitoring task
+ *
+ * Starts a task that monitors mesh connection status for a timeout period (5 minutes).
+ * If mesh connection fails during the timeout, the system will rollback again.
+ * This should be called after clearing the rollback flag on successful mesh connection.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_ota_start_rollback_timeout(void);
+
+/**
+ * Stop rollback timeout monitoring task
+ *
+ * Stops and deletes the rollback timeout monitoring task. This should be called
+ * when rollback monitoring is no longer needed.
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t mesh_ota_stop_rollback_timeout(void);
+
+/**
+ * Check if firmware in partition is a downgrade
+ *
+ * Extracts version string from the specified firmware partition and compares it
+ * with the current firmware version. Returns an error if the partition contains
+ * firmware with an older version than the current firmware.
+ *
+ * This function is used at various checkpoints in the OTA flow to prevent
+ * downgrades: after download completion, before distribution start, and before
+ * leaf node reboot.
+ *
+ * @param partition Pointer to the firmware partition to check
+ * @return ESP_OK if version is same or newer (upgrade/same version allowed)
+ * @return ESP_ERR_INVALID_ARG if partition is NULL, version extraction fails, or version comparison fails
+ * @return ESP_ERR_INVALID_VERSION if downgrade detected (partition version < current version)
+ *         Note: ESP_ERR_INVALID_VERSION is defined as ESP_ERR_INVALID_ARG, but callers should check
+ *         for ESP_ERR_INVALID_VERSION specifically to distinguish downgrades from other errors
+ */
+esp_err_t mesh_ota_check_downgrade(const esp_partition_t *partition);
+
 #endif /* __MESH_OTA_H__ */

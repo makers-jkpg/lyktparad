@@ -10,8 +10,9 @@
 4. [Understanding OTA Partitions](#understanding-ota-partitions)
 5. [Preparing for Updates](#preparing-for-updates)
 6. [Performing Updates](#performing-updates)
-7. [Troubleshooting](#troubleshooting)
-8. [FAQ](#faq)
+7. [Automatic Rollback Mechanism](#automatic-rollback-mechanism)
+8. [Troubleshooting](#troubleshooting)
+9. [FAQ](#faq)
 
 ## Introduction
 
@@ -25,7 +26,8 @@ Over-The-Air (OTA) firmware updates allow you to update the firmware on your mes
 - Distribute firmware to all mesh nodes automatically
 - Deploy bug fixes and new features without physical access
 - Maintain version consistency across all nodes
-- Roll back to previous firmware version if needed (when implemented)
+- **Automatic rollback** to previous firmware version if mesh connection fails after update
+- **Automatic downgrade prevention** to prevent installing older firmware versions
 - Check current firmware version via web interface or serial logs
 - Monitor download and distribution progress in real-time
 
@@ -41,6 +43,8 @@ The OTA system is currently implemented with the following features:
 - **Mesh firmware distribution** - Root node distributes firmware to all leaf nodes
 - **Distribution progress tracking** - Monitor distribution to all nodes via API
 - **Coordinated reboot** - Simultaneous reboot of all mesh nodes after firmware update
+- **Automatic rollback** - Automatic reversion to previous firmware if mesh connection fails after update
+- **Downgrade prevention** - Automatic rejection of firmware versions older than current version
 
 ## Prerequisites
 
@@ -475,6 +479,34 @@ curl -X POST http://<root-node-ip>/api/ota/reboot \
 - Ensure sufficient flash memory (at least 4MB total)
 - Try downloading a smaller firmware binary
 
+### Rollback Issues
+
+**Problem**: Rollback triggered unexpectedly after successful update.
+
+**Solutions**:
+- Check mesh network connectivity (verify network is stable and accessible)
+- Verify firmware compatibility with mesh network configuration
+- Check serial logs for "Rollback flag detected" messages to understand why rollback was triggered
+- Ensure mesh connection is established within 5 minutes after reboot
+- Review network conditions (very slow networks might trigger rollback unnecessarily)
+
+**Problem**: Rollback not working when expected.
+
+**Solutions**:
+- Verify both OTA partitions (app0 and app1) are valid and contain firmware
+- Check serial logs for rollback-related error messages
+- Verify rollback attempt limit hasn't been exceeded (check for "Rollback attempt limit exceeded" messages)
+- Ensure NVS storage is functioning correctly
+- Check that rollback flag is set before reboot (check logs for "Rollback flag set before coordinated reboot")
+
+**Problem**: Device continuously rebooting (infinite rollback loop).
+
+**Solutions**:
+- Check serial logs for "Rollback attempt limit exceeded" message (system should stop after 3 attempts)
+- Verify mesh network is operational and accessible
+- Check for firmware compatibility issues that prevent mesh connection
+- If rollback loop persists, manually reflash firmware using physical access
+
 ## FAQ
 
 ### Q: What is the current firmware version?
@@ -483,11 +515,13 @@ A: The current firmware version is displayed in serial logs during boot. Look fo
 
 ### Q: Can I downgrade to an older firmware version?
 
-A: The version management system prevents downgrades by default. Only same or newer versions are allowed. This prevents accidentally installing older firmware with known issues.
+A: No, downgrades are automatically prevented by the OTA system. When you attempt to download, distribute, or install firmware with an older version number, the operation is rejected. Only the same version (for re-installation) or newer versions are allowed. This prevents accidentally installing older firmware that might have security vulnerabilities or missing features.
+
+If you need to downgrade for testing or recovery purposes, you would need to manually flash the older firmware using a physical connection to the device.
 
 ### Q: What happens if an OTA update fails?
 
-A: When fully implemented, the system will include rollback mechanisms. If an update fails or the device can't connect to the mesh after updating, it will automatically roll back to the previous firmware version.
+A: The system includes automatic rollback mechanisms. If a device can't connect to the mesh network after updating to new firmware, it will automatically roll back to the previous working firmware version. The rollback happens automatically without user intervention. See the [Automatic Rollback Mechanism](#automatic-rollback-mechanism) section for more details.
 
 ### Q: How much flash space is needed for OTA updates?
 
@@ -558,6 +592,18 @@ A: If some nodes are not ready when the timeout expires, the reboot process fail
 ### Q: Can leaf nodes request updates?
 
 A: Yes, leaf nodes can send an OTA_REQUEST message to the root node to request a firmware update. If firmware is available and distribution is not already in progress, the root node will start distributing firmware to all nodes.
+
+### Q: What happens if I try to install an older firmware version?
+
+A: The OTA system will reject the update at multiple checkpoints. If you attempt to download older firmware, the download will fail with a "Downgrade prevented" error. If older firmware somehow gets into the system, distribution and reboot operations will also reject it. The system will log the current and attempted versions so you can see what happened.
+
+### Q: Why is downgrade prevention important?
+
+A: Downgrade prevention protects your system from:
+- Security vulnerabilities in older firmware versions
+- Loss of features that were added in newer versions
+- Configuration incompatibilities between old and new firmware
+- Accidental installation of the wrong firmware version
 
 ---
 

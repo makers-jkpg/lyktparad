@@ -28,6 +28,8 @@ The Leaf Node OTA Handler enables leaf nodes to receive firmware blocks from the
 
 **Coordinated reboot**: All nodes reboot simultaneously after verifying firmware readiness, ensuring version consistency across the mesh network.
 
+**Downgrade prevention**: Before rebooting, leaf nodes verify the firmware version is not older than the current version, providing a final safety check. See [OTA Downgrade Prevention](ota-downgrade-prevention.md) for details.
+
 > **For Users**: See [User Guide](../../user-guides/ota-updates.md) for usage instructions.
 
 ## Architecture

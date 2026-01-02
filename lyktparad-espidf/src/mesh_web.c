@@ -1647,6 +1647,13 @@ static esp_err_t api_ota_download_post_handler(httpd_req_t *req)
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
         httpd_resp_send(req, "{\"success\":true}", -1);
         return ESP_OK;
+    } else if (err == ESP_ERR_INVALID_VERSION) {
+        /* Downgrade detected - return 409 Conflict */
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Downgrade prevented: Firmware version is older than current version\"}", -1);
+        return ESP_FAIL;
     } else {
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
@@ -1766,6 +1773,13 @@ static esp_err_t api_ota_distribute_post_handler(httpd_req_t *req)
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
         httpd_resp_send(req, "{\"success\":true}", -1);
         return ESP_OK;
+    } else if (err == ESP_ERR_INVALID_VERSION) {
+        /* Downgrade detected - return 409 Conflict */
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Downgrade prevented: Firmware version is older than current version\"}", -1);
+        return ESP_FAIL;
     } else {
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");

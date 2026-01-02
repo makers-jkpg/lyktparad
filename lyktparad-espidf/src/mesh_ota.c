@@ -22,8 +22,10 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_partition.h"
+#include "esp_app_desc.h"
 #include "esp_mesh.h"
 #include "esp_mac.h"
+#include "nvs.h"
 #include <string.h>
 #include <strings.h>  /* for strncasecmp */
 #include <stdlib.h>   /* for malloc/free */
@@ -276,6 +278,22 @@ static esp_err_t download_firmware_https(const char *url)
     esp_https_ota_finish(s_https_ota_handle);
     s_https_ota_handle = NULL;
 
+    /* Check for downgrade after HTTPS OTA completion */
+    if (err == ESP_OK && s_update_partition != NULL) {
+        esp_err_t downgrade_err = mesh_ota_check_downgrade(s_update_partition);
+        if (downgrade_err == ESP_ERR_INVALID_VERSION) {
+            /* Downgrade detected - note: partition is already finalized by esp_https_ota_finish() */
+            /* Distribution will also check and reject the downgrade */
+            ESP_LOGE(TAG, "Downgrade detected after HTTPS download completion");
+            return ESP_ERR_INVALID_VERSION;
+        } else if (downgrade_err != ESP_OK) {
+            /* Other error during downgrade check */
+            ESP_LOGE(TAG, "Downgrade check failed: %s", esp_err_to_name(downgrade_err));
+            return downgrade_err;
+        }
+        /* Downgrade check passed - version is same or newer */
+    }
+
     return err;
 }
 
@@ -454,6 +472,26 @@ static esp_err_t download_firmware_http(const char *url)
             s_ota_handle = 0;
         } else {
             ESP_LOGI(TAG, "HTTP OTA download completed successfully: %zu bytes", total_bytes_read);
+            
+            /* Check for downgrade before marking download as complete */
+            if (s_update_partition != NULL) {
+                esp_err_t downgrade_err = mesh_ota_check_downgrade(s_update_partition);
+                if (downgrade_err == ESP_ERR_INVALID_VERSION) {
+                    /* Downgrade detected - abort and clean up */
+                    ESP_LOGE(TAG, "Downgrade detected after download, aborting OTA");
+                    esp_ota_abort(s_ota_handle);
+                    s_ota_handle = 0;
+                    return ESP_ERR_INVALID_VERSION;
+                } else if (downgrade_err != ESP_OK) {
+                    /* Other error during downgrade check (e.g., cannot read version) */
+                    ESP_LOGE(TAG, "Downgrade check failed: %s", esp_err_to_name(downgrade_err));
+                    esp_ota_abort(s_ota_handle);
+                    s_ota_handle = 0;
+                    return downgrade_err;
+                }
+                /* Downgrade check passed - version is same or newer */
+            }
+            
             s_ota_progress = 1.0f;
         }
     } else {
@@ -509,6 +547,68 @@ const esp_partition_t* mesh_ota_get_update_partition(void)
         return NULL;
     }
     return s_update_partition;
+}
+
+/*******************************************************
+ *                Downgrade Prevention
+ *******************************************************/
+
+/* Note: ESP_ERR_INVALID_VERSION is defined as ESP_ERR_INVALID_ARG for downgrade detection
+ * This is because ESP-IDF doesn't define ESP_ERR_INVALID_VERSION.
+ * Callers should check for ESP_ERR_INVALID_VERSION specifically to detect downgrades.
+ * Other errors (NULL partition, read failures) also return ESP_ERR_INVALID_ARG directly.
+ */
+#define ESP_ERR_INVALID_VERSION  ESP_ERR_INVALID_ARG  /* Downgrade detected - reuse ESP_ERR_INVALID_ARG */
+
+esp_err_t mesh_ota_check_downgrade(const esp_partition_t *partition)
+{
+    if (partition == NULL) {
+        ESP_LOGE(TAG, "Downgrade check failed: partition is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Get partition description to extract version */
+    esp_app_desc_t app_desc;
+    esp_err_t err = esp_ota_get_partition_description(partition, &app_desc);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get partition description for downgrade check: %s", esp_err_to_name(err));
+        /* Fail-safe: reject if we cannot read version */
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Get current firmware version (compile-time version is source of truth) */
+    const char *current_version = mesh_version_get_string();
+    if (current_version == NULL) {
+        ESP_LOGE(TAG, "Failed to get current firmware version");
+        /* Fail-safe: reject if we cannot get current version */
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Compare versions */
+    int comparison_result;
+    err = mesh_version_compare(app_desc.version, current_version, &comparison_result);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to compare versions (partition: %s, current: %s): %s",
+                 app_desc.version, current_version, esp_err_to_name(err));
+        /* Fail-safe: reject if comparison fails */
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Check if downgrade (result < 0 means partition version is older) */
+    if (comparison_result < 0) {
+        ESP_LOGE(TAG, "Downgrade prevented: Current version %s, attempted version %s",
+                 current_version, app_desc.version);
+        return ESP_ERR_INVALID_VERSION;  /* Downgrade detected */
+    }
+
+    /* Same or newer version - OK to proceed */
+    if (comparison_result == 0) {
+        ESP_LOGI(TAG, "Version check: Same version %s (re-installation allowed)", current_version);
+    } else {
+        ESP_LOGI(TAG, "Version check: Upgrade from %s to %s", current_version, app_desc.version);
+    }
+
+    return ESP_OK;
 }
 
 bool mesh_ota_is_downloading(void)
@@ -1065,6 +1165,17 @@ esp_err_t mesh_ota_distribute_firmware(void)
         ESP_LOGE(TAG, "No update partition available");
         return ESP_ERR_NOT_FOUND;
     }
+
+    /* Check for downgrade before starting distribution */
+    esp_err_t downgrade_err = mesh_ota_check_downgrade(update_part);
+    if (downgrade_err == ESP_ERR_INVALID_VERSION) {
+        ESP_LOGE(TAG, "Downgrade detected, distribution rejected");
+        return ESP_ERR_INVALID_VERSION;
+    } else if (downgrade_err != ESP_OK) {
+        ESP_LOGE(TAG, "Downgrade check failed: %s", esp_err_to_name(downgrade_err));
+        return downgrade_err;
+    }
+    /* Downgrade check passed - version is same or newer */
 
     /* Get firmware size from partition */
     /* For distribution, we use the full partition size as firmware may have been written to it */
@@ -1763,6 +1874,47 @@ esp_err_t mesh_ota_handle_leaf_message(mesh_addr_t *from, uint8_t *data, uint16_
             return ESP_ERR_INVALID_STATE;
         }
 
+        /* Check for downgrade before allowing reboot */
+        esp_err_t downgrade_err = mesh_ota_check_downgrade(s_leaf_update_partition);
+        if (downgrade_err == ESP_ERR_INVALID_VERSION) {
+            ESP_LOGE(TAG, "Downgrade detected, reboot rejected");
+            /* Send error ACK to root node indicating reboot rejected */
+            mesh_ota_ack_t ack;
+            ack.cmd = MESH_CMD_OTA_ACK;
+            ack.block_number = 0;  /* Not used for reboot ACK */
+            ack.status = 1;  /* Error status */
+            
+            mesh_data_t data;
+            data.data = (uint8_t *)&ack;
+            data.size = sizeof(ack);
+            data.proto = MESH_PROTO_BIN;
+            data.tos = MESH_TOS_P2P;
+            
+            mesh_addr_t root_addr;
+            esp_err_t send_err = esp_mesh_get_parent_bssid(&root_addr);
+            if (send_err != ESP_OK) {
+                ESP_LOGW(TAG, "Could not get parent address for error ACK");
+                memset(root_addr.addr, 0xFF, 6);  /* Broadcast */
+            }
+            
+            esp_mesh_send(&root_addr, &data, MESH_DATA_P2P, NULL, 0);
+            return ESP_ERR_INVALID_VERSION;
+        } else if (downgrade_err != ESP_OK) {
+            ESP_LOGE(TAG, "Downgrade check failed: %s", esp_err_to_name(downgrade_err));
+            return downgrade_err;
+        }
+        /* Downgrade check passed - version is same or newer */
+
+        /* Set rollback flag before reboot */
+        /* This flag will be checked on next boot to rollback if mesh connection fails */
+        esp_err_t rollback_flag_err = mesh_ota_set_rollback_flag();
+        if (rollback_flag_err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to set rollback flag before reboot: %s", esp_err_to_name(rollback_flag_err));
+            /* Continue with reboot even if flag setting fails (non-critical) */
+        } else {
+            ESP_LOGI(TAG, "Rollback flag set before reboot");
+        }
+
         /* Set boot partition */
         esp_err_t err = esp_ota_set_boot_partition(s_leaf_update_partition);
         if (err != ESP_OK) {
@@ -2031,6 +2183,16 @@ esp_err_t mesh_ota_initiate_coordinated_reboot(uint16_t timeout_seconds, uint16_
 
     ESP_LOGI(TAG, "All %d nodes ready for reboot", s_reboot_nodes_ready);
 
+    /* Set rollback flag before coordinated reboot */
+    /* This flag will be checked on next boot to rollback if mesh connection fails */
+    esp_err_t rollback_flag_err = mesh_ota_set_rollback_flag();
+    if (rollback_flag_err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to set rollback flag before reboot: %s", esp_err_to_name(rollback_flag_err));
+        /* Continue with reboot even if flag setting fails (non-critical) */
+    } else {
+        ESP_LOGI(TAG, "Rollback flag set before coordinated reboot");
+    }
+
     /* Verify root node can reboot before sending REBOOT to leaf nodes */
     /* This prevents leaf nodes from rebooting if root node cannot reboot */
     if (s_update_partition != NULL) {
@@ -2140,5 +2302,344 @@ esp_err_t mesh_ota_initiate_coordinated_reboot(uint16_t timeout_seconds, uint16_
         ESP_LOGW(TAG, "Root node: no update partition available, skipping reboot");
     }
 
+    return ESP_OK;
+}
+
+/*******************************************************
+ *                Rollback Flag Management
+ *******************************************************/
+
+#define MESH_OTA_ROLLBACK_NAMESPACE  "mesh"
+#define MESH_OTA_ROLLBACK_KEY        "ota_rollback"
+#define MESH_OTA_ROLLBACK_COUNT_KEY  "ota_rollback_count"
+#define MESH_OTA_ROLLBACK_MAX_ATTEMPTS 3
+
+esp_err_t mesh_ota_set_rollback_flag(void)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t err;
+
+    /* Open NVS namespace */
+    err = nvs_open(MESH_OTA_ROLLBACK_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS namespace for rollback flag: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Set rollback flag to 1 */
+    err = nvs_set_u8(nvs_handle, MESH_OTA_ROLLBACK_KEY, 1);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set rollback flag: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    /* Reset rollback counter to 0 (this is first boot after update, counter will be incremented on failure) */
+    err = nvs_set_u8(nvs_handle, MESH_OTA_ROLLBACK_COUNT_KEY, 0);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to reset rollback counter: %s", esp_err_to_name(err));
+        /* Continue even if counter reset fails */
+    }
+
+    /* Commit changes */
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to commit rollback flag: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    ESP_LOGI(TAG, "Rollback flag set in NVS (counter reset to 0)");
+    nvs_close(nvs_handle);
+    return ESP_OK;
+}
+
+esp_err_t mesh_ota_clear_rollback_flag(void)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t err;
+
+    /* Open NVS namespace */
+    err = nvs_open(MESH_OTA_ROLLBACK_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS namespace for rollback flag: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Erase rollback flag */
+    err = nvs_erase_key(nvs_handle, MESH_OTA_ROLLBACK_KEY);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGE(TAG, "Failed to erase rollback flag: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    /* Also clear rollback attempt counter */
+    nvs_erase_key(nvs_handle, MESH_OTA_ROLLBACK_COUNT_KEY);  /* Ignore errors for counter - reset to 0 */
+
+    /* Commit changes */
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to commit rollback flag clear: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    ESP_LOGI(TAG, "Rollback flag cleared from NVS");
+    nvs_close(nvs_handle);
+    return ESP_OK;
+}
+
+esp_err_t mesh_ota_get_rollback_flag(bool *rollback_needed)
+{
+    if (!rollback_needed) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t nvs_handle;
+    esp_err_t err;
+
+    /* Open NVS namespace */
+    err = nvs_open(MESH_OTA_ROLLBACK_NAMESPACE, NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS namespace for rollback flag: %s", esp_err_to_name(err));
+        *rollback_needed = false;
+        return err;
+    }
+
+    /* Read rollback flag */
+    uint8_t flag_value = 0;
+    err = nvs_get_u8(nvs_handle, MESH_OTA_ROLLBACK_KEY, &flag_value);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        /* Flag not found, rollback not needed */
+        *rollback_needed = false;
+        nvs_close(nvs_handle);
+        return ESP_OK;
+    } else if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read rollback flag: %s", esp_err_to_name(err));
+        *rollback_needed = false;
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    /* Flag exists, check value */
+    *rollback_needed = (flag_value == 1);
+    nvs_close(nvs_handle);
+    return ESP_OK;
+}
+
+/*******************************************************
+ *                Rollback Check Implementation
+ *******************************************************/
+
+/* Rollback timeout task state */
+static TaskHandle_t s_rollback_timeout_task = NULL;
+
+esp_err_t mesh_ota_check_rollback(void)
+{
+    bool rollback_needed = false;
+    esp_err_t err = mesh_ota_get_rollback_flag(&rollback_needed);
+    if (err != ESP_OK) {
+        /* On error, assume rollback not needed and continue normal boot */
+        ESP_LOGW(TAG, "Failed to read rollback flag, assuming no rollback needed: %s", esp_err_to_name(err));
+        return ESP_OK;
+    }
+
+    if (!rollback_needed) {
+        /* No rollback needed, normal boot */
+        return ESP_OK;
+    }
+
+    /* Rollback flag is set - check rollback attempt counter to prevent infinite loops */
+    nvs_handle_t nvs_handle;
+    err = nvs_open(MESH_OTA_ROLLBACK_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS for rollback counter: %s", esp_err_to_name(err));
+        /* Clear rollback flag to prevent infinite loops */
+        mesh_ota_clear_rollback_flag();
+        return err;
+    }
+
+    uint8_t rollback_count = 0;
+    err = nvs_get_u8(nvs_handle, MESH_OTA_ROLLBACK_COUNT_KEY, &rollback_count);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGE(TAG, "Failed to read rollback counter: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        /* Clear rollback flag to prevent infinite loops */
+        mesh_ota_clear_rollback_flag();
+        return err;
+    }
+
+    /* Check if we've exceeded maximum rollback attempts */
+    if (rollback_count >= MESH_OTA_ROLLBACK_MAX_ATTEMPTS) {
+        ESP_LOGE(TAG, "Rollback attempt limit (%d) exceeded, clearing rollback flag to prevent infinite loop",
+                 MESH_OTA_ROLLBACK_MAX_ATTEMPTS);
+        /* Clear rollback flag and counter to prevent infinite loops */
+        nvs_erase_key(nvs_handle, MESH_OTA_ROLLBACK_KEY);
+        nvs_erase_key(nvs_handle, MESH_OTA_ROLLBACK_COUNT_KEY);
+        nvs_commit(nvs_handle);
+        nvs_close(nvs_handle);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* If counter is 0, this is the first boot after update - monitor mesh connection, don't rollback yet */
+    /* The timeout task will handle rollback if mesh connection fails */
+    if (rollback_count == 0) {
+        ESP_LOGI(TAG, "Rollback flag detected on first boot after update, will monitor mesh connection (counter: 0)");
+        nvs_close(nvs_handle);
+        return ESP_OK;  /* Continue normal boot, timeout task will handle monitoring */
+    }
+
+    /* Counter > 0 means we've already tried and mesh failed - rollback now */
+    /* Increment counter for this rollback attempt */
+    rollback_count++;
+    err = nvs_set_u8(nvs_handle, MESH_OTA_ROLLBACK_COUNT_KEY, rollback_count);
+    if (err == ESP_OK) {
+        nvs_commit(nvs_handle);
+    }
+    nvs_close(nvs_handle);
+
+    ESP_LOGI(TAG, "Rollback flag detected after mesh connection failure, attempting rollback (attempt %d/%d)", rollback_count, MESH_OTA_ROLLBACK_MAX_ATTEMPTS);
+
+    /* Get current boot partition */
+    const esp_partition_t *current_boot = esp_ota_get_running_partition();
+    if (current_boot == NULL) {
+        ESP_LOGE(TAG, "Failed to get current boot partition, cannot rollback");
+        mesh_ota_clear_rollback_flag();
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Get other OTA partition (the one we should rollback to) */
+    const esp_partition_t *rollback_partition = esp_ota_get_next_update_partition(NULL);
+    if (rollback_partition == NULL) {
+        ESP_LOGE(TAG, "Failed to get rollback partition, cannot rollback");
+        mesh_ota_clear_rollback_flag();
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Verify rollback partition is different from current boot partition */
+    if (rollback_partition->address == current_boot->address) {
+        ESP_LOGW(TAG, "Rollback partition is same as current boot partition, clearing rollback flag");
+        mesh_ota_clear_rollback_flag();
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Rolling back from partition at 0x%08x to partition at 0x%08x",
+             current_boot->address, rollback_partition->address);
+
+    /* Switch boot partition */
+    err = esp_ota_set_boot_partition(rollback_partition);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set rollback boot partition: %s", esp_err_to_name(err));
+        mesh_ota_clear_rollback_flag();
+        return err;
+    }
+
+    /* Verify partition switch succeeded */
+    const esp_partition_t *new_boot = esp_ota_get_boot_partition();
+    if (new_boot == NULL || new_boot->address != rollback_partition->address) {
+        ESP_LOGE(TAG, "Rollback partition switch verification failed");
+        mesh_ota_clear_rollback_flag();
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(TAG, "Rollback partition set successfully, rebooting...");
+    vTaskDelay(pdMS_TO_TICKS(1000));  /* Give time for log messages */
+    esp_restart();
+    /* Never returns */
+    return ESP_OK;
+}
+
+/*******************************************************
+ *                Rollback Timeout Task
+ *******************************************************/
+
+#define MESH_OTA_ROLLBACK_TIMEOUT_MS  300000  /* 5 minutes */
+
+static void rollback_timeout_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "Rollback timeout task started, monitoring mesh connection for %d ms", MESH_OTA_ROLLBACK_TIMEOUT_MS);
+
+    /* Wait for timeout duration */
+    vTaskDelay(pdMS_TO_TICKS(MESH_OTA_ROLLBACK_TIMEOUT_MS));
+
+    /* After timeout, check if mesh is still connected */
+    bool mesh_connected = mesh_common_is_running();
+    
+    if (mesh_connected) {
+        /* Mesh is connected after timeout period - connection is stable, clear rollback flag */
+        ESP_LOGI(TAG, "Mesh connection stable after rollback timeout period, clearing rollback flag");
+        esp_err_t clear_err = mesh_ota_clear_rollback_flag();
+        if (clear_err == ESP_OK) {
+            ESP_LOGI(TAG, "Rollback flag cleared after successful mesh connection");
+        } else {
+            ESP_LOGW(TAG, "Failed to clear rollback flag: %s", esp_err_to_name(clear_err));
+        }
+        s_rollback_timeout_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    /* Mesh is not connected after timeout - connection failed, increment counter and keep flag set */
+    /* The flag and incremented counter will trigger rollback on next boot */
+    ESP_LOGW(TAG, "Mesh connection failed after rollback timeout (%d ms), incrementing rollback counter", MESH_OTA_ROLLBACK_TIMEOUT_MS);
+    
+    /* Increment rollback counter so next boot knows to rollback */
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(MESH_OTA_ROLLBACK_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    if (err == ESP_OK) {
+        uint8_t rollback_count = 0;
+        nvs_get_u8(nvs_handle, MESH_OTA_ROLLBACK_COUNT_KEY, &rollback_count);  /* Ignore errors */
+        rollback_count++;
+        nvs_set_u8(nvs_handle, MESH_OTA_ROLLBACK_COUNT_KEY, rollback_count);
+        nvs_commit(nvs_handle);
+        nvs_close(nvs_handle);
+        ESP_LOGW(TAG, "Rollback counter incremented to %d, rollback will happen on next boot", rollback_count);
+    }
+    
+    /* Flag remains set, counter incremented - next boot will trigger rollback */
+    s_rollback_timeout_task = NULL;
+    vTaskDelete(NULL);
+}
+
+esp_err_t mesh_ota_start_rollback_timeout(void)
+{
+    if (s_rollback_timeout_task != NULL) {
+        /* Timeout task already running */
+        ESP_LOGW(TAG, "Rollback timeout task already running");
+        return ESP_OK;
+    }
+
+    /* Create timeout task */
+    BaseType_t ret = xTaskCreate(
+        rollback_timeout_task,
+        "rollback_timeout",
+        4096,  /* Stack size */
+        NULL,  /* Parameters */
+        5,     /* Priority (medium) */
+        &s_rollback_timeout_task
+    );
+
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create rollback timeout task");
+        return ESP_ERR_NO_MEM;
+    }
+
+    ESP_LOGI(TAG, "Rollback timeout task started");
+    return ESP_OK;
+}
+
+esp_err_t mesh_ota_stop_rollback_timeout(void)
+{
+    if (s_rollback_timeout_task == NULL) {
+        /* No timeout task running */
+        return ESP_OK;
+    }
+
+    /* Delete timeout task */
+    vTaskDelete(s_rollback_timeout_task);
+    s_rollback_timeout_task = NULL;
+
+    ESP_LOGI(TAG, "Rollback timeout task stopped");
     return ESP_OK;
 }
