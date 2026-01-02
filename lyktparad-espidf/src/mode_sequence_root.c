@@ -20,6 +20,7 @@
 #include "esp_mac.h"
 #include "esp_timer.h"
 #include "mesh_common.h"
+#include "mesh_commands.h"
 #include "light_neopixel.h"
 #include "node_sequence.h"
 

@@ -22,6 +22,7 @@
 #include "mesh_common.h"
 #include "mesh_root.h"
 #include "mesh_web.h"
+#include "mesh_commands.h"
 #include "light_neopixel.h"
 #include "light_common_cathode.h"
 #include "mesh_config.h"

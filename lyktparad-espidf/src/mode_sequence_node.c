@@ -16,6 +16,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "mesh_commands.h"
 #include "light_neopixel.h"
 #include "node_sequence.h"
 

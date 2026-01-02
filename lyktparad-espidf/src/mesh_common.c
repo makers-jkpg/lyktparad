@@ -70,6 +70,7 @@
 #include "mesh_gpio.h"
 #include "driver/gpio.h"
 #include "mesh_device_config.h"
+#include "mesh_commands.h"
 #include "light_neopixel.h"
 #include "light_common_cathode.h"
 #include "mesh_ota.h"

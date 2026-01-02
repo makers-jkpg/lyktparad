@@ -18,6 +18,7 @@
 #include "esp_mesh.h"
 #include "mesh_common.h"
 #include "mesh_child.h"
+#include "mesh_commands.h"
 #include "light_neopixel.h"
 #include "node_sequence.h"
 #include "light_common_cathode.h"

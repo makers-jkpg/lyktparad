@@ -1,4 +1,8 @@
-/* Mesh Internal Communication Example
+/* Neopixel/Light Control Module Header
+ *
+ * This module provides neopixel (WS2812) LED strip control functionality for the mesh network.
+ * It includes functions for initializing LED strips, setting colors, and processing light control
+ * commands from the mesh network. Mesh protocol command definitions are provided via mesh_commands.h.
  *
  * This example code is in the Public Domain (or CC0 licensed, at your option.)
  *
@@ -34,26 +38,6 @@
 #define MESH_LIGHT_WARNING   (0xf9)
 #define MESH_LIGHT_WHITE     (0xf8)
 #define MESH_LIGHT_ORANGE    (0xf7)
-
-
-/* Mesh command prefixes - used to identify message types */
-#define  MESH_CMD_HEARTBEAT      (0x01)
-#define  MESH_CMD_LIGHT_ON_OFF   (0x02)
-#define  MESH_CMD_SET_RGB        (0x03)
-#define  MESH_CMD_SEQUENCE       (0x04)  /* Sequence command: 386 bytes total (1 byte command + 1 byte rhythm + 384 bytes color data) */
-#define  MESH_CMD_SEQUENCE_START (0x05)  /* Start sequence playback */
-#define  MESH_CMD_SEQUENCE_STOP  (0x06)  /* Stop sequence playback */
-#define  MESH_CMD_SEQUENCE_RESET (0x07)  /* Reset sequence pointer to 0 */
-#define  MESH_CMD_SEQUENCE_BEAT  (0x08)  /* Tempo synchronization beat (2 bytes: command + 1-byte pointer) */
-
-/* OTA/MUPDATE commands: Commands with prefix 0xF are reserved for OTA/update functionality */
-#define  MESH_CMD_OTA_REQUEST    (0xF0)  /* Leaf node requests firmware update */
-#define  MESH_CMD_OTA_START      (0xF1)  /* Root starts OTA distribution */
-#define  MESH_CMD_OTA_BLOCK      (0xF2)  /* Firmware block data */
-#define  MESH_CMD_OTA_ACK        (0xF3)  /* Block acknowledgment */
-#define  MESH_CMD_OTA_STATUS     (0xF4)  /* Update status query */
-#define  MESH_CMD_OTA_PREPARE_REBOOT (0xF5)  /* Prepare for coordinated reboot */
-#define  MESH_CMD_OTA_REBOOT     (0xF6)  /* Execute coordinated reboot */
 
 /*******************************************************
  *                Type Definitions

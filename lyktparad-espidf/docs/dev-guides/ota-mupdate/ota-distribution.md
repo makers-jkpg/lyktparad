@@ -61,13 +61,15 @@ Distribution Complete
 
 ### Command Protocol
 
-The protocol uses 5 mesh commands defined in `include/light_neopixel.h`:
+The protocol uses mesh commands defined in `include/mesh_commands.h`:
 
 - **MESH_CMD_OTA_REQUEST** (0xF0): Leaf node requests firmware update
 - **MESH_CMD_OTA_START** (0xF1): Root starts distribution with metadata
 - **MESH_CMD_OTA_BLOCK** (0xF2): Firmware block data with header
 - **MESH_CMD_OTA_ACK** (0xF3): Block acknowledgment from leaf node
 - **MESH_CMD_OTA_STATUS** (0xF4): Query distribution status
+- **MESH_CMD_OTA_PREPARE_REBOOT** (0xF5): Prepare for coordinated reboot
+- **MESH_CMD_OTA_REBOOT** (0xF6): Execute coordinated reboot
 
 **Note**: Commands with prefix 0xF are reserved for OTA/update functionality.
 

@@ -15,6 +15,7 @@
 #include "mesh_ota.h"
 #include "mesh_version.h"
 #include "mesh_common.h"
+#include "mesh_commands.h"
 #include "light_neopixel.h"
 #include "mesh_config.h"
 #include "esp_ota_ops.h"

@@ -357,13 +357,13 @@ Returns current firmware version.
 ### Build System Integration
 
 The module requires the following ESP-IDF components:
-- `esp_ota_ops`: For OTA partition operations
+- `app_update`: For OTA partition operations (provides `esp_ota_ops.h`)
 - `esp_https_ota`: For HTTPS downloads
 - `esp_http_client`: For HTTP downloads
 
 These are added to `CMakeLists.txt`:
 ```cmake
-REQUIRES led_strip esp_wifi esp_http_server esp_https_ota esp_http_client esp_ota_ops
+REQUIRES led_strip esp_wifi esp_http_server esp_https_ota esp_http_client app_update
 ```
 
 ## Testing
