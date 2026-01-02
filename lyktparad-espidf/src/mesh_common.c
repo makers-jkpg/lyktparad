@@ -67,8 +67,6 @@
 #include "esp_mesh_internal.h"
 #include "mesh_config.h"
 #include "mesh_common.h"
-#include "mesh_gpio.h"
-#include "driver/gpio.h"
 #include "mesh_device_config.h"
 #include "mesh_commands.h"
 #include "light_neopixel.h"
@@ -89,8 +87,6 @@ static uint8_t rx_buf[RX_SIZE] = { 0, };
 static bool is_running = true;
 static bool is_mesh_connected = false;
 static bool is_router_connected = false; /* Track router connection for root node */
-static bool is_mesh_node_forced = false; /* Track if GPIO forcing is active for mesh node (non-root) */
-static bool is_root_node_forced = false; /* Track if GPIO forcing is active for root node */
 static mesh_addr_t mesh_parent_addr;
 static int mesh_layer = -1;
 static esp_netif_t *netif_sta = NULL;
@@ -307,14 +303,6 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             }
         }
 
-        /* Check if forced root node has become non-root (violation of GPIO forcing) */
-        if (is_root_node_forced && !is_root) {
-            ESP_LOGE(MESH_TAG, "[GPIO ROOT FORCING] ERROR: Forced root node (GPIO %d=LOW) has become NON-ROOT NODE - this violates GPIO forcing configuration!", MESH_GPIO_FORCE_ROOT);
-            ESP_LOGE(MESH_TAG, "[GPIO ROOT FORCING] Rebooting device to enforce root node behavior...");
-            vTaskDelay(pdMS_TO_TICKS(1000)); /* Give time for log message to be sent */
-            esp_restart();
-        }
-
         /* Ensure LED shows unconnected state - check router connection for root */
         if (is_root) {
             /* Root node: LED base color indicates router connection status */
@@ -515,25 +503,7 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         }
         /* Turn LED back to unconnected state - check router connection for root */
         if (is_root) {
-            /* For forced root nodes: If router was connected, ensure root stays fixed
-             * and router connection is maintained. Parent disconnection can occur due to
-             * network issues, but router connection should persist (self-organization
-             * is enabled with select_parent=false to prevent router disconnection). */
-            if (is_root_node_forced && is_router_connected) {
-                /* Verify root is still fixed */
-                bool is_root_fixed = esp_mesh_is_root_fixed();
-                if (!is_root_fixed) {
-                    ESP_LOGW(MESH_TAG, "[ROOT ACTION] Parent disconnected - root became unfixed, re-fixing...");
-                    esp_err_t fix_err = esp_mesh_fix_root(true);
-                    if (fix_err != ESP_OK) {
-                        ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Failed to re-fix root: 0x%x", fix_err);
-                    } else {
-                        ESP_LOGI(MESH_TAG, "[ROOT ACTION] Root re-fixed successfully");
-                    }
-                }
-                /* Router connection should be maintained - LED stays GREEN if router still connected */
-                mesh_light_set_colour(MESH_LIGHT_GREEN);
-            } else if (is_router_connected) {
+            if (is_router_connected) {
                 mesh_light_set_colour(MESH_LIGHT_GREEN);
             } else {
                 mesh_light_set_colour(MESH_LIGHT_ORANGE);
@@ -553,22 +523,6 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
                  (mesh_layer == 2) ? "<layer2>" : "");
         ESP_LOGI(MESH_TAG, "[STATUS CHANGE] Layer: %d -> %d | Node Type: %s",
                  last_layer, mesh_layer, is_root_now ? "ROOT NODE" : "NON-ROOT NODE");
-
-        /* Check if forced mesh node has become root (violation of GPIO forcing) */
-        if (is_mesh_node_forced && is_root_now) {
-            ESP_LOGE(MESH_TAG, "[GPIO NODE FORCING] ERROR: Forced mesh node (GPIO %d=LOW) has become ROOT NODE - this violates GPIO forcing configuration!", MESH_GPIO_FORCE_MESH);
-            ESP_LOGE(MESH_TAG, "[GPIO NODE FORCING] Rebooting device to enforce mesh node behavior...");
-            vTaskDelay(pdMS_TO_TICKS(1000)); /* Give time for log message to be sent */
-            esp_restart();
-        }
-
-        /* Check if forced root node has become non-root (violation of GPIO forcing) */
-        if (is_root_node_forced && !is_root_now) {
-            ESP_LOGE(MESH_TAG, "[GPIO ROOT FORCING] ERROR: Forced root node (GPIO %d=LOW) has become NON-ROOT NODE - this violates GPIO forcing configuration!", MESH_GPIO_FORCE_ROOT);
-            ESP_LOGE(MESH_TAG, "[GPIO ROOT FORCING] Rebooting device to enforce root node behavior...");
-            vTaskDelay(pdMS_TO_TICKS(1000)); /* Give time for log message to be sent */
-            esp_restart();
-        }
 
         last_layer = mesh_layer;
         if (is_root_now && root_event_callback) {
@@ -610,14 +564,6 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "<MESH_EVENT_ROOT_SWITCH_ACK>layer:%d, parent:"MACSTR"", mesh_layer, MAC2STR(mesh_parent_addr.addr));
         ESP_LOGI(MESH_TAG, "[STATUS CHANGE] Root switch acknowledged - Node Type: %s",
                  is_root_now ? "ROOT NODE" : "NON-ROOT NODE");
-
-        /* Check if forced root node has become non-root (violation of GPIO forcing) */
-        if (is_root_node_forced && !is_root_now) {
-            ESP_LOGE(MESH_TAG, "[GPIO ROOT FORCING] ERROR: Forced root node (GPIO %d=LOW) has become NON-ROOT NODE after root switch - this violates GPIO forcing configuration!", MESH_GPIO_FORCE_ROOT);
-            ESP_LOGE(MESH_TAG, "[GPIO ROOT FORCING] Rebooting device to enforce root node behavior...");
-            vTaskDelay(pdMS_TO_TICKS(1000)); /* Give time for log message to be sent */
-            esp_restart();
-        }
 
         if (is_root_now && root_event_callback) {
             root_event_callback(arg, event_base, event_id, event_data);
@@ -748,95 +694,10 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "[STARTUP] IP address obtained - Node Type: %s",
                  is_root ? "ROOT NODE" : "NON-ROOT NODE");
 
-        ESP_LOGD(MESH_TAG, "[DEBUG] IP_EVENT_STA_GOT_IP received - is_root:%d, is_mesh_node_forced:%d, ip:" IPSTR,
-                 is_root ? 1 : 0, is_mesh_node_forced ? 1 : 0, IP2STR(&event->ip_info.ip));
-
-        /* Check if forced mesh node has become root (violation of GPIO forcing) */
-        if (is_mesh_node_forced && is_root) {
-            ESP_LOGE(MESH_TAG, "[GPIO NODE FORCING] ERROR: Forced mesh node (GPIO %d=LOW) has become ROOT NODE - this violates GPIO forcing configuration!", MESH_GPIO_FORCE_MESH);
-            ESP_LOGE(MESH_TAG, "[GPIO NODE FORCING] Rebooting device to enforce mesh node behavior...");
-            vTaskDelay(pdMS_TO_TICKS(1000)); /* Give time for log message to be sent */
-            esp_restart();
-        }
-
-        // #region agent log
-        ESP_LOGI(MESH_TAG, "[DEBUG HYP-5] IP_EVENT_STA_GOT_IP received - is_root:%d, is_root_node_forced:%d",
-                 is_root ? 1 : 0, is_root_node_forced ? 1 : 0);
-        // #endregion
-
         if (is_root) {
             /* Root node: router connected - set GREEN base color */
             is_router_connected = true;
             mesh_light_set_colour(MESH_LIGHT_GREEN);
-
-            /* Enable self-organization AFTER router connection is established
-             * This allows the root node to accept child connections.
-             * For fixed root nodes, we ensure the root stays fixed to prevent router disconnection. */
-            if (is_root_node_forced) {
-                // #region agent log
-                ESP_LOGI(MESH_TAG, "[DEBUG HYP-3] About to enable self-organization - is_root_fixed check");
-                // #endregion
-
-                /* Verify root is still fixed before enabling self-organization */
-                bool is_root_fixed = esp_mesh_is_root_fixed();
-                if (!is_root_fixed) {
-                    ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Root is not fixed! Re-fixing root before enabling self-organization...");
-                    esp_err_t fix_err = esp_mesh_fix_root(true);
-                    if (fix_err != ESP_OK) {
-                        ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Failed to re-fix root: 0x%x", fix_err);
-                    }
-                }
-
-                /* Small delay to ensure router connection is stable before enabling self-organization */
-                vTaskDelay(pdMS_TO_TICKS(100));
-
-                ESP_LOGI(MESH_TAG, "[ROOT ACTION] Router connected - enabling self-organization for child connections...");
-                /* For fixed root nodes: Use select_parent=false to enable self-organization
-                 * without causing the root to disconnect from router and search for a parent.
-                 * This allows child nodes to connect while maintaining router connection. */
-                esp_err_t self_org_err = esp_mesh_set_self_organized(true, false);
-
-                // #region agent log
-                ESP_LOGI(MESH_TAG, "[DEBUG HYP-3] esp_mesh_set_self_organized(true, false) result:0x%x", self_org_err);
-                // #endregion
-
-                if (self_org_err != ESP_OK) {
-                    ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Failed to enable self-organization: 0x%x", self_org_err);
-                } else {
-                    /* Verify root is still fixed after enabling self-organization */
-                    bool is_root_fixed_after = esp_mesh_is_root_fixed();
-                    if (!is_root_fixed_after) {
-                        ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Root became unfixed after enabling self-organization! Re-fixing...");
-                        esp_err_t fix_err = esp_mesh_fix_root(true);
-                        if (fix_err != ESP_OK) {
-                            ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Failed to re-fix root: 0x%x", fix_err);
-                        }
-                    }
-
-                    bool self_org_enabled = esp_mesh_get_self_organized();
-
-                    // #region agent log
-                    ESP_LOGI(MESH_TAG, "[DEBUG HYP-3] After self-org enable - is_root_fixed:%d, self_org_enabled:%d",
-                             is_root_fixed_after ? 1 : 0, self_org_enabled ? 1 : 0);
-                    // #endregion
-
-                    if (self_org_enabled) {
-                        ESP_LOGI(MESH_TAG, "[ROOT ACTION] Self-organization enabled - root node can now accept child connections");
-
-                        // #region agent log
-                        /* Log root node state for child connection debugging */
-                        uint8_t primary_channel = 0;
-                        wifi_second_chan_t second_channel = WIFI_SECOND_CHAN_NONE;
-                        esp_wifi_get_channel(&primary_channel, &second_channel);
-                        int routing_table_size = esp_mesh_get_routing_table_size();
-                        ESP_LOGI(MESH_TAG, "[DEBUG CHILD-CONN] Root ready for children - is_root_fixed:%d, self_org:%d, channel:%d, route_size:%d",
-                                 is_root_fixed_after ? 1 : 0, self_org_enabled ? 1 : 0, primary_channel, routing_table_size);
-                        // #endregion
-                    } else {
-                        ESP_LOGE(MESH_TAG, "[ROOT ACTION] ERROR: Self-organization enable failed verification");
-                    }
-                }
-            }
 
             if (root_ip_callback) {
                 root_ip_callback(arg, event_base, event_id, event_data);
@@ -849,13 +710,6 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
             /* Root node: router disconnected - set ORANGE */
             is_router_connected = false;
             mesh_light_set_colour(MESH_LIGHT_ORANGE);
-
-            /* Disable self-organization when router disconnects to prevent
-             * root from searching for a parent instead of reconnecting to router */
-            if (is_root_node_forced) {
-                ESP_LOGI(MESH_TAG, "[ROOT ACTION] Router disconnected - disabling self-organization to allow router reconnection...");
-                ESP_ERROR_CHECK(esp_mesh_set_self_organized(false, false));
-            }
         }
     }
 }
@@ -937,31 +791,14 @@ esp_err_t mesh_common_init(void)
     /* Reduced from 10 to 3 seconds for faster disconnection detection */
     ESP_ERROR_CHECK(esp_mesh_set_ap_assoc_expire(3));
 #endif
-    /* Apply GPIO-based root forcing before mesh starts */
-    /* Read GPIO pins directly to determine the desired behavior */
-    bool force_root = mesh_gpio_read_root_force();
-    int level_root = 1; /* Default to HIGH if GPIO not initialized */
-    int level_mesh = 1; /* Default to HIGH if GPIO not initialized */
-    if (mesh_gpio_is_initialized()) {
-        level_root = gpio_get_level(MESH_GPIO_FORCE_ROOT);
-        level_mesh = gpio_get_level(MESH_GPIO_FORCE_MESH);
-    }
-
+    /* Configure mesh settings - always use automatic root election */
     mesh_cfg_t cfg = MESH_INIT_CONFIG_DEFAULT();
     /* mesh ID */
     memcpy((uint8_t *) &cfg.mesh_id, MESH_ID, 6);
     /* router */
     cfg.channel = MESH_CONFIG_MESH_CHANNEL;
 
-    /* For root nodes: Override channel to 0 (auto-adapt) to match router channel immediately
-     * This prevents long delays when router channel differs from configured mesh channel */
-    if (force_root && cfg.channel != 0) {
-        ESP_LOGI(MESH_TAG, "[GPIO ROOT FORCING] Overriding mesh channel from %d to 0 (auto-adapt) for root node to match router channel", cfg.channel);
-        cfg.channel = 0;
-    }
-
-    /* Configure router for all nodes (required by esp_mesh_set_config)
-     * For forced mesh nodes, router connection will be prevented by disabling self-organization below */
+    /* Configure router for all nodes (required by esp_mesh_set_config) */
     cfg.router.ssid_len = strlen(MESH_CONFIG_ROUTER_SSID);
     memcpy((uint8_t *) &cfg.router.ssid, MESH_CONFIG_ROUTER_SSID, cfg.router.ssid_len);
     memcpy((uint8_t *) &cfg.router.password, MESH_CONFIG_ROUTER_PASSWORD,
@@ -980,140 +817,21 @@ esp_err_t mesh_common_init(void)
 
     /* Note: Channel switching is enabled by default in ESP-MESH. No explicit call needed. */
 
-    if (force_root) {
-        /* GPIO 5 LOW (and GPIO 4 HIGH): Force root node
-         * According to ESP-IDF documentation, when forcing root node:
-         * 1. Disable self-organized networking (allows manual configuration)
-         * 2. Enable fixed root setting (prevents automatic root election)
-         */
-        ESP_LOGI(MESH_TAG, "[GPIO ROOT FORCING] Configuring for root node (GPIO %d=LOW, GPIO %d=HIGH/floating)",
-                 MESH_GPIO_FORCE_ROOT, MESH_GPIO_FORCE_MESH);
-        /* For forcing root node, according to ESP-IDF documentation:
-         * 1. Enable self-organized networking (required for root to accept child connections)
-         *    - Even with fixed root, self-organization must be enabled for mesh AP to accept connections
-         * 2. Set device type to MESH_ROOT (explicitly declares this device as root)
-         * 3. Enable fixed root setting (prevents automatic root election)
-         */
-        ESP_LOGI(MESH_TAG, "[GPIO ROOT FORCING] Setting device type to MESH_ROOT...");
-        ESP_ERROR_CHECK(esp_mesh_set_type(MESH_ROOT));
-        ESP_LOGI(MESH_TAG, "[GPIO ROOT FORCING] Enabling fixed root...");
-        esp_err_t fix_root_err = esp_mesh_fix_root(true);
-        if (fix_root_err != ESP_OK) {
-            ESP_LOGE(MESH_TAG, "[GPIO ROOT FORCING] esp_mesh_fix_root(true) FAILED: %s (0x%x)", esp_err_to_name(fix_root_err), fix_root_err);
-        } else {
-            ESP_LOGI(MESH_TAG, "[GPIO ROOT FORCING] esp_mesh_fix_root(true) returned ESP_OK");
-            // Verify that root fixing actually took effect
-            bool is_root_fixed_after_call = esp_mesh_is_root_fixed();
-            if (!is_root_fixed_after_call) {
-                ESP_LOGW(MESH_TAG, "[GPIO ROOT FORCING] WARNING: esp_mesh_fix_root(true) returned ESP_OK, but esp_mesh_is_root_fixed() returns FALSE!");
-            } else {
-                ESP_LOGI(MESH_TAG, "[GPIO ROOT FORCING] Verified: esp_mesh_is_root_fixed() = TRUE after esp_mesh_fix_root(true)");
-            }
-        }
-        ESP_ERROR_CHECK(fix_root_err);
-        /* For fixed root nodes: Do NOT enable self-organization
-         * - Fixed root nodes can accept child connections without self-organization
-         * - Enabling self-organization causes the root to search for a parent, which interferes with router connection
-         * - The mesh AP will accept child connections automatically when the node is fixed as root */
-        ESP_LOGI(MESH_TAG, "[GPIO ROOT FORCING] Root node behavior forced via GPIO (GPIO %d=LOW) - type=MESH_ROOT, fixed root enabled (self-organization disabled for router connection)", MESH_GPIO_FORCE_ROOT);
-        is_root_node_forced = true; /* Mark that root node forcing is active */
-    } else if (mesh_gpio_is_initialized() && level_mesh == 0 && level_root != 0) {
-        /* GPIO 4 LOW (and GPIO 5 HIGH): Force mesh/child node - prevent root election
-         * To allow connection to parent mesh nodes, we:
-         * 1. Enable self-organization with parent selection (esp_mesh_set_self_organized(true, true))
-         *    - This allows the node to search for and connect to parent mesh nodes
-         *    - select_parent=true enables parent selection/search functionality
-         * 2. Set device type to MESH_LEAF to prevent root election
-         * 3. Release root fixing (ensures node can connect as child)
-         * Note: Router config must be set in mesh_cfg_t (required by esp_mesh_set_config),
-         * but the node will connect to a parent mesh node, not directly to the router.
-         */
-        ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Configuring for mesh node (GPIO %d=LOW, GPIO %d=HIGH/floating)",
-                 MESH_GPIO_FORCE_MESH, MESH_GPIO_FORCE_ROOT);
-
-        ESP_LOGD(MESH_TAG, "[DEBUG] Before mesh node forcing config - router_ssid:%.*s, router_ssid_len:%d",
-                 cfg.router.ssid_len, cfg.router.ssid, cfg.router.ssid_len);
-
-        ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Enabling self-organization with parent selection for mesh connection...");
-        esp_err_t self_org_err = esp_mesh_set_self_organized(true, true);
-
-        ESP_LOGD(MESH_TAG, "[DEBUG] After esp_mesh_set_self_organized(true, true) - err:%s (0x%x)",
-                 esp_err_to_name(self_org_err), self_org_err);
-
-        ESP_ERROR_CHECK(self_org_err);
-
-        ESP_LOGD(MESH_TAG, "[DEBUG] Before setting MESH_LEAF type");
-
-        ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Setting device type to MESH_LEAF to prevent root election...");
-        esp_err_t set_type_err = esp_mesh_set_type(MESH_LEAF);
-
-        ESP_LOGD(MESH_TAG, "[DEBUG] After esp_mesh_set_type(MESH_LEAF) - err:%s (0x%x)",
-                 esp_err_to_name(set_type_err), set_type_err);
-
-        if (set_type_err != ESP_OK) {
-            ESP_LOGW(MESH_TAG, "[GPIO NODE FORCING] Warning: esp_mesh_set_type(MESH_LEAF) returned %s (0x%x)", esp_err_to_name(set_type_err), set_type_err);
-        }
-
-        /* Note: esp_mesh_set_disallow_level() does not exist in ESP-IDF API.
-         * Root election prevention is already handled by:
-         * - esp_mesh_set_type(MESH_LEAF) - sets device type to leaf (prevents root election)
-         * - esp_mesh_set_self_organized(true, true) - enables self-organization with parent selection
-         * - esp_mesh_fix_root(false) - releases root fixing
-         */
-
-        ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Releasing root fixing to ensure non-root behavior...");
-        esp_err_t fix_root_err = esp_mesh_fix_root(false);
-        if (fix_root_err != ESP_OK && fix_root_err != ESP_ERR_MESH_NOT_INIT) {
-            ESP_LOGW(MESH_TAG, "[GPIO NODE FORCING] Warning: esp_mesh_fix_root(false) returned %s (0x%x) - this is usually fine", esp_err_to_name(fix_root_err), fix_root_err);
-        }
-        ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Mesh node behavior forced via GPIO (GPIO %d=LOW) - self-organization enabled with parent selection for mesh connection", MESH_GPIO_FORCE_MESH);
-        is_mesh_node_forced = true; /* Mark that mesh node forcing is active */
-    } else {
-        /* Both HIGH, both LOW (conflict), or GPIO not initialized: Normal root election - ensure self-organization is enabled */
-        ESP_ERROR_CHECK(esp_mesh_set_self_organized(true, true));
-        /* Explicitly release root forcing to allow normal root election */
-        esp_err_t err = esp_mesh_fix_root(false);
-        if (err == ESP_OK) {
-            if (mesh_gpio_is_initialized()) {
-                if (level_root == 0 && level_mesh == 0) {
-                    ESP_LOGW(MESH_TAG, "[GPIO NODE FORCING] GPIO conflict detected (both pins LOW) - normal root election enabled");
-                } else {
-                    ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Normal root election enabled (both GPIO pins HIGH)");
-                }
-            } else {
-                ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Normal root election enabled (GPIO not initialized, using default behavior)");
-            }
-        }
-        /* If root was not previously fixed, this may return ESP_ERR_MESH_NOT_INIT or similar,
-         * which is fine - we just want to ensure root forcing is disabled */
+    /* Always use automatic root election */
+    ESP_ERROR_CHECK(esp_mesh_set_self_organized(true, true));
+    esp_err_t err = esp_mesh_fix_root(false);
+    if (err != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "Failed to disable root fixing: %s", esp_err_to_name(err));
+        /* Continue anyway - non-critical */
     }
 
     // disable wifi power saving...
     esp_wifi_set_ps(WIFI_PS_NONE);
 
-    /* Check root fixing status before starting mesh (for diagnostics) */
-    if (force_root) {
-        bool is_root_fixed_before_start = esp_mesh_is_root_fixed();
-        ESP_LOGI(MESH_TAG, "[GPIO ROOT FORCING] Before esp_mesh_start(): is_root_fixed=%d", is_root_fixed_before_start ? 1 : 0);
-        if (!is_root_fixed_before_start) {
-            ESP_LOGE(MESH_TAG, "[GPIO ROOT FORCING] ERROR: is_root_fixed is FALSE before mesh start! esp_mesh_fix_root() may not have worked.");
-        }
-    }
-
     /* mesh start */
-    ESP_LOGI(MESH_TAG, "[GPIO NODE FORCING] Starting mesh network...");
-
-    bool is_root_before = esp_mesh_is_root();
-    bool is_root_fixed_before = esp_mesh_is_root_fixed();
-    ESP_LOGD(MESH_TAG, "[DEBUG] Before esp_mesh_start() - is_root:%d, is_root_fixed:%d, is_mesh_node_forced:%d",
-             is_root_before ? 1 : 0, is_root_fixed_before ? 1 : 0, is_mesh_node_forced ? 1 : 0);
+    ESP_LOGI(MESH_TAG, "Starting mesh network...");
 
     ESP_ERROR_CHECK(esp_mesh_start());
-
-    bool is_root_after = esp_mesh_is_root();
-    bool is_root_fixed_after = esp_mesh_is_root_fixed();
-    ESP_LOGD(MESH_TAG, "[DEBUG] After esp_mesh_start() - is_root:%d, is_root_fixed:%d, is_mesh_node_forced:%d",
-             is_root_after ? 1 : 0, is_root_fixed_after ? 1 : 0, is_mesh_node_forced ? 1 : 0);
 #ifdef CONFIG_MESH_ENABLE_PS
     /* set the device active duty cycle. (default:10, MESH_PS_DEVICE_DUTY_REQUEST) */
     ESP_ERROR_CHECK(esp_mesh_set_active_duty_cycle(CONFIG_MESH_PS_DEV_DUTY, CONFIG_MESH_PS_DEV_DUTY_TYPE));
@@ -1125,40 +843,13 @@ esp_err_t mesh_common_init(void)
 
     bool is_root = esp_mesh_is_root();
     bool is_root_fixed = esp_mesh_is_root_fixed();
-    /* Reuse GPIO forcing state from earlier read (GPIO state doesn't change during operation) */
-    bool gpio_forced = force_root;
 
     ESP_LOGI(MESH_TAG, "mesh starts successfully, heap:%" PRId32 ", %s<%d>%s, ps:%d",  esp_get_minimum_free_heap_size(),
              is_root_fixed ? "root fixed" : "root not fixed",
              esp_mesh_get_topology(), esp_mesh_get_topology() ? "(chain)":"(tree)", esp_mesh_is_ps_enabled());
 
-    /* Diagnostic logging for root forcing */
-    if (gpio_forced) {
-        bool self_org_after_start = esp_mesh_get_self_organized();
-        ESP_LOGI(MESH_TAG, "[GPIO ROOT FORCING DIAGNOSTIC] GPIO forced root requested, after mesh_start: is_root=%d, is_root_fixed=%d, self_org=%d",
-                 is_root ? 1 : 0, is_root_fixed ? 1 : 0, self_org_after_start ? 1 : 0);
-        if (!is_root) {
-            ESP_LOGW(MESH_TAG, "[GPIO ROOT FORCING DIAGNOSTIC] WARNING: GPIO forced root, but device is NOT root! is_root_fixed=%d", is_root_fixed ? 1 : 0);
-        }
-        if (!is_root_fixed) {
-            ESP_LOGE(MESH_TAG, "[GPIO ROOT FORCING DIAGNOSTIC] ERROR: GPIO forced root, but is_root_fixed is FALSE! This indicates esp_mesh_fix_root() did not take effect.");
-        }
-        if (!self_org_after_start) {
-            ESP_LOGE(MESH_TAG, "[GPIO ROOT FORCING DIAGNOSTIC] ERROR: Self-organization is DISABLED after mesh_start! Root node will not accept child connections.");
-        }
-    }
-
-    if (gpio_forced) {
-        if (is_root) {
-            ESP_LOGI(MESH_TAG, "[STARTUP] Mesh started - Node Type: ROOT NODE (GPIO-FORCED) | Heap: %" PRId32 " bytes", esp_get_minimum_free_heap_size());
-        } else {
-            ESP_LOGW(MESH_TAG, "[STARTUP] Mesh started - Node Type: NON-ROOT NODE (GPIO-FORCED ROOT FAILED - is_root_fixed=%d) | Heap: %" PRId32 " bytes",
-                     is_root_fixed ? 1 : 0, esp_get_minimum_free_heap_size());
-        }
-    } else {
-        ESP_LOGI(MESH_TAG, "[STARTUP] Mesh started - Node Type: %s | Heap: %" PRId32 " bytes",
-                 is_root ? "ROOT NODE" : "NON-ROOT NODE", esp_get_minimum_free_heap_size());
-    }
+    ESP_LOGI(MESH_TAG, "[STARTUP] Mesh started - Node Type: %s | Heap: %" PRId32 " bytes",
+             is_root ? "ROOT NODE" : "NON-ROOT NODE", esp_get_minimum_free_heap_size());
     ESP_LOGI(MESH_TAG, "========================================");
 
     return ESP_OK;

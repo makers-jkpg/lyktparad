@@ -14,22 +14,12 @@
 #include "mesh_common.h"
 #include "mesh_root.h"
 #include "mesh_child.h"
-#include "mesh_gpio.h"
 #include "light_neopixel.h"
 #include "mesh_version.h"
 #include "mesh_ota.h"
 
 void app_main(void)
 {
-    /* Initialize GPIO for root node forcing (early in startup) */
-    esp_err_t gpio_err = mesh_gpio_init();
-    if (gpio_err != ESP_OK) {
-        ESP_LOGW("mesh_main", "[STARTUP] GPIO initialization failed, continuing without GPIO forcing: %s",
-                 esp_err_to_name(gpio_err));
-    } else {
-        ESP_LOGI("mesh_main", "[STARTUP] GPIO initialized for root node forcing");
-    }
-
     /* Initialize LED strip first */
     ESP_ERROR_CHECK(mesh_light_init());
     ESP_LOGI(mesh_common_get_tag(), "[STARTUP] LED strip initialized");
