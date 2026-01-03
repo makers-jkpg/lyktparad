@@ -42,7 +42,7 @@ static const char *SEQ_ROOT_TAG = "mode_seq_root";
 // #region agent log
 static void debug_log(const char *location, const char *message, const char *data_json) {
     int64_t timestamp = esp_timer_get_time() / 1000;
-    ESP_LOGI("DEBUG", "{\"location\":\"%s\",\"message\":\"%s\",\"data\":%s,\"timestamp\":%lld}", 
+    ESP_LOGI("DEBUG", "{\"location\":\"%s\",\"message\":\"%s\",\"data\":%s,\"timestamp\":%lld}",
              location, message, data_json, timestamp);
 }
 // #endregion
@@ -73,7 +73,7 @@ static void extract_square_rgb(uint8_t *packed_data, uint16_t square_index, uint
 {
     // #region agent log
     char data_buf[256];
-    snprintf(data_buf, sizeof(data_buf), "{\"square_index\":%d,\"sequence_length\":%d,\"max_squares\":%d,\"hypothesisId\":\"A\"}", 
+    snprintf(data_buf, sizeof(data_buf), "{\"square_index\":%d,\"sequence_length\":%d,\"max_squares\":%d,\"hypothesisId\":\"A\"}",
              square_index, sequence_length, sequence_length * 16);
     debug_log("mode_sequence_root.c:62", "extract_square_rgb entry", data_buf);
     // #endregion
@@ -83,7 +83,7 @@ static void extract_square_rgb(uint8_t *packed_data, uint16_t square_index, uint
 
     if (square_index >= 256) {
         // #region agent log
-        debug_log("mode_sequence_root.c:68", "extract_square_rgb hardcoded 256 check triggered", 
+        debug_log("mode_sequence_root.c:68", "extract_square_rgb hardcoded 256 check triggered",
                   "{\"square_index\":256,\"hypothesisId\":\"A\"}");
         // #endregion
         return;
@@ -196,7 +196,7 @@ static void sequence_timer_cb(void *arg)
     uint16_t max_squares = sequence_length * 16;
     // #region agent log
     char data_buf[256];
-    snprintf(data_buf, sizeof(data_buf), "{\"sequence_length\":%d,\"max_squares\":%d,\"old_pointer\":%d,\"hypothesisId\":\"D\"}", 
+    snprintf(data_buf, sizeof(data_buf), "{\"sequence_length\":%d,\"max_squares\":%d,\"old_pointer\":%d,\"hypothesisId\":\"D\"}",
              sequence_length, max_squares, sequence_pointer);
     debug_log("mode_sequence_root.c:175", "timer_cb before pointer wrap", data_buf);
     // #endregion
@@ -204,7 +204,7 @@ static void sequence_timer_cb(void *arg)
     /* Increment pointer and wrap at sequence length */
     sequence_pointer = (sequence_pointer + 1) % max_squares;
     // #region agent log
-    snprintf(data_buf, sizeof(data_buf), "{\"new_pointer\":%d,\"max_squares\":%d,\"hypothesisId\":\"D\"}", 
+    snprintf(data_buf, sizeof(data_buf), "{\"new_pointer\":%d,\"max_squares\":%d,\"hypothesisId\":\"D\"}",
              sequence_pointer, max_squares);
     debug_log("mode_sequence_root.c:179", "timer_cb after pointer wrap", data_buf);
     // #endregion
@@ -248,7 +248,7 @@ esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_row
     /* Store sequence data with padding */
     // #region agent log
     char data_buf[256];
-    snprintf(data_buf, sizeof(data_buf), "{\"old_length\":%d,\"new_length\":%d,\"color_data_len\":%d,\"hypothesisId\":\"B\"}", 
+    snprintf(data_buf, sizeof(data_buf), "{\"old_length\":%d,\"new_length\":%d,\"color_data_len\":%d,\"hypothesisId\":\"B\"}",
              sequence_length, num_rows, color_data_len);
     debug_log("mode_sequence_root.c:217", "store_and_broadcast before update", data_buf);
     // #endregion
@@ -260,7 +260,7 @@ esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_row
     // #endregion
     memset(sequence_colors, 0, SEQUENCE_COLOR_DATA_SIZE);  /* Clear array (padding with zeros) */
     // #region agent log
-    debug_log("mode_sequence_root.c:220", "store_and_broadcast after memset", 
+    debug_log("mode_sequence_root.c:220", "store_and_broadcast after memset",
               "{\"action\":\"cleared\",\"hypothesisId\":\"C\"}");
     // #endregion
     memcpy(sequence_colors, color_data, color_data_len);    /* Copy received data */
@@ -316,7 +316,7 @@ esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_row
     int success_count = 0;
     int fail_count = 0;
     for (int i = 0; i < route_table_size; i++) {
-        esp_err_t err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+        esp_err_t err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
         if (err == ESP_OK) {
             success_count++;
         } else {
@@ -375,7 +375,7 @@ esp_err_t mode_sequence_root_broadcast_beat(void)
     int success_count = 0;
     int fail_count = 0;
     for (int i = 0; i < route_table_size; i++) {
-        esp_err_t err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+        esp_err_t err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
         if (err == ESP_OK) {
             success_count++;
         } else {
@@ -430,7 +430,7 @@ esp_err_t mode_sequence_root_broadcast_control(uint8_t cmd)
     int success_count = 0;
     int fail_count = 0;
     for (int i = 0; i < route_table_size; i++) {
-        esp_err_t err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+        esp_err_t err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
         if (err == ESP_OK) {
             success_count++;
         } else {

@@ -794,3 +794,105 @@ void mesh_udp_bridge_stop_heartbeat(void)
     s_heartbeat_running = false;
     ESP_LOGI(TAG, "Heartbeat task stopped");
 }
+
+/*******************************************************
+ *                Mesh Command Forwarding
+ *******************************************************/
+
+/**
+ * @brief Forward a mesh command to external server via UDP (non-blocking).
+ *
+ * This function forwards a mesh command to the external web server for monitoring purposes.
+ * The forwarding is completely optional and non-blocking. If the external server is not
+ * registered or forwarding fails, mesh operations continue normally.
+ *
+ * Packet format: [CMD:0xE6][LEN:2][PAYLOAD:N][CHKSUM:2]
+ * Payload format: [mesh_cmd_id:1][mesh_payload_len:2][mesh_payload:N][timestamp:4]
+ *
+ * @param mesh_cmd Mesh command ID (first byte of mesh data)
+ * @param mesh_payload Mesh command payload (data after command ID)
+ * @param mesh_payload_len Length of mesh payload in bytes
+ */
+void mesh_udp_bridge_forward_mesh_command_async(uint8_t mesh_cmd,
+                                                   const void *mesh_payload,
+                                                   size_t mesh_payload_len)
+{
+    /* Check if external server is registered */
+    if (!mesh_udp_bridge_is_registered()) {
+        /* Not registered - don't forward (normal case, no logging) */
+        return;
+    }
+
+    /* Initialize UDP socket if needed */
+    esp_err_t err = init_udp_socket();
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "Failed to initialize UDP socket for forwarding: %s", esp_err_to_name(err));
+        return;
+    }
+
+    /* Calculate UDP payload size: mesh_cmd (1) + payload_len (2) + payload (N) + timestamp (4) */
+    size_t udp_payload_size = 1 + 2 + mesh_payload_len + 4;
+
+    /* Calculate total packet size: CMD (1) + LEN (2) + PAYLOAD (N) + CHKSUM (2) */
+    size_t packet_size = 1 + 2 + udp_payload_size + 2;
+
+    /* Check UDP MTU limit (1472 bytes) */
+    if (packet_size > 1472) {
+        ESP_LOGW(TAG, "Mesh command forward packet too large: %zu bytes (max 1472), skipping forward", packet_size);
+        return;
+    }
+
+    /* Allocate buffer for UDP payload */
+    uint8_t *udp_payload = (uint8_t *)malloc(udp_payload_size);
+    if (udp_payload == NULL) {
+        ESP_LOGD(TAG, "Failed to allocate UDP payload buffer for forwarding");
+        return;
+    }
+
+    /* Pack UDP payload: [mesh_cmd:1][mesh_payload_len:2][mesh_payload:N][timestamp:4] */
+    udp_payload[0] = mesh_cmd;
+    udp_payload[1] = (mesh_payload_len >> 8) & 0xFF; /* Payload length MSB */
+    udp_payload[2] = mesh_payload_len & 0xFF; /* Payload length LSB */
+    if (mesh_payload_len > 0 && mesh_payload != NULL) {
+        memcpy(&udp_payload[3], mesh_payload, mesh_payload_len);
+    }
+    /* Add timestamp (network byte order) */
+    uint32_t timestamp = mesh_udp_bridge_get_timestamp();
+    memcpy(&udp_payload[3 + mesh_payload_len], &timestamp, 4);
+
+    /* Allocate buffer for complete UDP packet */
+    uint8_t *packet = (uint8_t *)malloc(packet_size);
+    if (packet == NULL) {
+        free(udp_payload);
+        ESP_LOGD(TAG, "Failed to allocate UDP packet buffer for forwarding");
+        return;
+    }
+
+    /* Pack UDP packet: [CMD:0xE6][LEN:2][PAYLOAD:N][CHKSUM:2] */
+    packet[0] = UDP_CMD_MESH_COMMAND_FORWARD;
+    packet[1] = (udp_payload_size >> 8) & 0xFF; /* Length MSB */
+    packet[2] = udp_payload_size & 0xFF; /* Length LSB */
+    memcpy(&packet[3], udp_payload, udp_payload_size);
+
+    /* Calculate checksum (16-bit sum of all bytes excluding checksum) */
+    uint16_t checksum = 0;
+    for (size_t i = 0; i < packet_size - 2; i++) {
+        checksum = (checksum + packet[i]) & 0xFFFF;
+    }
+    packet[packet_size - 2] = (checksum >> 8) & 0xFF; /* Checksum MSB */
+    packet[packet_size - 1] = checksum & 0xFF; /* Checksum LSB */
+
+    /* Send UDP packet (non-blocking, fire-and-forget) */
+    ssize_t sent = sendto(s_udp_socket, packet, packet_size, 0,
+                          (struct sockaddr *)&s_server_addr, sizeof(s_server_addr));
+    if (sent < 0) {
+        /* Log at debug level - packet loss is acceptable for forwarded commands */
+        ESP_LOGD(TAG, "Mesh command forward send failed: %d (acceptable for fire-and-forget)", errno);
+    } else {
+        ESP_LOGD(TAG, "Mesh command forwarded: cmd=0x%02X, payload_len=%zu", mesh_cmd, mesh_payload_len);
+    }
+
+    /* Free allocated buffers */
+    free(udp_payload);
+    free(packet);
+}

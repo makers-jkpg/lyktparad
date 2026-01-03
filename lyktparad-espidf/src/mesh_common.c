@@ -882,3 +882,69 @@ esp_err_t mesh_common_init(void)
 
     return ESP_OK;
 }
+
+/*******************************************************
+ *                Mesh Send Bridge Wrapper
+ *******************************************************/
+
+/**
+ * @brief Wrapper function to send mesh data and optionally forward to UDP bridge.
+ *
+ * This function wraps esp_mesh_send() and adds optional forwarding of mesh commands
+ * to the external web server via UDP. The forwarding is completely optional and non-blocking.
+ * If the external server is not registered or forwarding fails, mesh operations continue normally.
+ *
+ * Execution order:
+ * 1. Call original esp_mesh_send() first (mesh operation)
+ * 2. Check if external server registered
+ * 3. If registered, forward command via UDP (non-blocking)
+ * 4. Return mesh send result (ignore UDP forward result)
+ *
+ * @param to Destination mesh address (NULL for broadcast)
+ * @param data Mesh data to send
+ * @param flag Mesh data flag (e.g., MESH_DATA_P2P)
+ * @param opt Optional mesh options (can be NULL)
+ * @param opt_count Number of optional mesh options
+ * @return Result from esp_mesh_send() call
+ */
+esp_err_t mesh_send_with_bridge(const mesh_addr_t *to, const mesh_data_t *data,
+                                 int flag, const mesh_opt_t opt[], int opt_count)
+{
+    /* Call original esp_mesh_send() first (mesh operation) */
+    esp_err_t mesh_result = esp_mesh_send(to, data, flag, opt, opt_count);
+
+    /* Only forward if this is the root node (plan requirement: root node forwards commands) */
+    if (!esp_mesh_is_root()) {
+        /* Not root node - don't forward, but return mesh result */
+        return mesh_result;
+    }
+
+    /* Check if we should forward to external server */
+    if (data == NULL || data->data == NULL) {
+        /* Invalid data - don't forward, but return mesh result */
+        ESP_LOGW(MESH_TAG, "mesh_send_with_bridge: NULL data pointer, skipping forward");
+        return mesh_result;
+    }
+    if (data->size == 0) {
+        /* Empty data - don't forward, but return mesh result */
+        ESP_LOGW(MESH_TAG, "mesh_send_with_bridge: empty data (size=0), skipping forward");
+        return mesh_result;
+    }
+
+    /* Extract command ID from mesh data (first byte) */
+    uint8_t mesh_cmd = data->data[0];
+
+    /* Extract payload from mesh data (data after command ID) */
+    const void *mesh_payload = NULL;
+    size_t mesh_payload_len = 0;
+    if (data->size > 1) {
+        mesh_payload = &data->data[1];
+        mesh_payload_len = data->size - 1;
+    }
+
+    /* Forward command via UDP (non-blocking, fire-and-forget) */
+    mesh_udp_bridge_forward_mesh_command_async(mesh_cmd, mesh_payload, mesh_payload_len);
+
+    /* Return mesh send result (ignore UDP forward result) */
+    return mesh_result;
+}

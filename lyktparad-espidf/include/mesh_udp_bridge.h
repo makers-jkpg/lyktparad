@@ -29,6 +29,9 @@
 /* UDP Command ID for Heartbeat */
 #define UDP_CMD_HEARTBEAT  0xE1
 
+/* UDP Command ID for Mesh Command Forward */
+#define UDP_CMD_MESH_COMMAND_FORWARD  0xE6
+
 /*******************************************************
  *                Registration Payload Structure
  *******************************************************/
@@ -166,5 +169,27 @@ void mesh_udp_bridge_start_heartbeat(void);
  * This function is safe to call even if the task is not running.
  */
 void mesh_udp_bridge_stop_heartbeat(void);
+
+/*******************************************************
+ *                Mesh Command Forwarding
+ *******************************************************/
+
+/**
+ * @brief Forward a mesh command to external server via UDP (non-blocking).
+ *
+ * This function forwards a mesh command to the external web server for monitoring purposes.
+ * The forwarding is completely optional and non-blocking. If the external server is not
+ * registered or forwarding fails, mesh operations continue normally.
+ *
+ * Packet format: [CMD:0xE6][LEN:2][PAYLOAD:N][CHKSUM:2]
+ * Payload format: [mesh_cmd_id:1][mesh_payload_len:2][mesh_payload:N][timestamp:4]
+ *
+ * @param mesh_cmd Mesh command ID (first byte of mesh data)
+ * @param mesh_payload Mesh command payload (data after command ID)
+ * @param mesh_payload_len Length of mesh payload in bytes
+ */
+void mesh_udp_bridge_forward_mesh_command_async(uint8_t mesh_cmd,
+                                                 const void *mesh_payload,
+                                                 size_t mesh_payload_len);
 
 #endif /* __MESH_UDP_BRIDGE_H__ */

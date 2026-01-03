@@ -143,7 +143,7 @@ static void heartbeat_timer_cb(void *arg)
     // #endregion
 
     for (i = 0; i < route_table_size; i++) {
-        err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+        err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
         if (err) {
             ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
         }
@@ -338,7 +338,7 @@ esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
         return ESP_OK;
     }
     for (i = 0; i < route_table_size; i++) {
-        err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+        err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
         if (err) {
             ESP_LOGD(MESH_TAG, "RGB send err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
         }
@@ -560,7 +560,7 @@ void esp_mesh_p2p_tx_main(void *arg)
         }
 
         for (i = 0; i < route_table_size; i++) {
-            err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+            err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
             if (err) {
                 mesh_addr_t parent_addr;
                 mesh_common_get_parent_addr(&parent_addr);

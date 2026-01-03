@@ -477,7 +477,7 @@ static esp_err_t download_firmware_http(const char *url)
             s_ota_handle = 0;
         } else {
             ESP_LOGI(TAG, "HTTP OTA download completed successfully: %zu bytes", total_bytes_read);
-            
+
             /* Check for downgrade before marking download as complete */
             if (s_update_partition != NULL) {
                 esp_err_t downgrade_err = mesh_ota_check_downgrade(s_update_partition);
@@ -496,7 +496,7 @@ static esp_err_t download_firmware_http(const char *url)
                 }
                 /* Downgrade check passed - version is same or newer */
             }
-            
+
             s_ota_progress = 1.0f;
         }
     } else {
@@ -902,7 +902,7 @@ static esp_err_t send_ota_start(void)
 
     esp_err_t err = ESP_OK;
     for (int i = 0; i < s_node_count; i++) {
-        esp_err_t send_err = esp_mesh_send(&s_node_list[i], &data, MESH_DATA_P2P, NULL, 0);
+        esp_err_t send_err = mesh_send_with_bridge(&s_node_list[i], &data, MESH_DATA_P2P, NULL, 0);
         if (send_err != ESP_OK) {
             ESP_LOGW(TAG, "Failed to send OTA_START to node %d: %s", i, esp_err_to_name(send_err));
             err = send_err;  /* Continue sending but remember error */
@@ -940,7 +940,7 @@ static esp_err_t send_ota_block_to_node(const mesh_addr_t *node, uint16_t block_
     data.proto = MESH_PROTO_BIN;
     data.tos = MESH_TOS_P2P;
 
-    return esp_mesh_send(node, &data, MESH_DATA_P2P, NULL, 0);
+    return mesh_send_with_bridge(node, &data, MESH_DATA_P2P, NULL, 0);
 }
 
 /**
@@ -1586,7 +1586,7 @@ static esp_err_t send_ota_ack_to_root(uint16_t block_num, uint8_t status)
         memset(root_addr.addr, 0xFF, 6);
     }
 
-    err = esp_mesh_send(&root_addr, &data, MESH_DATA_P2P, NULL, 0);
+    err = mesh_send_with_bridge(&root_addr, &data, MESH_DATA_P2P, NULL, 0);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to send ACK for block %d: %s", block_num, esp_err_to_name(err));
     }
@@ -1847,7 +1847,7 @@ esp_err_t mesh_ota_handle_leaf_message(mesh_addr_t *from, uint8_t *data, uint16_
             memset(root_addr.addr, 0xFF, 6);  /* Broadcast */
         }
 
-        err = esp_mesh_send(&root_addr, &data, MESH_DATA_P2P, NULL, 0);
+        err = mesh_send_with_bridge(&root_addr, &data, MESH_DATA_P2P, NULL, 0);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "Failed to send PREPARE_REBOOT ACK: %s", esp_err_to_name(err));
         }
@@ -1879,21 +1879,21 @@ esp_err_t mesh_ota_handle_leaf_message(mesh_addr_t *from, uint8_t *data, uint16_
             ack.cmd = MESH_CMD_OTA_ACK;
             ack.block_number = 0;  /* Not used for reboot ACK */
             ack.status = 1;  /* Error status */
-            
+
             mesh_data_t data;
             data.data = (uint8_t *)&ack;
             data.size = sizeof(ack);
             data.proto = MESH_PROTO_BIN;
             data.tos = MESH_TOS_P2P;
-            
+
             mesh_addr_t root_addr;
             esp_err_t send_err = esp_mesh_get_parent_bssid(&root_addr);
             if (send_err != ESP_OK) {
                 ESP_LOGW(TAG, "Could not get parent address for error ACK");
                 memset(root_addr.addr, 0xFF, 6);  /* Broadcast */
             }
-            
-            esp_mesh_send(&root_addr, &data, MESH_DATA_P2P, NULL, 0);
+
+            mesh_send_with_bridge(&root_addr, &data, MESH_DATA_P2P, NULL, 0);
             return ESP_ERR_INVALID_VERSION;
         } else if (downgrade_err != ESP_OK) {
             ESP_LOGE(TAG, "Downgrade check failed: %s", esp_err_to_name(downgrade_err));
@@ -1980,7 +1980,7 @@ esp_err_t mesh_ota_request_update(void)
         memset(root_addr.addr, 0xFF, 6);  /* Broadcast */
     }
 
-    err = esp_mesh_send(&root_addr, &data, MESH_DATA_P2P, NULL, 0);
+    err = mesh_send_with_bridge(&root_addr, &data, MESH_DATA_P2P, NULL, 0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send OTA_REQUEST: %s", esp_err_to_name(err));
         return err;
@@ -2093,7 +2093,7 @@ esp_err_t mesh_ota_initiate_coordinated_reboot(uint16_t timeout_seconds, uint16_
     /* Send PREPARE_REBOOT to all nodes */
     esp_err_t err = ESP_OK;
     for (int i = 0; i < s_node_count; i++) {
-        esp_err_t send_err = esp_mesh_send(&s_node_list[i], &data, MESH_DATA_P2P, NULL, 0);
+        esp_err_t send_err = mesh_send_with_bridge(&s_node_list[i], &data, MESH_DATA_P2P, NULL, 0);
         if (send_err != ESP_OK) {
             ESP_LOGW(TAG, "Failed to send PREPARE_REBOOT to node %d: %s", i, esp_err_to_name(send_err));
             err = send_err;
@@ -2244,7 +2244,7 @@ esp_err_t mesh_ota_initiate_coordinated_reboot(uint16_t timeout_seconds, uint16_
 
     /* Send REBOOT to all nodes */
     for (int i = 0; i < s_node_count; i++) {
-        esp_err_t send_err = esp_mesh_send(&s_node_list[i], &data, MESH_DATA_P2P, NULL, 0);
+        esp_err_t send_err = mesh_send_with_bridge(&s_node_list[i], &data, MESH_DATA_P2P, NULL, 0);
         if (send_err != ESP_OK) {
             ESP_LOGW(TAG, "Failed to send REBOOT to node %d: %s", i, esp_err_to_name(send_err));
         }
@@ -2561,7 +2561,7 @@ static void rollback_timeout_task(void *pvParameters)
 
     /* After timeout, check if mesh is still connected */
     bool mesh_connected = mesh_common_is_running();
-    
+
     if (mesh_connected) {
         /* Mesh is connected after timeout period - connection is stable, clear rollback flag */
         ESP_LOGI(TAG, "Mesh connection stable after rollback timeout period, clearing rollback flag");
@@ -2579,7 +2579,7 @@ static void rollback_timeout_task(void *pvParameters)
     /* Mesh is not connected after timeout - connection failed, increment counter and keep flag set */
     /* The flag and incremented counter will trigger rollback on next boot */
     ESP_LOGW(TAG, "Mesh connection failed after rollback timeout (%d ms), incrementing rollback counter", MESH_OTA_ROLLBACK_TIMEOUT_MS);
-    
+
     /* Increment rollback counter so next boot knows to rollback */
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open(MESH_OTA_ROLLBACK_NAMESPACE, NVS_READWRITE, &nvs_handle);
@@ -2592,7 +2592,7 @@ static void rollback_timeout_task(void *pvParameters)
         nvs_close(nvs_handle);
         ESP_LOGW(TAG, "Rollback counter incremented to %d, rollback will happen on next boot", rollback_count);
     }
-    
+
     /* Flag remains set, counter incremented - next boot will trigger rollback */
     s_rollback_timeout_task = NULL;
     vTaskDelete(NULL);

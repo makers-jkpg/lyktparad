@@ -107,4 +107,12 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
 void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
                                    int32_t event_id, void *event_data);
 
+/*******************************************************
+ *                Mesh Send Bridge Wrapper
+ *******************************************************/
+
+/* Wrapper function to send mesh data and optionally forward to UDP bridge */
+esp_err_t mesh_send_with_bridge(const mesh_addr_t *to, const mesh_data_t *data,
+                                 int flag, const mesh_opt_t opt[], int opt_count);
+
 #endif /* __MESH_COMMON_H__ */
