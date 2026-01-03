@@ -722,6 +722,7 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
 
         if (is_root) {
             /* Root node: router connected */
+            /* Root node: router connected */
             is_router_connected = true;
 
             if (root_ip_callback) {
@@ -732,6 +733,7 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "<IP_EVENT_STA_LOST_IP>");
 
         if (is_root) {
+            /* Root node: router disconnected */
             /* Root node: router disconnected */
             is_router_connected = false;
         }
@@ -802,6 +804,11 @@ esp_err_t mesh_common_init(void)
     ESP_ERROR_CHECK(esp_mesh_set_max_layer(CONFIG_MESH_MAX_LAYER));
     ESP_ERROR_CHECK(esp_mesh_set_vote_percentage(1));
     ESP_ERROR_CHECK(esp_mesh_set_xon_qsize(128));
+    /* Initialize root status LED */
+    esp_err_t status_led_err = root_status_led_init();
+    if (status_led_err != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "Failed to initialize root status LED: %s", esp_err_to_name(status_led_err));
+    }
 #ifdef CONFIG_MESH_ENABLE_PS
     /* Enable mesh PS function */
     ESP_ERROR_CHECK(esp_mesh_enable_ps());

@@ -439,3 +439,435 @@ header h1 {
     white-space: nowrap;
     border-width: 0;
 }
+
+/* Mesh Control Styles */
+.node-count {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+.node-count-label {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 8px;
+}
+
+.node-count-value {
+    font-size: 48px;
+    font-weight: bold;
+    color: #667eea;
+    font-family: 'Courier New', monospace;
+}
+
+.grid-section {
+    margin-bottom: 30px;
+}
+
+/* Grid styles */
+.grid-container {
+    display: grid;
+    grid-template-columns: auto repeat(16, 1fr);
+    grid-template-rows: auto repeat(16, 1fr);
+    gap: 2px;
+    max-width: 100%;
+    margin: 0 auto;
+    padding: 10px;
+}
+
+.grid-label {
+    font-weight: bold;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    user-select: none;
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 12px;
+    color: #333;
+    background: #f5f5f5;
+    border-radius: 4px;
+}
+
+.grid-label:hover {
+    background: #e0e0e0;
+}
+
+.grid-label-z {
+    grid-column: 1;
+    grid-row: 1;
+}
+
+.grid-label-col {
+    grid-row: 1;
+}
+
+.grid-label-row {
+    grid-column: 1;
+}
+
+.grid-square {
+    aspect-ratio: 1;
+    border: 1px solid #ddd;
+    cursor: pointer;
+    transition: background-color 0.2s, border 0.2s;
+    min-width: 44px;
+    min-height: 44px;
+}
+
+.grid-square:hover {
+    border: 2px solid #667eea;
+}
+
+.grid-square:active {
+    transform: scale(0.95);
+}
+
+.grid-square.current {
+    border: 2px solid white;
+    box-shadow: 0 0 0 2px black, 0 0 8px rgba(0, 0, 0, 0.5);
+    z-index: 10;
+    transition: all 0.1s ease;
+}
+
+/* Form controls */
+.row-count-control {
+    margin-bottom: 20px;
+    text-align: center;
+}
+
+.row-count-control label {
+    display: block;
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 8px;
+}
+
+.row-count-control select {
+    padding: 8px 12px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-size: 16px;
+    background: white;
+    cursor: pointer;
+    min-width: 120px;
+}
+
+.row-count-control select:hover {
+    border-color: #667eea;
+}
+
+.row-count-control select:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+/* Rhythm control styles */
+.rhythm-control {
+    margin-top: 20px;
+    text-align: center;
+}
+
+.rhythm-label {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 8px;
+}
+
+.rhythm-input-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+#tempoDecrease, #tempoIncrease {
+    background: #667eea;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    min-height: 44px;
+    min-width: 60px;
+}
+
+#tempoDecrease:hover, #tempoIncrease:hover {
+    background: #5568d3;
+}
+
+#tempoDecrease:active, #tempoIncrease:active {
+    background: #4457b8;
+}
+
+#tempoDecrease:disabled, #tempoIncrease:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#tempoDecrease:disabled:hover, #tempoIncrease:disabled:hover {
+    background: #667eea;
+}
+
+#rhythmDisplay {
+    font-size: 18px;
+    color: #667eea;
+    font-weight: bold;
+    min-width: 80px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Sync button styles */
+.sync-button-container {
+    text-align: center;
+    margin-top: 20px;
+}
+
+#syncButton {
+    background: #667eea;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    width: 100%;
+    max-width: 250px;
+    min-height: 44px;
+}
+
+#syncButton:hover {
+    background: #5568d3;
+}
+
+#syncButton:active {
+    background: #4457b8;
+}
+
+#syncButton:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#syncFeedback {
+    margin-top: 10px;
+    font-size: 14px;
+    text-align: center;
+}
+
+.sync-feedback-success {
+    color: #27ae60;
+}
+
+.sync-feedback-error {
+    color: #e74c3c;
+}
+
+/* Export/Import styles */
+.export-import-container {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 10px;
+}
+
+#exportButton, #importButton {
+    background: #667eea;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    min-height: 44px;
+}
+
+#exportButton:hover, #importButton:hover {
+    background: #5568d3;
+}
+
+#exportButton:active, #importButton:active {
+    background: #4457b8;
+}
+
+#exportContainer, #importContainer {
+    margin-top: 20px;
+    text-align: center;
+}
+
+#exportTextarea, #importTextarea {
+    width: 100%;
+    max-width: 600px;
+    padding: 12px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    resize: vertical;
+    margin-bottom: 10px;
+}
+
+#importTextarea {
+    min-height: 120px;
+}
+
+.export-import-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 10px;
+}
+
+#copyExportButton, #confirmImportButton, #cancelImportButton {
+    background: #27ae60;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+#copyExportButton:hover, #confirmImportButton:hover {
+    background: #229954;
+}
+
+#cancelImportButton {
+    background: #95a5a6;
+}
+
+#cancelImportButton:hover {
+    background: #7f8c8d;
+}
+
+#exportFeedback, #importFeedback {
+    margin-top: 10px;
+    font-size: 14px;
+    text-align: center;
+}
+
+.export-feedback-success, .import-feedback-success {
+    color: #27ae60;
+}
+
+.export-feedback-error, .import-feedback-error {
+    color: #e74c3c;
+}
+
+/* Sequence control styles */
+.sequence-control-container {
+    text-align: center;
+    margin-top: 20px;
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+#startButton, #stopButton, #resetButton {
+    background: #667eea;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    min-height: 44px;
+}
+
+#startButton:hover, #stopButton:hover, #resetButton:hover {
+    background: #5568d3;
+}
+
+#startButton:active, #stopButton:active, #resetButton:active {
+    background: #4457b8;
+}
+
+#startButton:disabled, #stopButton:disabled, #resetButton:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#sequenceControlFeedback {
+    margin-top: 10px;
+    font-size: 14px;
+    text-align: center;
+}
+
+.sequence-control-feedback-success {
+    color: #27ae60;
+}
+
+.sequence-control-feedback-error {
+    color: #e74c3c;
+}
+
+/* Color picker */
+#colorPicker {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+}
+
+/* Additional responsive styles for mesh control */
+@media (min-width: 768px) {
+    .grid-label {
+        font-size: 14px;
+    }
+
+    .grid-square {
+        min-width: 50px;
+        min-height: 50px;
+    }
+
+    .rhythm-input-container {
+        max-width: 400px;
+        margin: 0 auto;
+    }
+
+    #syncButton {
+        max-width: 200px;
+    }
+}
+
+@media (min-width: 1024px) {
+    .grid-label {
+        font-size: 16px;
+    }
+
+    .grid-square {
+        min-width: 60px;
+        min-height: 60px;
+    }
+
+    .rhythm-input-container {
+        max-width: 500px;
+    }
+
+    #syncButton {
+        max-width: 250px;
+    }
+}
+
+@media (max-width: 600px) {
+    .container {
+        padding: 20px;
+    }
+}

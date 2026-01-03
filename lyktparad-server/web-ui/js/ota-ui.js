@@ -847,6 +847,222 @@ async function updateNodeListFromState() {
 }
 
 /**
+ * Update update stage display
+ * @param {string} stage - Update stage: idle, downloading, distributing, rebooting
+ */
+function updateUpdateStage(stage) {
+    otaState.updateStage = stage;
+    const stageElement = document.getElementById('ota-update-stage');
+    if (!stageElement) return;
+
+    const stageLabels = {
+        idle: 'Ready',
+        downloading: 'Downloading firmware...',
+        distributing: 'Distributing firmware to nodes...',
+        rebooting: 'Rebooting nodes...'
+    };
+
+    stageElement.textContent = stageLabels[stage] || 'Ready';
+}
+
+/**
+ * Update version display
+ * @param {string} version - Firmware version string
+ */
+function updateVersionDisplay(version) {
+    otaState.currentVersion = version;
+    const versionElement = document.getElementById('ota-current-version');
+    if (versionElement) {
+        versionElement.textContent = version;
+    }
+}
+
+/**
+ * Update button states based on update status
+ */
+function updateButtonStates() {
+    const checkButton = document.getElementById('ota-check-button');
+    const startButton = document.getElementById('ota-start-button');
+    const cancelButton = document.getElementById('ota-cancel-button');
+    const urlInput = document.getElementById('ota-firmware-url');
+
+    if (!checkButton || !startButton || !cancelButton) return;
+
+    const isActive = otaState.updateStage !== 'idle';
+    const canStart = otaState.urlValid && !isActive;
+
+    checkButton.disabled = isActive;
+    startButton.disabled = !canStart;
+    cancelButton.disabled = !isActive;
+
+    if (urlInput) {
+        urlInput.disabled = isActive;
+    }
+}
+
+/**
+ * Update download progress
+ * @param {Object} status - Download status with downloading flag and progress
+ */
+function updateDownloadProgress(status) {
+    const progressBar = document.getElementById('ota-download-progress');
+    const progressText = document.getElementById('ota-download-progress-text');
+
+    if (progressBar) {
+        progressBar.value = status.progress || 0;
+    }
+
+    if (progressText) {
+        progressText.textContent = `${Math.round(status.progress || 0)}%`;
+    }
+
+    if (status.downloading) {
+        updateUpdateStage('downloading');
+    }
+}
+
+/**
+ * Update distribution progress
+ * @param {Object} status - Distribution status object
+ */
+function updateDistributionProgress(status) {
+    const progressBar = document.getElementById('ota-distribution-progress');
+    const progressText = document.getElementById('ota-distribution-progress-text');
+    const statsElement = document.getElementById('ota-distribution-stats');
+
+    if (progressBar) {
+        progressBar.value = status.overall_progress || 0;
+    }
+
+    if (progressText) {
+        progressText.textContent = `${Math.round(status.overall_progress || 0)}%`;
+    }
+
+    if (statsElement) {
+        statsElement.innerHTML = `
+            Nodes: ${status.nodes_complete || 0}/${status.nodes_total || 0} complete,
+            ${status.nodes_failed || 0} failed |
+            Blocks: ${status.current_block || 0}/${status.total_blocks || 0}
+        `;
+    }
+
+    if (status.distributing) {
+        updateUpdateStage('distributing');
+    }
+
+    // Update node list if available
+    updateNodeList(status);
+}
+
+/**
+ * Update node list display
+ * @param {Object} status - Distribution status object
+ */
+function updateNodeList(status) {
+    const nodeListElement = document.getElementById('ota-node-list');
+    if (!nodeListElement) return;
+
+    // For now, show summary stats
+    // In the future, this could show individual node status from state updates
+    if (status.nodes_total > 0) {
+        nodeListElement.innerHTML = `
+            <div class="ota-node-item ${status.distributing ? 'in-progress' : 'completed'}">
+                <span class="ota-node-name">All Nodes</span>
+                <span class="ota-node-status ${status.distributing ? 'in-progress' : (status.nodes_failed > 0 ? 'failed' : 'completed')}">
+                    ${status.distributing ? 'In Progress' : (status.nodes_failed > 0 ? 'Some Failed' : 'Completed')}
+                </span>
+            </div>
+        `;
+    } else {
+        nodeListElement.innerHTML = '';
+    }
+}
+
+/**
+ * Start progress polling
+ */
+function startProgressPolling() {
+    if (otaState.progressPollingInterval) {
+        clearInterval(otaState.progressPollingInterval);
+    }
+
+    otaState.progressPollingInterval = setInterval(async () => {
+        try {
+            // Check download status
+            const downloadStatus = await getOtaDownloadStatus();
+            updateDownloadProgress(downloadStatus);
+
+            // If download is complete, check distribution status
+            if (!downloadStatus.downloading && otaState.updateStage === 'downloading') {
+                // Download complete, check if distribution should start
+                const distStatus = await getOtaDistributionStatus();
+                if (distStatus.distributing) {
+                    updateDistributionProgress(distStatus);
+                } else {
+                    // Both download and distribution complete
+                    updateUpdateStage('idle');
+                    stopProgressPolling();
+                    showStatusMessage('Firmware update complete!', 'success');
+                    updateButtonStates();
+                }
+            }
+
+            // Check distribution status if distributing
+            if (otaState.updateStage === 'distributing') {
+                const distStatus = await getOtaDistributionStatus();
+                updateDistributionProgress(distStatus);
+
+                if (!distStatus.distributing) {
+                    // Distribution complete
+                    updateUpdateStage('idle');
+                    stopProgressPolling();
+                    showStatusMessage('Firmware distribution complete!', 'success');
+                    updateButtonStates();
+                }
+            }
+        } catch (error) {
+            console.error('Progress polling error:', error);
+            // Continue polling even on error
+        }
+    }, 1500); // Poll every 1.5 seconds
+}
+
+/**
+ * Stop progress polling
+ */
+function stopProgressPolling() {
+    if (otaState.progressPollingInterval) {
+        clearInterval(otaState.progressPollingInterval);
+        otaState.progressPollingInterval = null;
+    }
+}
+
+/**
+ * Handle "Check for Updates" button click
+ */
+async function handleCheckForUpdates() {
+    const urlInput = document.getElementById('ota-firmware-url');
+    if (!urlInput) return;
+
+    const url = urlInput.value.trim();
+    const validation = validateFirmwareUrl(url);
+
+    if (!validation.valid) {
+        showStatusMessage(validation.error, 'error');
+        return;
+    }
+
+    try {
+        showStatusMessage('Checking for updates...', 'info');
+        const result = await checkForUpdates(url);
+        showStatusMessage('URL is valid and ready for update', 'success');
+    } catch (error) {
+        showStatusMessage(`Error checking for updates: ${error.message}`, 'error');
+    }
+}
+
+/**
+<<<<<<< HEAD
  * Start periodic state updates integration.
  * Polls mesh state API to update node list during distribution.
  */
