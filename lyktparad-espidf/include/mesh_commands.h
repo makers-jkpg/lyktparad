@@ -31,6 +31,7 @@
 #define  MESH_CMD_SEQUENCE_STOP  (0x06)  /* Stop sequence playback */
 #define  MESH_CMD_SEQUENCE_RESET (0x07)  /* Reset sequence pointer to 0 */
 #define  MESH_CMD_SEQUENCE_BEAT  (0x08)  /* Tempo synchronization beat (2 bytes: command + 1-byte pointer) */
+#define  MESH_CMD_EFFECT         (0x09)  /* Effect command */
 
 /* Mesh Command Definitions - OTA/MUPDATE Commands */
 /* Commands with prefix 0xF are reserved for OTA/update functionality */

@@ -21,6 +21,7 @@
 #include "mesh_commands.h"
 #include "light_neopixel.h"
 #include "node_sequence.h"
+#include "node_effects.h"
 #include "light_common_cathode.h"
 #include "config/mesh_config.h"
 #include "mesh_ota.h"
@@ -91,23 +92,36 @@ void esp_mesh_p2p_rx_main(void *arg)
             } else if (!(hb%2)) {
                 /* even heartbeat: turn off light */
                 mesh_light_set_colour(0);
-                set_rgb_led(0, 0, 0);
                 ESP_LOGI(mesh_common_get_tag(), "[NODE ACTION] Heartbeat #%lu (even) - LED OFF", (unsigned long)hb);
             } else {
                 /* odd heartbeat: turn on light using last RGB color or default to MESH_LIGHT_BLUE */
                 if (rgb_has_been_set) {
                     /* Use the color from the latest MESH_CMD_SET_RGB command */
                     mesh_light_set_rgb(last_rgb_r, last_rgb_g, last_rgb_b);
-                    set_rgb_led(last_rgb_r, last_rgb_g, last_rgb_b);
                     ESP_LOGI(mesh_common_get_tag(), "[NODE ACTION] Heartbeat #%lu (odd) - LED RGB(%d,%d,%d)",
                              (unsigned long)hb, last_rgb_r, last_rgb_g, last_rgb_b);
                 } else {
                     /* Default to MESH_LIGHT_BLUE if no RGB command has been received */
                     mesh_light_set_colour(MESH_LIGHT_BLUE);
-                    set_rgb_led(0, 0, 155);  /* Match MESH_LIGHT_BLUE RGB values */
                     ESP_LOGI(mesh_common_get_tag(), "[NODE ACTION] Heartbeat #%lu (odd) - LED BLUE (default)", (unsigned long)hb);
                 }
             }
+            
+        } else if (data.proto == MESH_PROTO_BIN && data.data[0] == MESH_CMD_EFFECT) {
+
+            /* Prepare effect parameters structure */
+            struct effect_params_t *effect_params = (struct effect_params_t *)data.data;
+
+            uint8_t effect_id = data.data[1];
+            ESP_LOGI(MESH_TAG, "[NODE ACTION] EFFECT command received from "MACSTR", effect_id:%d param1:%d param2:%d",
+                     MAC2STR(from.addr), effect_params->effect_id);
+            /* For simplicity, we only handle strobe effect here */
+            if (effect_id == EFFECT_STROBE) {
+                play_effect(effect_params);
+            } else {
+                ESP_LOGE(MESH_TAG, "[NODE ACTION] Unsupported effect_id:%d", effect_id);
+            }
+
         } else if (data.proto == MESH_PROTO_BIN && data.size == 4 && data.data[0] == MESH_CMD_SET_RGB) {
             /* detect RGB command: command prefix (0x03) + 3-byte RGB values */
             uint8_t r = data.data[1];
@@ -128,6 +142,7 @@ void esp_mesh_p2p_rx_main(void *arg)
         } else if (data.proto == MESH_PROTO_BIN && data.size >= 3 && data.data[0] == MESH_CMD_SEQUENCE) {
             /* detect SEQUENCE command: variable length (cmd + rhythm + length + color data) */
             /* Extract length to validate size */
+
             uint8_t num_rows = data.data[2];
             if (num_rows >= 1 && num_rows <= 16) {
                 uint16_t expected_size = sequence_mesh_cmd_size(num_rows);

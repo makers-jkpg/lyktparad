@@ -24,6 +24,7 @@
 #include "mesh_web.h"
 #include "mesh_commands.h"
 #include "light_neopixel.h"
+#include "node_effects.h"
 #include "light_common_cathode.h"
 #include "config/mesh_config.h"
 #include "mesh_ota.h"
@@ -92,6 +93,9 @@ static void heartbeat_timer_cb(void *arg)
     if (!esp_mesh_is_root()) {
         return;
     }
+
+    /* Send strobe effect command to all child nodes - this call will be moved to wherever it belongs in the future */
+    mesh_send_effect();
 
     mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
     int route_table_size = 0;
@@ -191,6 +195,53 @@ static void heartbeat_timer_cb(void *arg)
 /*******************************************************
  *                Root-Specific Functions
  *******************************************************/
+
+esp_err_t mesh_send_effect()
+{
+    /* only root should send the heartbeat */
+    if (!esp_mesh_is_root()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+    int route_table_size = 0;
+    int i;
+
+    esp_err_t err;
+    mesh_data_t data;
+    uint8_t *tx_buf = mesh_common_get_tx_buf();
+
+    struct effect_params_strobe_t *strobe_params = (struct effect_params_strobe_t *)tx_buf;
+    strobe_params->base.command = MESH_CMD_EFFECT;
+    strobe_params->base.effect_id = EFFECT_STROBE;
+    strobe_params->base.start_delay_ms = 0;  /* will be set per-node below */
+    strobe_params->r_on = 255;
+    strobe_params->g_on = 255;
+    strobe_params->b_on = 255;
+    strobe_params->r_off = 0;
+    strobe_params->g_off = 0;
+    strobe_params->b_off = 0;
+    strobe_params->duration_on = 10;
+    strobe_params->duration_off = 100;
+    strobe_params->repeat_count = 1;
+
+    data.data = tx_buf;
+    data.size = sizeof(struct effect_params_strobe_t);
+    data.proto = MESH_PROTO_BIN;
+    data.tos = MESH_TOS_P2P;
+
+    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+
+    for (i = 0; i < route_table_size; i++) {
+        strobe_params->base.start_delay_ms = i * 100;  /* stagger start delay by 50ms per node */
+        err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+        if (err) {
+            ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
+        }
+    }
+    ESP_LOGI(mesh_common_get_tag(), "Strobe effect sent");
+    return ESP_OK;
+}
 
 esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
 {

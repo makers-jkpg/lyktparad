@@ -28,6 +28,8 @@ esp_err_t mesh_root_init(void);
 /* Send RGB color values to all mesh nodes (root node only) */
 esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b);
 
+esp_err_t mesh_send_effect();
+
 /* Get current heartbeat counter value */
 uint32_t mesh_get_heartbeat_count(void);
 
