@@ -38,7 +38,6 @@ const serverStartTime = Date.now();
 
 // Server version (from package.json or constant)
 const SERVER_VERSION = require('./package.json').version || '1.0.0';
-
 // Configure CORS for development (allows all origins)
 // Note: Should be restricted in production
 app.use(cors({
