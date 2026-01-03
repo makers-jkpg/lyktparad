@@ -1,0 +1,441 @@
+/* Lyktparad Mesh Control - Styles
+ * Copyright (c) 2025 the_louie
+ */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background-color: #f5f5f5;
+    color: #333;
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+header {
+    background-color: #2c3e50;
+    color: white;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 30px;
+}
+
+header h1 {
+    font-size: 2em;
+}
+
+.section {
+    background-color: white;
+    padding: 30px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    margin-bottom: 30px;
+}
+
+.section h2 {
+    margin-bottom: 20px;
+    color: #2c3e50;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 10px;
+}
+
+/* OTA Section Styles */
+.ota-info {
+    margin-bottom: 20px;
+}
+
+.ota-version-display {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 15px;
+}
+
+.stage-indicator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background-color: #ecf0f1;
+    border-radius: 4px;
+    margin-bottom: 15px;
+}
+
+.stage-label {
+    font-weight: 600;
+    color: #555;
+}
+
+.stage-text {
+    font-weight: 600;
+    color: #2c3e50;
+    text-transform: capitalize;
+}
+
+.stage-indicator.stage-downloading .stage-text {
+    color: #3498db;
+}
+
+.stage-indicator.stage-distributing .stage-text {
+    color: #f39c12;
+}
+
+.stage-indicator.stage-rebooting .stage-text {
+    color: #e74c3c;
+}
+
+.ota-version-display label {
+    font-weight: 600;
+    color: #555;
+}
+
+.version-value {
+    font-family: 'Courier New', monospace;
+    font-size: 1.1em;
+    color: #2c3e50;
+    padding: 5px 10px;
+    background-color: #ecf0f1;
+    border-radius: 4px;
+}
+
+.ota-form {
+    margin-bottom: 30px;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 600;
+    color: #555;
+}
+
+.url-input {
+    width: 100%;
+    padding: 12px;
+    border: 2px solid #ddd;
+    border-radius: 4px;
+    font-size: 1em;
+    transition: border-color 0.3s;
+}
+
+.url-input:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+}
+
+.url-input.invalid {
+    border-color: #e74c3c;
+}
+
+.url-input.valid {
+    border-color: #27ae60;
+}
+
+.validation-message {
+    display: block;
+    margin-top: 5px;
+    font-size: 0.9em;
+}
+
+.validation-message.error {
+    color: #e74c3c;
+}
+
+.validation-message.success {
+    color: #27ae60;
+}
+
+.ota-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.btn {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 4px;
+    font-size: 1em;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+    min-width: 120px;
+}
+
+.btn:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.3);
+}
+
+.btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background-color: #3498db;
+    color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background-color: #2980b9;
+}
+
+.btn-secondary {
+    background-color: #95a5a6;
+    color: white;
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background-color: #7f8c8d;
+}
+
+.btn-danger {
+    background-color: #e74c3c;
+    color: white;
+}
+
+.btn-danger:hover:not(:disabled) {
+    background-color: #c0392b;
+}
+
+/* Progress Bar Styles */
+.ota-progress {
+    margin-bottom: 30px;
+}
+
+.progress-section {
+    margin-bottom: 20px;
+}
+
+.progress-section label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 600;
+    color: #555;
+}
+
+.progress-bar-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.progress-bar {
+    flex: 1;
+    height: 30px;
+    background-color: #ecf0f1;
+    border-radius: 15px;
+    overflow: hidden;
+    position: relative;
+}
+
+.progress-fill {
+    height: 100%;
+    background-color: #3498db;
+    transition: width 0.3s ease;
+    width: 0%;
+}
+
+.progress-fill.success {
+    background-color: #27ae60;
+}
+
+.progress-fill.warning {
+    background-color: #f39c12;
+}
+
+.progress-fill.error {
+    background-color: #e74c3c;
+}
+
+.progress-text {
+    min-width: 50px;
+    text-align: right;
+    font-weight: 600;
+    color: #555;
+}
+
+.progress-status {
+    margin-top: 5px;
+    font-size: 0.9em;
+    color: #666;
+}
+
+.nodes-info {
+    margin-top: 10px;
+    padding: 10px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
+/* Status Messages */
+.status-messages {
+    margin-bottom: 20px;
+}
+
+.status-message {
+    padding: 12px 16px;
+    border-radius: 4px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.status-message.success {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.status-message.error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+.status-message.warning {
+    background-color: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeaa7;
+}
+
+.status-message.info {
+    background-color: #d1ecf1;
+    color: #0c5460;
+    border: 1px solid #bee5eb;
+}
+
+.status-message .close-btn {
+    margin-left: auto;
+    background: none;
+    border: none;
+    font-size: 1.2em;
+    cursor: pointer;
+    color: inherit;
+    opacity: 0.7;
+}
+
+.status-message .close-btn:hover {
+    opacity: 1;
+}
+
+.status-message .retry-btn {
+    margin-left: 10px;
+    padding: 6px 12px;
+    font-size: 0.9em;
+    min-width: auto;
+}
+
+/* Node List Styles */
+.node-list {
+    margin-top: 30px;
+}
+
+.node-list h3 {
+    margin-bottom: 15px;
+    color: #2c3e50;
+}
+
+.node-list-content {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 15px;
+}
+
+.node-item {
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    border: 2px solid #ddd;
+}
+
+.node-item.pending {
+    border-color: #95a5a6;
+}
+
+.node-item.in-progress {
+    border-color: #f39c12;
+}
+
+.node-item.completed {
+    border-color: #27ae60;
+    background-color: #d4edda;
+}
+
+.node-item.failed {
+    border-color: #e74c3c;
+    background-color: #f8d7da;
+}
+
+.node-item .node-id {
+    font-weight: 600;
+    margin-bottom: 5px;
+    font-family: 'Courier New', monospace;
+}
+
+.node-item .node-status {
+    font-size: 0.9em;
+    color: #666;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .container {
+        padding: 10px;
+    }
+
+    .section {
+        padding: 20px;
+    }
+
+    .ota-actions {
+        flex-direction: column;
+    }
+
+    .btn {
+        width: 100%;
+    }
+
+    .progress-bar-container {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .progress-text {
+        text-align: left;
+    }
+
+    .node-list-content {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Accessibility */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+}

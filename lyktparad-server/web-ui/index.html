@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lyktparad Mesh Control</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lyktparad Mesh Control</h1>
+        </header>
+
+        <main>
+            <!-- Firmware Update Section -->
+            <section id="firmware-update-section" class="section">
+                <h2>Firmware Update</h2>
+
+                <div class="ota-info">
+                    <div class="ota-version-display">
+                        <label for="ota-current-version">Current Firmware Version:</label>
+                        <span id="ota-current-version" class="version-value">Loading...</span>
+                    </div>
+                    <div id="ota-stage-indicator" class="stage-indicator" style="display: none;">
+                        <span class="stage-label">Status:</span>
+                        <span id="ota-stage-text" class="stage-text">Idle</span>
+                    </div>
+                </div>
+
+                <div class="ota-form">
+                    <div class="form-group">
+                        <label for="ota-firmware-url">Firmware URL:</label>
+                        <input type="url" id="ota-firmware-url" class="url-input"
+                               placeholder="https://example.com/firmware.bin"
+                               aria-label="Firmware URL">
+                        <span id="ota-url-validation" class="validation-message" aria-live="polite"></span>
+                    </div>
+
+                    <div class="ota-actions">
+                        <button id="ota-check-button" class="btn btn-secondary" aria-label="Check for updates">
+                            Check for Updates
+                        </button>
+                        <button id="ota-start-button" class="btn btn-primary" aria-label="Start firmware update">
+                            Start Update
+                        </button>
+                        <button id="ota-cancel-button" class="btn btn-danger" aria-label="Cancel update" style="display: none;">
+                            Cancel Update
+                        </button>
+                    </div>
+                </div>
+
+                <div class="ota-progress">
+                    <div id="ota-download-section" class="progress-section" style="display: none;">
+                        <label>Download Progress:</label>
+                        <div class="progress-bar-container">
+                            <div id="ota-download-progress" class="progress-bar" role="progressbar"
+                                 aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Download progress">
+                                <div class="progress-fill"></div>
+                            </div>
+                            <span id="ota-download-percentage" class="progress-text">0%</span>
+                        </div>
+                        <div id="ota-download-status" class="progress-status"></div>
+                    </div>
+
+                    <div id="ota-distribution-section" class="progress-section" style="display: none;">
+                        <label>Distribution Progress:</label>
+                        <div class="progress-bar-container">
+                            <div id="ota-distribution-progress" class="progress-bar" role="progressbar"
+                                 aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Distribution progress">
+                                <div class="progress-fill"></div>
+                            </div>
+                            <span id="ota-distribution-percentage" class="progress-text">0%</span>
+                        </div>
+                        <div id="ota-distribution-status" class="progress-status"></div>
+                        <div id="ota-distribution-nodes" class="nodes-info"></div>
+                    </div>
+                </div>
+
+                <div id="ota-status-messages" class="status-messages" aria-live="polite" aria-atomic="true"></div>
+
+                <div id="ota-node-list" class="node-list" style="display: none;">
+                    <h3>Node Update Status</h3>
+                    <div id="ota-node-list-content" class="node-list-content"></div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="js/ota-api.js"></script>
+    <script src="js/ota-ui.js"></script>
+</body>
+</html>
