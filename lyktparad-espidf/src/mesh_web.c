@@ -20,6 +20,10 @@ static esp_err_t api_color_get_handler(httpd_req_t *req);
 static esp_err_t api_color_post_handler(httpd_req_t *req);
 static esp_err_t api_sequence_post_handler(httpd_req_t *req);
 static esp_err_t api_sequence_pointer_handler(httpd_req_t *req);
+static esp_err_t api_sequence_start_handler(httpd_req_t *req);
+static esp_err_t api_sequence_stop_handler(httpd_req_t *req);
+static esp_err_t api_sequence_reset_handler(httpd_req_t *req);
+static esp_err_t api_sequence_status_handler(httpd_req_t *req);
 static esp_err_t api_ota_download_post_handler(httpd_req_t *req);
 static esp_err_t api_ota_status_get_handler(httpd_req_t *req);
 static esp_err_t api_ota_cancel_post_handler(httpd_req_t *req);
@@ -313,6 +317,46 @@ static const char html_page[] =
 "  color: #27ae60;"
 "}"
 ".sync-feedback-error {"
+"  color: #e74c3c;"
+"}"
+".sequence-control-container {"
+"  text-align: center;"
+"  margin-top: 20px;"
+"  display: flex;"
+"  gap: 10px;"
+"  justify-content: center;"
+"}"
+"#startButton, #stopButton, #resetButton {"
+"  background: #667eea;"
+"  color: white;"
+"  border: none;"
+"  padding: 12px 24px;"
+"  border-radius: 8px;"
+"  font-size: 16px;"
+"  font-weight: bold;"
+"  cursor: pointer;"
+"  transition: background-color 0.2s;"
+"  min-height: 44px;"
+"}"
+"#startButton:hover, #stopButton:hover, #resetButton:hover {"
+"  background: #5568d3;"
+"}"
+"#startButton:active, #stopButton:active, #resetButton:active {"
+"  background: #4457b8;"
+"}"
+"#startButton:disabled, #stopButton:disabled, #resetButton:disabled {"
+"  opacity: 0.5;"
+"  cursor: not-allowed;"
+"}"
+"#sequenceControlFeedback {"
+"  margin-top: 10px;"
+"  font-size: 14px;"
+"  text-align: center;"
+"}"
+".sequence-control-feedback-success {"
+"  color: #27ae60;"
+"}"
+".sequence-control-feedback-error {"
 "  color: #e74c3c;"
 "}"
 "#colorPicker {"
@@ -672,6 +716,12 @@ static const char html_page[] =
 "<button id=\"syncButton\">Sync</button>"
 "<div id=\"syncFeedback\"></div>"
 "</div>"
+"<div class=\"sequence-control-container\">"
+"<button id=\"startButton\">Start</button>"
+"<button id=\"stopButton\">Stop</button>"
+"<button id=\"resetButton\">Reset</button>"
+"</div>"
+"<div id=\"sequenceControlFeedback\"></div>"
 "<div class=\"export-import-container\">"
 "<button id=\"exportButton\">Export Sequence</button>"
 "<button id=\"importButton\">Import Sequence</button>"
@@ -706,6 +756,8 @@ static const char html_page[] =
 "let localPointerTimer = null;"
 "let currentLocalPointer = 0;"
 "let maxSquares = 64;"
+"let sequenceSynced = false;"
+"let buttonStatePollInterval = null;"
 ""
 "function updateNodeCount() {"
 "  fetch('/api/nodes')"
@@ -1138,6 +1190,148 @@ static const char html_page[] =
 "  document.querySelectorAll('.grid-square.current').forEach(sq => sq.classList.remove('current'));"
 "}"
 ""
+"function updateSequenceButtonStates() {"
+"  const startButton = document.getElementById('startButton');"
+"  const stopButton = document.getElementById('stopButton');"
+"  const resetButton = document.getElementById('resetButton');"
+"  if (!startButton || !stopButton || !resetButton) return;"
+"  fetch('/api/sequence/status')"
+"    .then(response => {"
+"      if (!response.ok) {"
+"        startButton.disabled = true;"
+"        stopButton.disabled = true;"
+"        resetButton.disabled = true;"
+"        return;"
+"      }"
+"      return response.json();"
+"    })"
+"    .then(status => {"
+"      if (status === undefined) return;"
+"      const isActive = status.active;"
+"      startButton.disabled = !sequenceSynced || isActive;"
+"      stopButton.disabled = !isActive;"
+"      resetButton.disabled = !sequenceSynced;"
+"    })"
+"    .catch(err => {"
+"      console.error('Failed to check sequence status:', err);"
+"      startButton.disabled = true;"
+"      stopButton.disabled = true;"
+"      resetButton.disabled = true;"
+"    });"
+"}"
+""
+"function handleSequenceStart() {"
+"  const startButton = document.getElementById('startButton');"
+"  const feedback = document.getElementById('sequenceControlFeedback');"
+"  startButton.disabled = true;"
+"  feedback.textContent = 'Starting...';"
+"  feedback.className = '';"
+"  fetch('/api/sequence/start', {"
+"    method: 'POST'"
+"  })"
+"  .then(response => {"
+"    if (!response.ok) {"
+"      return response.json().then(err => Promise.reject(new Error(err.error || 'HTTP error: ' + response.status))).catch(() => Promise.reject(new Error('HTTP error: ' + response.status)));"
+"    }"
+"    return response.json();"
+"  })"
+"  .then(result => {"
+"    if (result.success) {"
+"      feedback.textContent = 'Sequence started!';"
+"      feedback.className = 'sequence-control-feedback-success';"
+"      startSequenceIndicator();"
+"      updateSequenceButtonStates();"
+"    } else {"
+"      feedback.textContent = 'Error: ' + (result.error || 'Failed to start');"
+"      feedback.className = 'sequence-control-feedback-error';"
+"      updateSequenceButtonStates();"
+"    }"
+"  })"
+"  .catch(err => {"
+"    feedback.textContent = 'Network error: ' + err.message;"
+"    feedback.className = 'sequence-control-feedback-error';"
+"    updateSequenceButtonStates();"
+"    console.error('Start error:', err);"
+"  });"
+"}"
+""
+"function handleSequenceStop() {"
+"  const stopButton = document.getElementById('stopButton');"
+"  const feedback = document.getElementById('sequenceControlFeedback');"
+"  stopButton.disabled = true;"
+"  feedback.textContent = 'Stopping...';"
+"  feedback.className = '';"
+"  fetch('/api/sequence/stop', {"
+"    method: 'POST'"
+"  })"
+"  .then(response => {"
+"    if (!response.ok) {"
+"      return response.json().then(err => Promise.reject(new Error(err.error || 'HTTP error: ' + response.status))).catch(() => Promise.reject(new Error('HTTP error: ' + response.status)));"
+"    }"
+"    return response.json();"
+"  })"
+"  .then(result => {"
+"    if (result.success) {"
+"      feedback.textContent = 'Sequence stopped!';"
+"      feedback.className = 'sequence-control-feedback-success';"
+"      stopSequenceIndicator();"
+"      updateSequenceButtonStates();"
+"    } else {"
+"      feedback.textContent = 'Error: ' + (result.error || 'Failed to stop');"
+"      feedback.className = 'sequence-control-feedback-error';"
+"      updateSequenceButtonStates();"
+"    }"
+"  })"
+"  .catch(err => {"
+"    feedback.textContent = 'Network error: ' + err.message;"
+"    feedback.className = 'sequence-control-feedback-error';"
+"    updateSequenceButtonStates();"
+"    console.error('Stop error:', err);"
+"  });"
+"}"
+""
+"function handleSequenceReset() {"
+"  const resetButton = document.getElementById('resetButton');"
+"  const feedback = document.getElementById('sequenceControlFeedback');"
+"  resetButton.disabled = true;"
+"  feedback.textContent = 'Resetting...';"
+"  feedback.className = '';"
+"  fetch('/api/sequence/reset', {"
+"    method: 'POST'"
+"  })"
+"  .then(response => {"
+"    if (!response.ok) {"
+"      return response.json().then(err => Promise.reject(new Error(err.error || 'HTTP error: ' + response.status))).catch(() => Promise.reject(new Error('HTTP error: ' + response.status)));"
+"    }"
+"    return response.json();"
+"  })"
+"  .then(result => {"
+"    if (result.success) {"
+"      feedback.textContent = 'Sequence reset!';"
+"      feedback.className = 'sequence-control-feedback-success';"
+"      const wasActive = sequenceIndicatorInterval !== null || localPointerTimer !== null;"
+"      if (wasActive) {"
+"        stopSequenceIndicator();"
+"        startSequenceIndicator();"
+"      } else {"
+"        currentLocalPointer = 0;"
+"        updateIndicatorBorder();"
+"      }"
+"      updateSequenceButtonStates();"
+"    } else {"
+"      feedback.textContent = 'Error: ' + (result.error || 'Failed to reset');"
+"      feedback.className = 'sequence-control-feedback-error';"
+"      updateSequenceButtonStates();"
+"    }"
+"  })"
+"  .catch(err => {"
+"    feedback.textContent = 'Network error: ' + err.message;"
+"    feedback.className = 'sequence-control-feedback-error';"
+"    updateSequenceButtonStates();"
+"    console.error('Reset error:', err);"
+"  });"
+"}"
+""
 "function syncGridData() {"
 "  const syncButton = document.getElementById('syncButton');"
 "  const syncFeedback = document.getElementById('syncFeedback');"
@@ -1168,11 +1362,15 @@ static const char html_page[] =
 "      if (result.success) {"
 "        syncFeedback.textContent = 'Synced successfully!';"
 "        syncFeedback.className = 'sync-feedback-success';"
+"        sequenceSynced = true;"
 "        stopSequenceIndicator();"
 "        startSequenceIndicator();"
+"        updateSequenceButtonStates();"
 "      } else {"
 "        syncFeedback.textContent = 'Error: ' + (result.error || 'Failed to sync');"
 "        syncFeedback.className = 'sync-feedback-error';"
+"        sequenceSynced = false;"
+"        updateSequenceButtonStates();"
 "      }"
 "      syncButton.disabled = false;"
 "      syncButton.textContent = 'Sync';"
@@ -1180,6 +1378,8 @@ static const char html_page[] =
 "    .catch(err => {"
 "      syncFeedback.textContent = 'Network error: ' + err.message;"
 "      syncFeedback.className = 'sync-feedback-error';"
+"      sequenceSynced = false;"
+"      updateSequenceButtonStates();"
 "      syncButton.disabled = false;"
 "      syncButton.textContent = 'Sync';"
 "      console.error('Sync error:', err);"
@@ -1187,6 +1387,8 @@ static const char html_page[] =
 "  } catch (err) {"
 "    syncFeedback.textContent = 'Error: ' + err.message;"
 "    syncFeedback.className = 'sync-feedback-error';"
+"    sequenceSynced = false;"
+"    updateSequenceButtonStates();"
 "    syncButton.disabled = false;"
 "    syncButton.textContent = 'Sync';"
 "    console.error('Sync error:', err);"
@@ -1202,6 +1404,9 @@ static const char html_page[] =
 "  updateInterval = setInterval(function() {"
 "    updateNodeCount();"
 "  }, 5000);"
+"  buttonStatePollInterval = setInterval(function() {"
+"    updateSequenceButtonStates();"
+"  }, 2000);"
 ""
 "  const gridContainer = document.getElementById('gridContainer');"
 "  gridContainer.addEventListener('click', function(e) {"
@@ -1260,6 +1465,17 @@ static const char html_page[] =
 ""
 "  const syncButton = document.getElementById('syncButton');"
 "  syncButton.addEventListener('click', syncGridData);"
+""
+"  const startButton = document.getElementById('startButton');"
+"  const stopButton = document.getElementById('stopButton');"
+"  const resetButton = document.getElementById('resetButton');"
+"  if (startButton) startButton.disabled = true;"
+"  if (stopButton) stopButton.disabled = true;"
+"  if (resetButton) resetButton.disabled = true;"
+"  startButton.addEventListener('click', handleSequenceStart);"
+"  stopButton.addEventListener('click', handleSequenceStop);"
+"  resetButton.addEventListener('click', handleSequenceReset);"
+"  updateSequenceButtonStates();"
 ""
 "  const exportButton = document.getElementById('exportButton');"
 "  exportButton.addEventListener('click', exportSequence);"
@@ -1570,6 +1786,123 @@ static esp_err_t api_sequence_pointer_handler(httpd_req_t *req)
     }
 
     httpd_resp_set_type(req, "text/plain");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    return httpd_resp_send(req, response, len);
+}
+
+/* API: POST /api/sequence/start - Start sequence playback */
+static esp_err_t api_sequence_start_handler(httpd_req_t *req)
+{
+    if (!esp_mesh_is_root()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Only root node can start sequence\"}", -1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = mode_sequence_root_start();
+
+    if (err == ESP_OK) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":true}", -1);
+        return ESP_OK;
+    } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"Start failed: %s\"}", esp_err_to_name(err));
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+}
+
+/* API: POST /api/sequence/stop - Stop sequence playback */
+static esp_err_t api_sequence_stop_handler(httpd_req_t *req)
+{
+    if (!esp_mesh_is_root()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Only root node can stop sequence\"}", -1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = mode_sequence_root_stop();
+
+    if (err == ESP_OK) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":true}", -1);
+        return ESP_OK;
+    } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"Stop failed: %s\"}", esp_err_to_name(err));
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+}
+
+/* API: POST /api/sequence/reset - Reset sequence pointer */
+static esp_err_t api_sequence_reset_handler(httpd_req_t *req)
+{
+    if (!esp_mesh_is_root()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Only root node can reset sequence\"}", -1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = mode_sequence_root_reset();
+
+    if (err == ESP_OK) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":true}", -1);
+        return ESP_OK;
+    } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"Reset failed: %s\"}", esp_err_to_name(err));
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+}
+
+/* API: GET /api/sequence/status - Returns sequence status */
+static esp_err_t api_sequence_status_handler(httpd_req_t *req)
+{
+    if (!esp_mesh_is_root()) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"active\":false}", -1);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    bool active = mode_sequence_root_is_active();
+
+    char response[128];
+    int len = snprintf(response, sizeof(response), "{\"active\":%s}",
+                      active ? "true" : "false");
+
+    if (len < 0 || len >= (int)sizeof(response)) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"active\":false}", -1);
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     return httpd_resp_send(req, response, len);
 }
@@ -1971,7 +2304,7 @@ esp_err_t mesh_web_server_start(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 17;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, ota_download, ota_status, ota_cancel, ota_version, ota_distribute, ota_distribution_status, ota_distribution_progress, ota_distribution_cancel, ota_reboot, index = 15 handlers */
+    config.max_uri_handlers = 21;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, sequence_start, sequence_stop, sequence_reset, sequence_status, ota_download, ota_status, ota_cancel, ota_version, ota_distribute, ota_distribution_status, ota_distribution_progress, ota_distribution_cancel, ota_reboot, index = 19 handlers */
     config.stack_size = 8192;
     config.server_port = 80;
 
@@ -2045,6 +2378,62 @@ esp_err_t mesh_web_server_start(void)
         reg_err = httpd_register_uri_handler(server_handle, &sequence_pointer_uri);
         if (reg_err != ESP_OK) {
             ESP_LOGE(WEB_TAG, "Failed to register sequence pointer URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t sequence_start_uri = {
+            .uri       = "/api/sequence/start",
+            .method    = HTTP_POST,
+            .handler   = api_sequence_start_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &sequence_start_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register sequence start URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t sequence_stop_uri = {
+            .uri       = "/api/sequence/stop",
+            .method    = HTTP_POST,
+            .handler   = api_sequence_stop_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &sequence_stop_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register sequence stop URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t sequence_reset_uri = {
+            .uri       = "/api/sequence/reset",
+            .method    = HTTP_POST,
+            .handler   = api_sequence_reset_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &sequence_reset_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register sequence reset URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t sequence_status_uri = {
+            .uri       = "/api/sequence/status",
+            .method    = HTTP_GET,
+            .handler   = api_sequence_status_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &sequence_status_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register sequence status URI: 0x%x", reg_err);
             httpd_stop(server_handle);
             server_handle = NULL;
             return ESP_FAIL;
