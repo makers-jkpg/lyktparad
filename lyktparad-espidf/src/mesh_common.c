@@ -73,6 +73,7 @@
 #include "light_common_cathode.h"
 #include "mesh_ota.h"
 #include "mesh_udp_bridge.h"
+#include "root_status_led.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -307,34 +308,21 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             }
         }
 
-        /* Ensure LED shows unconnected state - check router connection for root */
-        if (is_root) {
-            /* Root node: LED base color indicates router connection status */
-            if (is_router_connected) {
-                mesh_light_set_colour(MESH_LIGHT_GREEN);
-            } else {
-                mesh_light_set_colour(MESH_LIGHT_ORANGE);
-            }
-        } else {
-            mesh_light_set_colour(MESH_LIGHT_RED);
-        }
+        /* Ensure LED shows unconnected state */
+        mesh_light_set_colour(MESH_LIGHT_RED);
+
+        /* Update status LED based on current mesh role (mesh role is now known) */
+        root_status_led_update();
     }
     break;
     case MESH_EVENT_STOPPED: {
         ESP_LOGI(MESH_TAG, "<MESH_EVENT_STOPPED>");
         is_mesh_connected = false;
         mesh_layer = esp_mesh_get_layer();
-        /* Turn LED back to unconnected state - check router connection for root */
-        if (is_root) {
-            /* Root node: LED base color indicates router connection status */
-            if (is_router_connected) {
-                mesh_light_set_colour(MESH_LIGHT_GREEN);
-            } else {
-                mesh_light_set_colour(MESH_LIGHT_ORANGE);
-            }
-        } else {
-            mesh_light_set_colour(MESH_LIGHT_RED);
-        }
+        /* Turn LED back to unconnected state */
+        mesh_light_set_colour(MESH_LIGHT_RED);
+        /* Update status LED - mesh stopped, node is no longer root */
+        root_status_led_update();
     }
     break;
     case MESH_EVENT_CHILD_CONNECTED: {
@@ -471,14 +459,8 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             scan_fail_toggle_timer = NULL;
         }
         /* Set LED state when connected - heartbeat will take over from here */
-        if (is_root) {
-            /* Root node: LED base color is controlled by router connection status (IP events)
-             * Don't change LED here - router connection status (GREEN/ORANGE) is the base color
-             * Heartbeat will add white blink when mesh nodes are present */
-        } else {
-            /* Non-root node: turn off LED (heartbeat will control it) */
-            mesh_light_set_colour(0);
-        }
+        /* Turn off LED (heartbeat will control it for all nodes) */
+        mesh_light_set_colour(0);
         if (is_root && root_event_callback) {
             root_event_callback(arg, event_base, event_id, event_data);
         }
@@ -505,16 +487,8 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             esp_timer_delete(scan_fail_toggle_timer);
             scan_fail_toggle_timer = NULL;
         }
-        /* Turn LED back to unconnected state - check router connection for root */
-        if (is_root) {
-            if (is_router_connected) {
-                mesh_light_set_colour(MESH_LIGHT_GREEN);
-            } else {
-                mesh_light_set_colour(MESH_LIGHT_ORANGE);
-            }
-        } else {
-            mesh_light_set_colour(MESH_LIGHT_RED);
-        }
+        /* Turn LED back to unconnected state */
+        mesh_light_set_colour(MESH_LIGHT_RED);
     }
     break;
     case MESH_EVENT_LAYER_CHANGE: {
@@ -534,6 +508,8 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             mesh_udp_bridge_stop_heartbeat();
             mesh_udp_bridge_stop_state_updates();
             mesh_udp_bridge_broadcast_listener_stop();
+            /* Update status LED to OFF */
+            root_status_led_set_root(false);
         } else if (!was_root_before && is_root_now) {
             /* Node became root - start heartbeat and state updates if registered */
             if (mesh_udp_bridge_is_registered()) {
@@ -541,6 +517,11 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
                 mesh_udp_bridge_start_state_updates();
             }
             /* Broadcast listener will be started in mesh_root_ip_callback when IP is obtained */
+            /* Update status LED to ON */
+            root_status_led_set_root(true);
+        } else {
+            /* Update status LED based on current role */
+            root_status_led_update();
         }
 
         /* Update previous root status */
@@ -592,10 +573,17 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             mesh_udp_bridge_stop_heartbeat();
             mesh_udp_bridge_stop_state_updates();
             mesh_udp_bridge_broadcast_listener_stop();
+            /* Update status LED to OFF */
+            root_status_led_set_root(false);
         } else if (mesh_udp_bridge_is_registered()) {
             /* Node is root and registered - start heartbeat and state updates */
             mesh_udp_bridge_start_heartbeat();
             mesh_udp_bridge_start_state_updates();
+            /* Update status LED to ON */
+            root_status_led_set_root(true);
+        } else {
+            /* Update status LED based on current role */
+            root_status_led_update();
         }
         /* Broadcast listener will be started in mesh_root_ip_callback when IP is obtained */
 
@@ -731,9 +719,8 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
                  is_root ? "ROOT NODE" : "NON-ROOT NODE");
 
         if (is_root) {
-            /* Root node: router connected - set GREEN base color */
+            /* Root node: router connected */
             is_router_connected = true;
-            mesh_light_set_colour(MESH_LIGHT_GREEN);
 
             if (root_ip_callback) {
                 root_ip_callback(arg, event_base, event_id, event_data);
@@ -743,9 +730,8 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "<IP_EVENT_STA_LOST_IP>");
 
         if (is_root) {
-            /* Root node: router disconnected - set ORANGE */
+            /* Root node: router disconnected */
             is_router_connected = false;
-            mesh_light_set_colour(MESH_LIGHT_ORANGE);
         }
     }
 }
@@ -876,6 +862,9 @@ esp_err_t mesh_common_init(void)
 #endif
 
     init_rgb_led();
+
+    /* Initialize root status LED */
+    root_status_led_init();
 
     bool is_root = esp_mesh_is_root();
     bool is_root_fixed = esp_mesh_is_root_fixed();

@@ -18,6 +18,7 @@
 #include "esp_mesh.h"
 #include "mesh_common.h"
 #include "mesh_child.h"
+#include "mesh_root.h"
 #include "mesh_commands.h"
 #include "light_neopixel.h"
 #include "node_sequence.h"
@@ -66,11 +67,20 @@ void esp_mesh_p2p_rx_main(void *arg)
             continue;
         }
         if (esp_mesh_is_root()) {
-            /* Root node handles OTA messages */
+            /* Root node handles OTA messages and RGB commands for unified behavior */
             if (data.proto == MESH_PROTO_BIN && data.size >= 1) {
                 uint8_t cmd = data.data[0];
                 if (cmd == MESH_CMD_OTA_REQUEST || cmd == MESH_CMD_OTA_ACK || cmd == MESH_CMD_OTA_STATUS) {
                     mesh_ota_handle_mesh_message(&from, data.data, data.size);
+                    continue;
+                } else if (data.size == 4 && cmd == MESH_CMD_SET_RGB) {
+                    /* Root node can receive RGB commands for unified behavior */
+                    uint8_t r = data.data[1];
+                    uint8_t g = data.data[2];
+                    uint8_t b = data.data[3];
+                    ESP_LOGI(MESH_TAG, "[ROOT ACTION] RGB command received from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
+                    mesh_root_handle_rgb_command(r, g, b);
+                    continue;
                 }
             }
             continue;

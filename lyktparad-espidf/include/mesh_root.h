@@ -40,4 +40,7 @@ void mesh_get_current_rgb(uint8_t *r, uint8_t *g, uint8_t *b, bool *is_set);
 /* Get number of nodes in mesh (for root node web interface) */
 int mesh_get_node_count(void);
 
+/* Handle RGB command received via mesh network (for unified behavior) */
+void mesh_root_handle_rgb_command(uint8_t r, uint8_t g, uint8_t b);
+
 #endif /* __MESH_ROOT_H__ */
