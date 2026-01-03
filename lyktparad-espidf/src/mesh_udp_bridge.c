@@ -21,6 +21,8 @@
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
 #include "lwip/netdb.h"
+#include "lwip/ip4_addr.h"
+#include "mdns.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
@@ -45,6 +47,15 @@ static bool s_registration_complete = false;
 
 /* NVS namespace for cached server address */
 #define NVS_NAMESPACE_UDP_BRIDGE "udp_bridge"
+#define NVS_KEY_SERVER_IP "server_ip"
+#define NVS_KEY_SERVER_PORT "server_port"
+
+/* mDNS initialization state */
+static bool s_mdns_initialized = false;
+
+/* Retry task state */
+static TaskHandle_t s_retry_task_handle = NULL;
+static bool s_retry_task_running = false;
 
 /*******************************************************
  *                UDP Socket Management
@@ -564,6 +575,226 @@ void mesh_udp_bridge_set_registration(bool registered, const uint8_t *server_ip,
  *                Cached Server Address
  *******************************************************/
 
+/**
+ * @brief Initialize mDNS component for service discovery.
+ *
+ * Initializes the ESP-IDF mDNS component and sets the hostname.
+ * This function is idempotent - calling it multiple times is safe.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_mdns_init(void)
+{
+    if (s_mdns_initialized) {
+        return ESP_OK;  /* Already initialized */
+    }
+
+    esp_err_t err = mdns_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to initialize mDNS: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Set hostname for mDNS */
+    err = mdns_hostname_set("lyktparad-root");
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to set mDNS hostname: %s", esp_err_to_name(err));
+        /* Continue even if hostname set fails - discovery can still work */
+    }
+
+    s_mdns_initialized = true;
+    ESP_LOGI(TAG, "mDNS initialized successfully");
+    return ESP_OK;
+}
+
+/*******************************************************
+ *                Service Discovery
+ *******************************************************/
+
+/**
+ * @brief Discover external web server via mDNS.
+ *
+ * Queries for _lyktparad-web._tcp service and extracts server IP and UDP port.
+ * The UDP port is extracted from TXT records if available, otherwise uses HTTP port.
+ *
+ * @param timeout_ms Query timeout in milliseconds (10000-30000)
+ * @param server_ip Output buffer for server IP (must be at least 16 bytes)
+ * @param server_port Output pointer for UDP port
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_discover_server(uint32_t timeout_ms, char *server_ip, uint16_t *server_port)
+{
+    if (server_ip == NULL || server_port == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Ensure mDNS is initialized */
+    if (!s_mdns_initialized) {
+        esp_err_t err = mesh_udp_bridge_mdns_init();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to initialize mDNS for discovery");
+            return err;
+        }
+    }
+
+    /* Query for _lyktparad-web._tcp service */
+    mdns_result_t *results = NULL;
+    esp_err_t err = mdns_query_ptr("_lyktparad-web", "_tcp", timeout_ms, 20, &results);
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "mDNS query failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    if (results == NULL) {
+        ESP_LOGI(TAG, "No external web server found via mDNS");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Use first result (if multiple services found, use first) */
+    mdns_result_t *result = results;
+
+    /* Extract IP address */
+    if (result->addr == NULL) {
+        ESP_LOGE(TAG, "mDNS result has no IP address");
+        mdns_query_results_free(results);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    /* Convert IP address to string */
+    if (result->addr->addr.type == IPADDR_TYPE_V4) {
+        /* IPv4 address */
+        struct in_addr addr;
+        addr.s_addr = result->addr->addr.u_addr.ip4.addr;
+        const char *ip_str = inet_ntoa(addr);
+        if (ip_str == NULL) {
+            ESP_LOGE(TAG, "Failed to convert IP address to string");
+            mdns_query_results_free(results);
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+        strncpy(server_ip, ip_str, 15);
+        server_ip[15] = '\0';
+    } else {
+        ESP_LOGE(TAG, "Unsupported IP address type (only IPv4 supported)");
+        mdns_query_results_free(results);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    /* Extract port - start with HTTP port from service record */
+    uint16_t discovered_port = result->port;
+
+    /* Parse TXT records for protocol and UDP port */
+    bool protocol_valid = false;
+    if (result->txt != NULL) {
+        for (int i = 0; i < result->txt->count; i++) {
+            mdns_txt_item_t *item = &result->txt->items[i];
+            if (item->key != NULL && item->value != NULL) {
+                /* Check for protocol key (should be "udp") */
+                if (strcmp(item->key, "protocol") == 0) {
+                    if (strcmp(item->value, "udp") == 0) {
+                        protocol_valid = true;
+                        ESP_LOGI(TAG, "Found protocol in TXT record: %s", item->value);
+                    } else {
+                        ESP_LOGW(TAG, "Unexpected protocol in TXT record: %s (expected 'udp')", item->value);
+                    }
+                }
+                /* Check for UDP port in TXT records */
+                else if (strcmp(item->key, "udp_port") == 0) {
+                    /* Found UDP port in TXT record */
+                    int udp_port = atoi(item->value);
+                    if (udp_port > 0 && udp_port <= 65535) {
+                        discovered_port = (uint16_t)udp_port;
+                        ESP_LOGI(TAG, "Found UDP port in TXT record: %d", discovered_port);
+                    } else {
+                        ESP_LOGW(TAG, "Invalid UDP port in TXT record: %s", item->value);
+                    }
+                }
+            }
+        }
+    }
+
+    /* Log warning if protocol not found or invalid (but continue anyway) */
+    if (!protocol_valid && result->txt != NULL) {
+        ESP_LOGW(TAG, "Protocol 'udp' not found in TXT records (service type already validated)");
+    }
+
+    *server_port = discovered_port;
+
+    ESP_LOGI(TAG, "Discovered external web server: %s:%d", server_ip, *server_port);
+
+    /* Free query results */
+    mdns_query_results_free(results);
+
+    return ESP_OK;
+}
+
+/*******************************************************
+ *                NVS Cache Management
+ *******************************************************/
+
+#define NVS_NAMESPACE_UDP_BRIDGE "udp_bridge"
+#define NVS_KEY_SERVER_IP "server_ip"
+#define NVS_KEY_SERVER_PORT "server_port"
+
+/**
+ * @brief Cache discovered server address in NVS.
+ *
+ * Stores the server IP address and UDP port in NVS for use on subsequent boots.
+ *
+ * @param server_ip Server IP address string (e.g., "192.168.1.100")
+ * @param server_port Server UDP port
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_cache_server(const char *server_ip, uint16_t server_port)
+{
+    if (server_ip == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to open NVS namespace '%s': %s", NVS_NAMESPACE_UDP_BRIDGE, esp_err_to_name(err));
+        return err;
+    }
+
+    /* Store server IP address */
+    err = nvs_set_str(nvs_handle, NVS_KEY_SERVER_IP, server_ip);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to store server IP in NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    /* Store server port */
+    err = nvs_set_u16(nvs_handle, NVS_KEY_SERVER_PORT, server_port);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to store server port in NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    /* Commit changes */
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to commit NVS changes: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "Cached server address: %s:%d", server_ip, server_port);
+    return ESP_OK;
+}
+
+/**
+ * @brief Retrieve cached server address from NVS.
+ *
+ * Reads the server IP address and UDP port from NVS cache.
+ *
+ * @param server_ip Output buffer for server IP (must be at least 16 bytes)
+ * @param server_port Output pointer for UDP port
+ * @return ESP_OK if cache exists, ESP_ERR_NOT_FOUND if cache is missing, error code on failure
+ */
 esp_err_t mesh_udp_bridge_get_cached_server(char *server_ip, uint16_t *server_port)
 {
     if (server_ip == NULL || server_port == NULL) {
@@ -573,32 +804,248 @@ esp_err_t mesh_udp_bridge_get_cached_server(char *server_ip, uint16_t *server_po
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READONLY, &nvs_handle);
     if (err != ESP_OK) {
-        ESP_LOGD(TAG, "Failed to open NVS: %s", esp_err_to_name(err));
+        ESP_LOGD(TAG, "Failed to open NVS namespace '%s': %s", NVS_NAMESPACE_UDP_BRIDGE, esp_err_to_name(err));
         return err;
     }
 
-    /* Read server IP */
+    /* Read server IP address */
     size_t required_size = 16;
-    err = nvs_get_str(nvs_handle, "server_ip", server_ip, &required_size);
+    err = nvs_get_str(nvs_handle, NVS_KEY_SERVER_IP, server_ip, &required_size);
     if (err != ESP_OK) {
-        nvs_close(nvs_handle);
         if (err == ESP_ERR_NVS_NOT_FOUND) {
-            return ESP_ERR_NOT_FOUND;
+            ESP_LOGD(TAG, "No cached server IP found in NVS");
+        } else {
+            ESP_LOGW(TAG, "Failed to read server IP from NVS: %s", esp_err_to_name(err));
         }
+        nvs_close(nvs_handle);
         return err;
     }
 
     /* Read server port */
-    err = nvs_get_u16(nvs_handle, "server_port", server_port);
+    err = nvs_get_u16(nvs_handle, NVS_KEY_SERVER_PORT, server_port);
     if (err != ESP_OK) {
-        nvs_close(nvs_handle);
         if (err == ESP_ERR_NVS_NOT_FOUND) {
-            return ESP_ERR_NOT_FOUND;
+            ESP_LOGD(TAG, "No cached server port found in NVS");
+        } else {
+            ESP_LOGW(TAG, "Failed to read server port from NVS: %s", esp_err_to_name(err));
         }
+        nvs_close(nvs_handle);
         return err;
     }
 
     nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "Retrieved cached server address: %s:%d", server_ip, *server_port);
+    return ESP_OK;
+}
+
+/*******************************************************
+ *                mDNS Initialization
+ *******************************************************/
+
+/**
+ * @brief Initialize mDNS component for service discovery.
+ *
+ * Initializes the ESP-IDF mDNS component and sets the hostname.
+ * This function is idempotent - calling it multiple times is safe.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_mdns_init(void)
+{
+    if (s_mdns_initialized) {
+        return ESP_OK;  /* Already initialized */
+    }
+
+    esp_err_t err = mdns_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to initialize mDNS: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Set hostname for mDNS */
+    err = mdns_hostname_set("lyktparad-root");
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to set mDNS hostname: %s", esp_err_to_name(err));
+        /* Continue even if hostname set fails - discovery can still work */
+    }
+
+    s_mdns_initialized = true;
+    ESP_LOGI(TAG, "mDNS initialized successfully");
+    return ESP_OK;
+}
+
+/*******************************************************
+ *                Service Discovery
+ *******************************************************/
+
+/**
+ * @brief Discover external web server via mDNS.
+ *
+ * Queries for _lyktparad-web._tcp service and extracts server IP and UDP port.
+ * The UDP port is extracted from TXT records if available, otherwise uses HTTP port.
+ *
+ * @param timeout_ms Query timeout in milliseconds (10000-30000)
+ * @param server_ip Output buffer for server IP (must be at least 16 bytes)
+ * @param server_port Output pointer for UDP port
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_discover_server(uint32_t timeout_ms, char *server_ip, uint16_t *server_port)
+{
+    if (server_ip == NULL || server_port == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Ensure mDNS is initialized */
+    if (!s_mdns_initialized) {
+        esp_err_t err = mesh_udp_bridge_mdns_init();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to initialize mDNS for discovery");
+            return err;
+        }
+    }
+
+    /* Query for _lyktparad-web._tcp service */
+    mdns_result_t *results = NULL;
+    esp_err_t err = mdns_query_ptr("_lyktparad-web", "_tcp", timeout_ms, 20, &results);
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "mDNS query failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    if (results == NULL) {
+        ESP_LOGI(TAG, "No external web server found via mDNS");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Use first result (if multiple services found, use first) */
+    mdns_result_t *result = results;
+
+    /* Extract IP address */
+    if (result->addr == NULL) {
+        ESP_LOGE(TAG, "mDNS result has no IP address");
+        mdns_query_results_free(results);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    /* Convert IP address to string */
+    if (result->addr->addr.type == IPADDR_TYPE_V4) {
+        /* IPv4 address */
+        struct in_addr addr;
+        addr.s_addr = result->addr->addr.u_addr.ip4.addr;
+        const char *ip_str = inet_ntoa(addr);
+        if (ip_str == NULL) {
+            ESP_LOGE(TAG, "Failed to convert IP address to string");
+            mdns_query_results_free(results);
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+        strncpy(server_ip, ip_str, 15);
+        server_ip[15] = '\0';
+    } else {
+        ESP_LOGE(TAG, "Unsupported IP address type (only IPv4 supported)");
+        mdns_query_results_free(results);
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    /* Extract port - start with HTTP port from service record */
+    uint16_t discovered_port = result->port;
+
+    /* Parse TXT records for protocol and UDP port */
+    bool protocol_valid = false;
+    if (result->txt != NULL) {
+        for (int i = 0; i < result->txt->count; i++) {
+            mdns_txt_item_t *item = &result->txt->items[i];
+            if (item->key != NULL && item->value != NULL) {
+                /* Check for protocol key (should be "udp") */
+                if (strcmp(item->key, "protocol") == 0) {
+                    if (strcmp(item->value, "udp") == 0) {
+                        protocol_valid = true;
+                        ESP_LOGI(TAG, "Found protocol in TXT record: %s", item->value);
+                    } else {
+                        ESP_LOGW(TAG, "Unexpected protocol in TXT record: %s (expected 'udp')", item->value);
+                    }
+                }
+                /* Check for UDP port in TXT records */
+                else if (strcmp(item->key, "udp_port") == 0) {
+                    /* Found UDP port in TXT record */
+                    int udp_port = atoi(item->value);
+                    if (udp_port > 0 && udp_port <= 65535) {
+                        discovered_port = (uint16_t)udp_port;
+                        ESP_LOGI(TAG, "Found UDP port in TXT record: %d", discovered_port);
+                    } else {
+                        ESP_LOGW(TAG, "Invalid UDP port in TXT record: %s", item->value);
+                    }
+                }
+            }
+        }
+    }
+
+    /* Log warning if protocol not found or invalid (but continue anyway) */
+    if (!protocol_valid && result->txt != NULL) {
+        ESP_LOGW(TAG, "Protocol 'udp' not found in TXT records (service type already validated)");
+    }
+
+    *server_port = discovered_port;
+
+    ESP_LOGI(TAG, "Discovered external web server: %s:%d", server_ip, *server_port);
+
+    /* Free query results */
+    mdns_query_results_free(results);
+
+    return ESP_OK;
+}
+
+/*******************************************************
+ *                NVS Cache Management
+ *******************************************************/
+
+/**
+ * @brief Cache discovered server address in NVS.
+ *
+ * Stores the server IP address and UDP port in NVS for use on subsequent boots.
+ *
+ * @param server_ip Server IP address string (e.g., "192.168.1.100")
+ * @param server_port Server UDP port
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_cache_server(const char *server_ip, uint16_t server_port)
+{
+    if (server_ip == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to open NVS namespace '%s': %s", NVS_NAMESPACE_UDP_BRIDGE, esp_err_to_name(err));
+        return err;
+    }
+
+    /* Store server IP address */
+    err = nvs_set_str(nvs_handle, NVS_KEY_SERVER_IP, server_ip);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to store server IP in NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    /* Store server port */
+    err = nvs_set_u16(nvs_handle, NVS_KEY_SERVER_PORT, server_port);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to store server port in NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    /* Commit changes */
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to commit NVS changes: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "Cached server address: %s:%d", server_ip, server_port);
     return ESP_OK;
 }
 
@@ -2868,74 +3315,128 @@ static void mesh_udp_bridge_api_listener_task(void *pvParameters)
     s_api_listener_task_handle = NULL;
     s_api_listener_running = false;
     ESP_LOGI(TAG, "UDP API listener task stopped");
+}
+
+/*******************************************************
+ *                Retry Logic
+ *******************************************************/
+
+/**
+ * @brief Background retry task for service discovery.
+ *
+ * Implements exponential backoff retry strategy:
+ * - Initial delay: 5 seconds
+ * - Maximum delay: 60 seconds
+ * - Backoff multiplier: 2x
+ *
+ * The task stops if discovery succeeds or if the task is explicitly stopped.
+ */
+static void mesh_udp_bridge_retry_task(void *pvParameters)
+{
+    uint32_t delay_ms = 5000;  /* Initial delay: 5 seconds */
+    const uint32_t max_delay_ms = 60000;  /* Maximum delay: 60 seconds */
+    const uint32_t backoff_multiplier = 2;  /* Backoff multiplier: 2x */
+
+    char server_ip[16] = {0};
+    uint16_t server_port = 0;
+
+    ESP_LOGI(TAG, "Discovery retry task started");
+
+    while (s_retry_task_running) {
+        /* Wait for delay period */
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+
+        /* Check if task should still run */
+        if (!s_retry_task_running) {
+            break;
+        }
+
+        /* Ensure mDNS is initialized */
+        if (!s_mdns_initialized) {
+            esp_err_t err = mesh_udp_bridge_mdns_init();
+            if (err != ESP_OK) {
+                ESP_LOGD(TAG, "mDNS initialization failed in retry task, will retry");
+                /* Increase delay and continue */
+                delay_ms = (delay_ms * backoff_multiplier > max_delay_ms) ? max_delay_ms : delay_ms * backoff_multiplier;
+                continue;
+            }
+        }
+
+        /* Perform discovery with 20 second timeout */
+        ESP_LOGI(TAG, "Retrying discovery (delay was %lu ms)", (unsigned long)delay_ms);
+        esp_err_t err = mesh_udp_bridge_discover_server(20000, server_ip, &server_port);
+        if (err == ESP_OK) {
+            /* Discovery succeeded - cache the address and stop retrying */
+            ESP_LOGI(TAG, "Discovery succeeded in retry task: %s:%d", server_ip, server_port);
+            mesh_udp_bridge_cache_server(server_ip, server_port);
+
+            /* Convert IP string to network byte order for registration */
+            struct in_addr addr;
+            if (inet_aton(server_ip, &addr) != 0) {
+                uint8_t ip_bytes[4];
+                memcpy(ip_bytes, &addr.s_addr, 4);
+                mesh_udp_bridge_set_registration(true, ip_bytes, server_port);
+            }
+
+            /* Stop retrying */
+            s_retry_task_running = false;
+            s_retry_task_handle = NULL;
+            vTaskDelete(NULL);
+            return;
+        } else {
+            /* Discovery failed - increase delay for next retry */
+            ESP_LOGI(TAG, "Discovery retry failed, will retry in %lu ms", (unsigned long)(delay_ms * backoff_multiplier));
+            delay_ms = (delay_ms * backoff_multiplier > max_delay_ms) ? max_delay_ms : delay_ms * backoff_multiplier;
+        }
+    }
+
+    /* Task cleanup */
+    s_retry_task_running = false;
+    s_retry_task_handle = NULL;
+    ESP_LOGI(TAG, "Discovery retry task stopped");
     vTaskDelete(NULL);
 }
 
 /**
- * @brief Start the UDP API command listener task.
+ * @brief Start background retry task for service discovery.
  *
- * Starts a FreeRTOS task that listens for UDP API commands from the external web server.
- * Only starts if the node is root. The listener is completely optional and does not affect
- * embedded web server operation.
+ * Starts a FreeRTOS task that retries discovery with exponential backoff.
+ * The task will stop automatically if discovery succeeds.
+ *
+ * @return ESP_OK on success, error code on failure
  */
-void mesh_udp_bridge_api_listener_start(void)
+esp_err_t mesh_udp_bridge_start_retry_task(void)
 {
-    /* Check if task already running */
-    if (s_api_listener_running && s_api_listener_task_handle != NULL) {
-        ESP_LOGD(TAG, "API listener task already running");
-        return;
+    if (s_retry_task_running) {
+        ESP_LOGD(TAG, "Retry task already running");
+        return ESP_OK;
     }
 
-    /* Only root node should listen for API commands */
-    if (!esp_mesh_is_root()) {
-        ESP_LOGD(TAG, "Not root node, skipping API listener start");
-        return;
+    s_retry_task_running = true;
+    BaseType_t err = xTaskCreate(mesh_udp_bridge_retry_task, "udp_bridge_retry", 4096, NULL, 1, &s_retry_task_handle);
+    if (err != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create retry task");
+        s_retry_task_running = false;
+        s_retry_task_handle = NULL;
+        return ESP_FAIL;
     }
 
-    /* Create FreeRTOS task */
-    BaseType_t task_err = xTaskCreate(mesh_udp_bridge_api_listener_task, "udp_api_listener",
-                                      4096, NULL, 2, &s_api_listener_task_handle);
-    if (task_err != pdPASS) {
-        ESP_LOGW(TAG, "Failed to create API listener task");
-        s_api_listener_task_handle = NULL;
-        s_api_listener_running = false;
-    } else {
-        s_api_listener_running = true;
-        ESP_LOGI(TAG, "API listener task started");
-    }
+    ESP_LOGI(TAG, "Discovery retry task started");
+    return ESP_OK;
 }
 
 /**
- * @brief Stop the UDP API command listener task.
+ * @brief Stop background retry task for service discovery.
  *
- * Stops the API command listener task and cleans up resources.
- * This function is safe to call even if the task is not running.
+ * Stops the retry task if it is running.
  */
-void mesh_udp_bridge_api_listener_stop(void)
+void mesh_udp_bridge_stop_retry_task(void)
 {
-    if (!s_api_listener_running || s_api_listener_task_handle == NULL) {
-        /* Task not running, nothing to stop */
+    if (!s_retry_task_running || s_retry_task_handle == NULL) {
         return;
     }
 
-    /* Signal task to exit */
-    s_api_listener_running = false;
-
-    /* Wait a bit for task to exit */
-    vTaskDelay(pdMS_TO_TICKS(200));
-
-    /* Delete task if still running */
-    if (s_api_listener_task_handle != NULL) {
-        vTaskDelete(s_api_listener_task_handle);
-        s_api_listener_task_handle = NULL;
-    }
-
-    /* Close socket if still open */
-    if (s_api_listener_socket >= 0) {
-        close(s_api_listener_socket);
-        s_api_listener_socket = -1;
-    }
-
-    s_api_listener_running = false;
-    ESP_LOGI(TAG, "API listener task stopped");
+    s_retry_task_running = false;
+    /* Task will clean itself up */
+    ESP_LOGI(TAG, "Stopping discovery retry task");
 }

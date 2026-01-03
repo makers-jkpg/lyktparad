@@ -31,8 +31,11 @@
 #include "mesh_udp_bridge.h"
 #include "root_status_led.h"
 #include "node_sequence.h"
+#include "mesh_udp_bridge.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "lwip/inet.h"
+#include "lwip/ip4_addr.h"
 
 #ifndef CONFIG_MESH_ROUTE_TABLE_SIZE
 #define CONFIG_MESH_ROUTE_TABLE_SIZE 50
@@ -542,6 +545,79 @@ static void mesh_root_event_callback(void *arg, esp_event_base_t event_base,
  *                Root IP Event Handler Callback
  *******************************************************/
 
+/**
+ * @brief Discovery task function for non-blocking mDNS discovery.
+ *
+ * This task performs mDNS discovery after the web server has started.
+ * Discovery is completely optional and does not affect web server operation.
+ */
+static void discovery_task(void *pvParameters)
+{
+    char server_ip[16] = {0};
+    uint16_t server_port = 0;
+
+    /* Initialize mDNS if not already initialized */
+    esp_err_t err = mesh_udp_bridge_mdns_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] mDNS initialization failed, trying cached address");
+        /* Try to use cached address */
+        err = mesh_udp_bridge_get_cached_server(server_ip, &server_port);
+        if (err == ESP_OK) {
+            ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Using cached server address: %s:%d", server_ip, server_port);
+            /* Convert IP string to network byte order for registration */
+            struct in_addr addr;
+            if (inet_aton(server_ip, &addr) != 0) {
+                uint8_t ip_bytes[4];
+                memcpy(ip_bytes, &addr.s_addr, 4);
+                mesh_udp_bridge_set_registration(true, ip_bytes, server_port);
+            }
+        }
+        vTaskDelete(NULL);
+        return;
+    }
+
+    /* Perform discovery with 20 second timeout */
+    err = mesh_udp_bridge_discover_server(20000, server_ip, &server_port);
+    if (err == ESP_OK) {
+        /* Discovery succeeded - cache the address */
+        ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] External web server discovered: %s:%d", server_ip, server_port);
+        mesh_udp_bridge_cache_server(server_ip, server_port);
+
+        /* Stop retry task if it's running (discovery succeeded) */
+        mesh_udp_bridge_stop_retry_task();
+
+        /* Convert IP string to network byte order for registration */
+        struct in_addr addr;
+        if (inet_aton(server_ip, &addr) != 0) {
+            uint8_t ip_bytes[4];
+            memcpy(ip_bytes, &addr.s_addr, 4);
+            mesh_udp_bridge_set_registration(true, ip_bytes, server_port);
+        } else {
+            ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] Failed to convert IP address: %s", server_ip);
+        }
+    } else {
+        /* Discovery failed - try to use cached address */
+        ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Discovery failed, trying cached address");
+        err = mesh_udp_bridge_get_cached_server(server_ip, &server_port);
+        if (err == ESP_OK) {
+            ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Using cached server address: %s:%d", server_ip, server_port);
+            /* Convert IP string to network byte order for registration */
+            struct in_addr addr;
+            if (inet_aton(server_ip, &addr) != 0) {
+                uint8_t ip_bytes[4];
+                memcpy(ip_bytes, &addr.s_addr, 4);
+                mesh_udp_bridge_set_registration(true, ip_bytes, server_port);
+            }
+        } else {
+            ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] No cached address available, starting retry task");
+            /* Start background retry task if no cached address available */
+            mesh_udp_bridge_start_retry_task();
+        }
+    }
+
+    vTaskDelete(NULL);
+}
+
 static void mesh_root_ip_callback(void *arg, esp_event_base_t event_base,
                                    int32_t event_id, void *event_data)
 {
@@ -559,6 +635,15 @@ static void mesh_root_ip_callback(void *arg, esp_event_base_t event_base,
 
         /* Start UDP API command listener (for external server API proxy) */
         mesh_udp_bridge_api_listener_start();
+
+        /* Start discovery task AFTER web server has started (non-blocking) */
+        /* Discovery is optional and does not affect web server operation */
+        BaseType_t task_err = xTaskCreate(discovery_task, "discovery", 4096, NULL, 1, NULL);
+        if (task_err != pdPASS) {
+            ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] Failed to create discovery task");
+        } else {
+            ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Discovery task started");
+        }
     }
 }
 

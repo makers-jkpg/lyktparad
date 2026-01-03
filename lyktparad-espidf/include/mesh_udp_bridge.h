@@ -352,4 +352,59 @@ void mesh_udp_bridge_api_listener_start(void);
  * This function is safe to call even if the task is not running.
  */
 void mesh_udp_bridge_api_listener_stop(void);
+
+/*******************************************************
+ *                mDNS Discovery Functions
+ *******************************************************/
+
+/**
+ * @brief Initialize mDNS component for service discovery.
+ *
+ * Initializes the ESP-IDF mDNS component and sets the hostname.
+ * This function is idempotent - calling it multiple times is safe.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_mdns_init(void);
+
+/**
+ * @brief Discover external web server via mDNS.
+ *
+ * Queries for _lyktparad-web._tcp service and extracts server IP and UDP port.
+ * The UDP port is extracted from TXT records if available, otherwise uses HTTP port.
+ *
+ * @param timeout_ms Query timeout in milliseconds (10000-30000)
+ * @param server_ip Output buffer for server IP (must be at least 16 bytes)
+ * @param server_port Output pointer for UDP port
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_discover_server(uint32_t timeout_ms, char *server_ip, uint16_t *server_port);
+
+/**
+ * @brief Cache discovered server address in NVS.
+ *
+ * Stores the server IP address and UDP port in NVS for use on subsequent boots.
+ *
+ * @param server_ip Server IP address string (e.g., "192.168.1.100")
+ * @param server_port Server UDP port
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_cache_server(const char *server_ip, uint16_t server_port);
+
+/**
+ * @brief Start background retry task for service discovery.
+ *
+ * Starts a FreeRTOS task that retries discovery with exponential backoff.
+ * The task will stop automatically if discovery succeeds.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_start_retry_task(void);
+
+/**
+ * @brief Stop background retry task for service discovery.
+ *
+ * Stops the retry task if it is running.
+ */
+void mesh_udp_bridge_stop_retry_task(void);
 #endif /* __MESH_UDP_BRIDGE_H__ */
