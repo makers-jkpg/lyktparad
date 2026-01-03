@@ -9,7 +9,7 @@
 const { httpToUdpCommand } = require('../lib/http-udp-translator');
 const { udpToHttpResponse } = require('../lib/udp-http-translator');
 const { sendUdpCommandAndWait } = require('../lib/udp-client');
-const { getFirstRegisteredRootNode } = require('../lib/registration');
+const { getFirstRegisteredRootNode, incrementUdpFailureCount, markRegistrationOffline, updateLastHeartbeat } = require('../lib/registration');
 
 /*******************************************************
  *                Root Node Lookup
@@ -18,16 +18,23 @@ const { getFirstRegisteredRootNode } = require('../lib/registration');
 /**
  * Get registered root node.
  *
- * @returns {Object|null} Root node info { root_ip, udp_port } or null
+ * @returns {Object|null} Root node info { root_ip, udp_port, registration } or null
  */
 function getRegisteredRootNode() {
     const registration = getFirstRegisteredRootNode();
     if (!registration) {
         return null;
     }
+
+    // Check if root node is offline
+    if (registration.is_offline) {
+        return null; // Treat offline nodes as unavailable
+    }
+
     return {
         root_ip: registration.root_ip,
-        udp_port: registration.udp_port
+        udp_port: registration.udp_port,
+        registration: registration
     };
 }
 
@@ -43,14 +50,29 @@ function getRegisteredRootNode() {
  * @returns {Promise<void>}
  */
 async function processProxyRequest(req, res) {
+    let rootNode = null; // Declare outside try block for access in catch block
     try {
         // Check if root node is registered
-        const rootNode = getRegisteredRootNode();
+        rootNode = getRegisteredRootNode();
         if (!rootNode) {
-            res.status(503).json({
-                error: 'No root node registered',
-                message: 'External web server has no registered root node. Please access the root node directly via its IP address.'
-            });
+            const registration = getFirstRegisteredRootNode();
+            if (registration && registration.is_offline) {
+                // Root node is registered but offline
+                res.status(503).json({
+                    error: 'Root node unavailable',
+                    message: 'The root node is currently offline or unreachable.',
+                    code: 503,
+                    suggestion: `You can access the root node directly via its IP address: http://${registration.root_ip}`,
+                    last_seen: registration.last_heartbeat || registration.last_state_update || null
+                });
+            } else {
+                // No root node registered
+                res.status(404).json({
+                    error: 'No root node registered',
+                    message: 'External web server has no registered root node. Please access the root node directly via its IP address.',
+                    code: 404
+                });
+            }
             return;
         }
 
@@ -74,6 +96,14 @@ async function processProxyRequest(req, res) {
             timeout
         );
 
+        // Successful UDP communication - reset failure count and mark as online
+        if (rootNode.registration) {
+            rootNode.registration.udp_failure_count = 0;
+            rootNode.registration.is_offline = false;
+            // Update last activity timestamp (treat successful API call as activity)
+            updateLastHeartbeat(rootNode.registration.mesh_id);
+        }
+
         // Convert UDP response to HTTP response
         const httpResponse = udpToHttpResponse(udpResponse);
 
@@ -90,27 +120,45 @@ async function processProxyRequest(req, res) {
         }
 
     } catch (error) {
+        // Track UDP communication failures
+        if (rootNode && rootNode.registration) {
+            incrementUdpFailureCount(rootNode.registration.mesh_id);
+
+            // Check if failure threshold exceeded
+            const { isUdpFailureThresholdExceeded } = require('../lib/disconnection-detection');
+            if (isUdpFailureThresholdExceeded(rootNode.registration)) {
+                markRegistrationOffline(rootNode.registration.mesh_id);
+                console.warn(`[PROXY] Root node marked offline due to UDP failures: mesh_id=${rootNode.registration.mesh_id}, failures=${rootNode.registration.udp_failure_count}`);
+            }
+        }
+
         // Handle errors
         if (error.message.includes('timeout')) {
             res.status(503).json({
-                error: 'Request timeout',
-                message: 'Root node did not respond within timeout period. The node may be offline or unreachable.'
+                error: 'Root node unavailable',
+                message: 'Root node did not respond within timeout period. The node may be offline or unreachable.',
+                code: 503,
+                suggestion: rootNode ? `You can access the root node directly via its IP address: http://${rootNode.root_ip}` : 'Please check if the root node is online.'
             });
         } else if (error.message.includes('ENETUNREACH') || error.message.includes('EHOSTUNREACH')) {
             res.status(503).json({
-                error: 'Network unreachable',
-                message: 'Cannot reach root node. The node may be offline or on a different network.'
+                error: 'Root node unavailable',
+                message: 'Cannot reach root node. The node may be offline or on a different network.',
+                code: 503,
+                suggestion: rootNode ? `You can access the root node directly via its IP address: http://${rootNode.root_ip}` : 'Please check if the root node is online.'
             });
         } else if (error.message.includes('exceeds MTU') || error.message.includes('Payload too large')) {
             res.status(413).json({
                 error: 'Payload too large',
-                message: 'Request payload exceeds maximum size. Please reduce the data size and try again.'
+                message: 'Request payload exceeds maximum size. Please reduce the data size and try again.',
+                code: 413
             });
         } else {
             console.error('Proxy request error:', error);
             res.status(500).json({
                 error: 'Internal server error',
-                message: error.message
+                message: error.message,
+                code: 500
             });
         }
     }
@@ -160,15 +208,20 @@ async function processProxyRequestWithRetry(req, res) {
 
             if (attempt === maxRetries) {
                 // Last attempt failed, send error response
+                // Get root node info for suggestion if available
+                const registration = getFirstRegisteredRootNode();
                 if (error.message && error.message.includes('timeout')) {
                     res.status(503).json({
-                        error: 'Request timeout',
-                        message: 'Root node did not respond after retries. The node may be offline.'
+                        error: 'Root node unavailable',
+                        message: 'Root node did not respond after retries. The node may be offline.',
+                        code: 503,
+                        suggestion: registration ? `You can access the root node directly via its IP address: http://${registration.root_ip}` : 'Please check if the root node is online.'
                     });
                 } else {
                     res.status(500).json({
                         error: 'Internal server error',
-                        message: error.message || 'Unknown error'
+                        message: error.message || 'Unknown error',
+                        code: 500
                     });
                 }
                 return;

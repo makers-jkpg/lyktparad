@@ -22,11 +22,12 @@ try {
 }
 
 // Load modules
-const { registerRootNode } = require('./lib/registration');
+const { registerRootNode, updateLastHeartbeat, updateLastStateUpdate, updateRegistrationIp, getFirstRegisteredRootNode } = require('./lib/registration');
 const { proxyHandler } = require('./routes/proxy');
 const { closeUdpSocket } = require('./lib/udp-client');
 const { storeMeshState, getFirstMeshState, isStateStale } = require('./lib/state-storage');
 const { startBroadcast, stopBroadcast } = require('./lib/udp-broadcast');
+const { startMonitoring, stopMonitoring } = require('./lib/disconnection-detection');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -115,6 +116,59 @@ app.get('/api/mesh/state', (req, res) => {
     res.json(jsonState);
 });
 
+// API: GET /api/connection/status - Returns connection status
+app.get('/api/connection/status', (req, res) => {
+    const registration = getFirstRegisteredRootNode();
+
+    if (!registration) {
+        res.json({
+            connected: false,
+            status: 'not_registered',
+            last_seen: null,
+            root_node_ip: null,
+            mesh_id: null
+        });
+        return;
+    }
+
+    // Determine connection status
+    const isOffline = registration.is_offline || false;
+    const lastHeartbeat = registration.last_heartbeat || null;
+    const lastStateUpdate = registration.last_state_update || null;
+    const lastSeen = lastHeartbeat || lastStateUpdate || null;
+
+    // Calculate time since last activity
+    let timeSinceLastSeen = null;
+    if (lastSeen) {
+        timeSinceLastSeen = Date.now() - lastSeen;
+    }
+
+    // Determine status string
+    let status = 'connected';
+    if (isOffline) {
+        status = 'offline';
+    } else if (!lastSeen) {
+        status = 'unknown';
+    } else if (timeSinceLastSeen > 60000) { // More than 1 minute
+        status = 'stale';
+    }
+
+    res.json({
+        connected: !isOffline && lastSeen !== null,
+        status: status,
+        last_seen: lastSeen ? new Date(lastSeen).toISOString() : null,
+        last_seen_ms: lastSeen,
+        time_since_last_seen_ms: timeSinceLastSeen,
+        root_node_ip: registration.root_ip,
+        mesh_id: registration.mesh_id,
+        udp_port: registration.udp_port,
+        node_count: registration.node_count,
+        firmware_version: registration.firmware_version,
+        registered_at: new Date(registration.registered_at).toISOString(),
+        udp_failure_count: registration.udp_failure_count || 0
+    });
+});
+
 // API proxy routes (before static file serving)
 app.all('/api/*', proxyHandler);
 
@@ -135,6 +189,7 @@ app.use(express.static(path.join(__dirname, 'web-ui'), {
  */
 const UDP_CMD_REGISTRATION = 0xE0;
 const UDP_CMD_REGISTRATION_ACK = 0xE3;
+const UDP_CMD_HEARTBEAT = 0xE1;
 const UDP_CMD_STATE_UPDATE = 0xE2;
 
 /**
@@ -207,6 +262,19 @@ function handleRegistrationPacket(msg, rinfo, socket) {
 
     // Register root node
     try {
+        const meshIdHex = mesh_id.toString('hex');
+        const existingRegistration = require('./lib/registration').getRegisteredRootNode(meshIdHex);
+
+        // Check if IP address changed (re-registration with new IP)
+        if (existingRegistration) {
+            const newRootIpStr = `${root_ip[0]}.${root_ip[1]}.${root_ip[2]}.${root_ip[3]}`;
+            if (existingRegistration.root_ip !== newRootIpStr) {
+                console.log(`Root node IP changed: ${existingRegistration.root_ip} -> ${newRootIpStr}, mesh_id: ${meshIdHex}`);
+                // Note: registerRootNode() below will create a new registration with the new IP,
+                // so we don't need to call updateRegistrationIp() here (it would be redundant)
+            }
+        }
+
         const registration = registerRootNode(
             root_ip,
             mesh_id,
@@ -396,9 +464,101 @@ function handleStateUpdatePacket(msg, rinfo) {
                 progress: ota_progress
             }
         );
+
+        // Update last state update timestamp (also acts as heartbeat)
+        const meshIdHex = mesh_id.toString('hex');
+
+        // Check if IP address changed (detect IP changes in state updates)
+        const { getRegisteredRootNode } = require('./lib/registration');
+        const existingRegistration = getRegisteredRootNode(meshIdHex);
+        if (existingRegistration) {
+            const newRootIpStr = `${root_ip[0]}.${root_ip[1]}.${root_ip[2]}.${root_ip[3]}`;
+            if (existingRegistration.root_ip !== newRootIpStr) {
+                console.log(`Root node IP changed (detected in state update): ${existingRegistration.root_ip} -> ${newRootIpStr}, mesh_id: ${meshIdHex}`);
+                updateRegistrationIp(meshIdHex, root_ip, null); // Update IP, preserve UDP port
+            }
+        }
+
+        updateLastStateUpdate(meshIdHex, Date.now());
+
         console.log(`Mesh state updated: mesh_id=${mesh_id.toString('hex')}, nodes=${node_count}, sequence_active=${sequence_active}, ota_in_progress=${ota_in_progress}`);
     } catch (error) {
         console.error('State update storage error:', error);
+    }
+}
+
+/**
+ * Handle heartbeat packet (command 0xE1).
+ *
+ * @param {Buffer} msg - UDP message
+ * @param {Object} rinfo - Remote address info
+ */
+function handleHeartbeatPacket(msg, rinfo) {
+    // Minimum packet size: [CMD:1][LEN:2][CHKSUM:2] = 5 bytes
+    if (msg.length < 5) {
+        console.warn('Heartbeat packet too short:', msg.length);
+        return;
+    }
+
+    // Parse packet: [CMD:0xE1][LEN:2][PAYLOAD:N][CHKSUM:2]
+    const commandId = msg[0];
+    if (commandId !== UDP_CMD_HEARTBEAT) {
+        return; // Not a heartbeat packet
+    }
+
+    const payloadLen = (msg[1] << 8) | msg[2];
+    const checksum = (msg[msg.length - 2] << 8) | msg[msg.length - 1];
+
+    // Verify packet size
+    const expectedSize = 1 + 2 + payloadLen + 2; // CMD + LEN + PAYLOAD + CHKSUM
+    if (msg.length !== expectedSize) {
+        console.warn(`Heartbeat packet size mismatch: expected ${expectedSize}, got ${msg.length}`);
+        return;
+    }
+
+    // Verify checksum (optional)
+    const packetWithoutChecksum = msg.slice(0, msg.length - 2);
+    const calculatedChecksum = calculateChecksum(packetWithoutChecksum);
+    if (checksum !== calculatedChecksum) {
+        console.warn(`Heartbeat packet checksum mismatch: expected ${checksum}, got ${calculatedChecksum}`);
+        // Continue anyway (checksum verification is optional)
+    }
+
+    // Extract payload: [timestamp: 4 bytes] [node_count: 1 byte, optional]
+    const payload = msg.slice(3, 3 + payloadLen);
+
+    // Minimum payload: timestamp (4 bytes)
+    if (payload.length < 4) {
+        console.warn('Heartbeat payload too short:', payload.length);
+        return;
+    }
+
+    // Parse payload
+    const timestamp = payload.readUInt32BE(0); // Unix timestamp (network byte order)
+    const node_count = payload.length >= 5 ? payload[4] : null; // Optional node count
+
+    // Find registration by source IP address
+    const sourceIp = rinfo.address;
+    const { getAllRegistrations } = require('./lib/registration');
+    const registrations = getAllRegistrations();
+
+    // Find registration matching source IP
+    const registration = registrations.find(reg => reg.root_ip === sourceIp);
+
+    if (registration) {
+        // Update last heartbeat timestamp
+        updateLastHeartbeat(registration.mesh_id, Date.now());
+
+        // Optionally update node count if provided
+        if (node_count !== null) {
+            registration.node_count = node_count;
+        }
+
+        // Log heartbeat (debug level, not too verbose)
+        // console.log(`Heartbeat received: mesh_id=${registration.mesh_id}, nodes=${node_count || registration.node_count}`);
+    } else {
+        // Heartbeat from unregistered node - log but don't error
+        console.warn(`Heartbeat received from unregistered node: ${sourceIp}`);
     }
 }
 
@@ -406,6 +566,8 @@ udpServer.on('message', (msg, rinfo) => {
     // Check if this is a registration packet
     if (msg.length >= 1 && msg[0] === UDP_CMD_REGISTRATION) {
         handleRegistrationPacket(msg, rinfo, udpServer);
+    } else if (msg.length >= 1 && msg[0] === UDP_CMD_HEARTBEAT) {
+        handleHeartbeatPacket(msg, rinfo);
     } else if (msg.length >= 1 && msg[0] === UDP_CMD_STATE_UPDATE) {
         handleStateUpdatePacket(msg, rinfo);
     }
@@ -453,6 +615,9 @@ const server = app.listen(PORT, () => {
         protocol: 'udp',
         version: SERVER_VERSION
     });
+
+    // Start disconnection monitoring
+    startMonitoring();
 });
 
 // Error handling for port conflicts
@@ -471,6 +636,9 @@ server.on('error', (err) => {
 
 function gracefulShutdown() {
     console.log('\nShutting down gracefully...');
+
+    // Stop disconnection monitoring
+    stopMonitoring();
 
     // Stop UDP broadcast
     stopBroadcast();
