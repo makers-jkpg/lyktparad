@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_mesh.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
 #include "lwip/netdb.h"
@@ -494,6 +495,8 @@ esp_err_t mesh_udp_bridge_register(void)
             registration_success = true;
             s_registration_complete = true;
             ESP_LOGI(TAG, "Registration successful");
+            /* Start heartbeat after successful registration */
+            mesh_udp_bridge_start_heartbeat();
             break;
         } else if (err == ESP_ERR_TIMEOUT) {
             ESP_LOGW(TAG, "Registration ACK timeout (attempt %d/%d)", attempt + 1, max_retries);
@@ -547,6 +550,8 @@ void mesh_udp_bridge_set_registration(bool registered, const uint8_t *server_ip,
         memset(&s_server_addr, 0, sizeof(s_server_addr));
         ESP_LOGI(TAG, "External server registration cleared");
         s_registration_complete = false;
+        /* Stop heartbeat when registration is cleared */
+        mesh_udp_bridge_stop_heartbeat();
     }
 }
 
@@ -590,4 +595,202 @@ esp_err_t mesh_udp_bridge_get_cached_server(char *server_ip, uint16_t *server_po
 
     nvs_close(nvs_handle);
     return ESP_OK;
+}
+
+/*******************************************************
+ *                Heartbeat Implementation
+ *******************************************************/
+
+/* Heartbeat task state */
+static TaskHandle_t s_heartbeat_task_handle = NULL;
+static bool s_heartbeat_running = false;
+
+/* Heartbeat interval (default 45 seconds) */
+#define HEARTBEAT_INTERVAL_SECONDS  45
+
+/**
+ * @brief Build heartbeat payload.
+ *
+ * @param payload Output buffer for payload
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t mesh_udp_bridge_build_heartbeat_payload(mesh_heartbeat_payload_t *payload)
+{
+    if (payload == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Get current timestamp */
+    time_t now = time(NULL);
+    if (now == (time_t)-1) {
+        /* Fallback to esp_timer if time() fails */
+        int64_t us = esp_timer_get_time();
+        now = (time_t)(us / 1000000);
+    }
+    payload->timestamp = htonl((uint32_t)now);
+
+    /* Get node count */
+    payload->node_count = mesh_udp_bridge_get_node_count();
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Send a single heartbeat UDP packet.
+ *
+ * This function sends a heartbeat packet to the external web server (if registered).
+ * Heartbeat is fire-and-forget (no ACK required) and completely optional.
+ *
+ * @return ESP_OK on send attempt (even if send fails), ESP_ERR_INVALID_STATE if not registered or not root
+ */
+esp_err_t mesh_udp_bridge_send_heartbeat(void)
+{
+    /* Check if registered */
+    if (!mesh_udp_bridge_is_registered()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Check if root node */
+    if (!esp_mesh_is_root()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Build heartbeat payload */
+    mesh_heartbeat_payload_t payload;
+    esp_err_t err = mesh_udp_bridge_build_heartbeat_payload(&payload);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to build heartbeat payload: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Initialize UDP socket if needed */
+    err = init_udp_socket();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize UDP socket: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Construct UDP packet: [CMD:0xE1][LEN:2][PAYLOAD:5 bytes] */
+    size_t payload_size = sizeof(mesh_heartbeat_payload_t); /* 5 bytes */
+    size_t packet_size = 1 + 2 + payload_size; /* CMD + LEN + PAYLOAD */
+    uint8_t *packet = (uint8_t *)malloc(packet_size);
+    if (packet == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate packet buffer");
+        return ESP_ERR_NO_MEM;
+    }
+
+    /* Pack packet */
+    packet[0] = UDP_CMD_HEARTBEAT;
+    packet[1] = (payload_size >> 8) & 0xFF; /* Length MSB */
+    packet[2] = payload_size & 0xFF; /* Length LSB */
+    memcpy(&packet[3], &payload, payload_size);
+
+    /* Send UDP packet (fire-and-forget, no ACK wait) */
+    ssize_t sent = sendto(s_udp_socket, packet, packet_size, 0,
+                          (struct sockaddr *)&s_server_addr, sizeof(s_server_addr));
+    if (sent < 0) {
+        /* Log at debug level - packet loss is acceptable for heartbeat */
+        ESP_LOGD(TAG, "Heartbeat send failed: %d (acceptable for fire-and-forget)", errno);
+    } else {
+        ESP_LOGD(TAG, "Heartbeat sent: timestamp=%lu, node_count=%d",
+                 (unsigned long)ntohl(payload.timestamp), payload.node_count);
+    }
+
+    free(packet);
+    return ESP_OK; /* Return OK even if send failed (fire-and-forget) */
+}
+
+/**
+ * @brief Heartbeat task function.
+ *
+ * This task periodically sends heartbeat packets to the external web server.
+ * The task exits if the node is no longer root or registration is lost.
+ */
+static void mesh_udp_bridge_heartbeat_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "Heartbeat task started");
+
+    while (1) {
+        /* Check if still root and registered */
+        if (!esp_mesh_is_root() || !mesh_udp_bridge_is_registered()) {
+            ESP_LOGI(TAG, "Heartbeat task exiting: not root or not registered");
+            break;
+        }
+
+        /* Send heartbeat */
+        esp_err_t err = mesh_udp_bridge_send_heartbeat();
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            /* Log at debug level - heartbeat failures are acceptable */
+            ESP_LOGD(TAG, "Heartbeat send error: %s (continuing)", esp_err_to_name(err));
+        }
+
+        /* Sleep for interval */
+        vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_INTERVAL_SECONDS * 1000));
+    }
+
+    /* Clean up on exit */
+    s_heartbeat_task_handle = NULL;
+    s_heartbeat_running = false;
+    ESP_LOGI(TAG, "Heartbeat task stopped");
+    vTaskDelete(NULL);
+}
+
+/**
+ * @brief Start the heartbeat task.
+ *
+ * Starts a periodic FreeRTOS task that sends heartbeat packets at regular intervals.
+ * Only starts if the node is root and registered with an external server.
+ * Heartbeat is completely optional and does not affect embedded web server operation.
+ */
+void mesh_udp_bridge_start_heartbeat(void)
+{
+    /* Check if task already running */
+    if (s_heartbeat_running && s_heartbeat_task_handle != NULL) {
+        ESP_LOGD(TAG, "Heartbeat task already running");
+        return;
+    }
+
+    /* Check if registered */
+    if (!mesh_udp_bridge_is_registered()) {
+        ESP_LOGD(TAG, "Not registered, skipping heartbeat start");
+        return;
+    }
+
+    /* Check if root node */
+    if (!esp_mesh_is_root()) {
+        ESP_LOGD(TAG, "Not root node, skipping heartbeat start");
+        return;
+    }
+
+    /* Create FreeRTOS task */
+    BaseType_t task_err = xTaskCreate(mesh_udp_bridge_heartbeat_task, "udp_heartbeat",
+                                       2048, NULL, 1, &s_heartbeat_task_handle);
+    if (task_err != pdPASS) {
+        ESP_LOGW(TAG, "Failed to create heartbeat task");
+        s_heartbeat_task_handle = NULL;
+        s_heartbeat_running = false;
+    } else {
+        s_heartbeat_running = true;
+        ESP_LOGI(TAG, "Heartbeat task started");
+    }
+}
+
+/**
+ * @brief Stop the heartbeat task.
+ *
+ * Stops the periodic heartbeat task and cleans up resources.
+ * This function is safe to call even if the task is not running.
+ */
+void mesh_udp_bridge_stop_heartbeat(void)
+{
+    if (!s_heartbeat_running || s_heartbeat_task_handle == NULL) {
+        /* Task not running, nothing to stop */
+        return;
+    }
+
+    /* Delete task */
+    vTaskDelete(s_heartbeat_task_handle);
+    s_heartbeat_task_handle = NULL;
+    s_heartbeat_running = false;
+    ESP_LOGI(TAG, "Heartbeat task stopped");
 }

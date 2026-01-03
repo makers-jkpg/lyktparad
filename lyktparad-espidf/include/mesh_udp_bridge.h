@@ -26,6 +26,9 @@
 /* UDP Command ID for Registration ACK */
 #define UDP_CMD_REGISTRATION_ACK  0xE3
 
+/* UDP Command ID for Heartbeat */
+#define UDP_CMD_HEARTBEAT  0xE1
+
 /*******************************************************
  *                Registration Payload Structure
  *******************************************************/
@@ -44,6 +47,21 @@ typedef struct {
     char firmware_version[32];     /* Version string (null-terminated, max 31 chars) */
     uint32_t timestamp;           /* Unix timestamp (network byte order) */
 } __attribute__((packed)) mesh_registration_payload_t;
+
+/*******************************************************
+ *                Heartbeat Payload Structure
+ *******************************************************/
+
+/**
+ * @brief Payload structure for heartbeat/keepalive messages.
+ *
+ * This structure is sent as the payload for UDP_CMD_HEARTBEAT.
+ * The structure is packed to ensure consistent byte alignment across platforms.
+ */
+typedef struct {
+    uint32_t timestamp;    /* Unix timestamp (network byte order) */
+    uint8_t node_count;    /* Number of connected nodes (optional) */
+} __attribute__((packed)) mesh_heartbeat_payload_t;
 
 /*******************************************************
  *                Bridge Functions
@@ -117,5 +135,36 @@ esp_err_t mesh_udp_bridge_register(void);
  * @return ESP_OK if server discovered, ESP_ERR_NOT_FOUND if not discovered, error code on failure
  */
 esp_err_t mesh_udp_bridge_get_cached_server(char *server_ip, uint16_t *server_port);
+
+/*******************************************************
+ *                Heartbeat Functions
+ *******************************************************/
+
+/**
+ * @brief Send a single heartbeat UDP packet.
+ *
+ * This function sends a heartbeat packet to the external web server (if registered).
+ * Heartbeat is fire-and-forget (no ACK required) and completely optional.
+ *
+ * @return ESP_OK on send attempt (even if send fails), ESP_ERR_INVALID_STATE if not registered or not root
+ */
+esp_err_t mesh_udp_bridge_send_heartbeat(void);
+
+/**
+ * @brief Start the heartbeat task.
+ *
+ * Starts a periodic FreeRTOS task that sends heartbeat packets at regular intervals.
+ * Only starts if the node is root and registered with an external server.
+ * Heartbeat is completely optional and does not affect embedded web server operation.
+ */
+void mesh_udp_bridge_start_heartbeat(void);
+
+/**
+ * @brief Stop the heartbeat task.
+ *
+ * Stops the periodic heartbeat task and cleans up resources.
+ * This function is safe to call even if the task is not running.
+ */
+void mesh_udp_bridge_stop_heartbeat(void);
 
 #endif /* __MESH_UDP_BRIDGE_H__ */

@@ -72,6 +72,7 @@
 #include "light_neopixel.h"
 #include "light_common_cathode.h"
 #include "mesh_ota.h"
+#include "mesh_udp_bridge.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -258,6 +259,7 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
 {
     mesh_addr_t id = {0,};
     static uint16_t last_layer = 0;
+    static bool was_root_before = false; /* Track previous root status for heartbeat management */
     bool is_root = esp_mesh_is_root();
 
     switch (event_id) {
@@ -268,6 +270,8 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         mesh_layer = esp_mesh_get_layer();
         ESP_LOGI(MESH_TAG, "[STARTUP] Mesh network started - Node Status: %s",
                  is_root ? "ROOT NODE" : "NON-ROOT NODE");
+        /* Initialize previous root status tracking */
+        was_root_before = is_root;
 
         /* Log mesh AP status for root node */
         if (is_root) {
@@ -524,6 +528,19 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "[STATUS CHANGE] Layer: %d -> %d | Node Type: %s",
                  last_layer, mesh_layer, is_root_now ? "ROOT NODE" : "NON-ROOT NODE");
 
+        /* Handle heartbeat on role change */
+        if (was_root_before && !is_root_now) {
+            /* Node lost root status - stop heartbeat */
+            mesh_udp_bridge_stop_heartbeat();
+        } else if (!was_root_before && is_root_now) {
+            /* Node became root - start heartbeat if registered */
+            if (mesh_udp_bridge_is_registered()) {
+                mesh_udp_bridge_start_heartbeat();
+            }
+        }
+
+        /* Update previous root status */
+        was_root_before = is_root_now;
         last_layer = mesh_layer;
         if (is_root_now && root_event_callback) {
             root_event_callback(arg, event_base, event_id, event_data);
@@ -565,6 +582,17 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "[STATUS CHANGE] Root switch acknowledged - Node Type: %s",
                  is_root_now ? "ROOT NODE" : "NON-ROOT NODE");
 
+        /* Handle heartbeat on root switch */
+        if (!is_root_now) {
+            /* Node is no longer root - stop heartbeat */
+            mesh_udp_bridge_stop_heartbeat();
+        } else if (mesh_udp_bridge_is_registered()) {
+            /* Node is root and registered - start heartbeat */
+            mesh_udp_bridge_start_heartbeat();
+        }
+
+        /* Update previous root status */
+        was_root_before = is_root_now;
         if (is_root_now && root_event_callback) {
             root_event_callback(arg, event_base, event_id, event_data);
         }
