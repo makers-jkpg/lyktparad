@@ -11,6 +11,7 @@ This is an **optional** external web server that hosts the web UI and provides a
 - **Node.js** - JavaScript runtime
 - **Express.js** - Web application framework
 - **CORS** - Cross-Origin Resource Sharing middleware
+- **Bonjour** - mDNS/Bonjour service advertisement (optional)
 
 ## Installation
 
@@ -50,6 +51,40 @@ PORT=3000 npm start
 set PORT=3000 && npm start
 ```
 
+### UDP Port Configuration
+
+The server advertises a UDP port for ESP32 root node communication via mDNS. Set the `UDP_PORT` environment variable to use a different UDP port (default: 8081):
+
+```bash
+# Linux/macOS
+UDP_PORT=9000 npm start
+
+# Windows
+set UDP_PORT=9000 && npm start
+```
+
+## mDNS Service Discovery
+
+The server advertises itself on the local network using mDNS/Bonjour with the service type `_lyktparad-web._tcp`. This enables zero-configuration discovery by ESP32 root nodes.
+
+### Service Information
+
+- **Service Type**: `_lyktparad-web._tcp`
+- **Service Name**: "Lyktparad Web Server"
+- **HTTP Port**: 8080 (or value from `PORT` environment variable)
+- **UDP Port**: 8081 (or value from `UDP_PORT` environment variable)
+
+### TXT Records
+
+The service includes the following TXT records:
+- `version`: Server version (e.g., "1.0.0")
+- `protocol`: "udp" (indicates UDP protocol for root node communication)
+- `udp_port`: UDP port number for root node communication
+
+### Graceful Degradation
+
+If mDNS is unavailable or fails to initialize, the server continues to run normally. ESP32 devices can still connect via IP address. mDNS is purely a convenience feature for automatic discovery.
+
 ## Endpoints
 
 ### Static Files
@@ -79,6 +114,7 @@ Example response:
 ```
 lyktparad-server/
 ├── server.js          # Main server file
+├── mdns.js            # mDNS service advertisement module
 ├── package.json       # Node.js dependencies
 ├── .gitignore        # Git ignore file
 ├── routes/           # Future API routes (placeholder)
@@ -148,6 +184,23 @@ Ensure that:
 1. The `web-ui/` directory exists with all required files
 2. File paths in `index.html` are relative (e.g., `css/styles.css`, `js/app.js`)
 3. The server is running and accessible
+
+### mDNS Not Working
+
+If mDNS service discovery is not working:
+
+1. **Check bonjour package**: Ensure `bonjour` package is installed:
+   ```bash
+   npm install bonjour
+   ```
+
+2. **Check permissions**: On some systems, mDNS requires network permissions. Check system firewall settings.
+
+3. **Check network**: Ensure you're on a network that supports mDNS (most local networks do).
+
+4. **Fallback**: The server works perfectly without mDNS. ESP32 devices can always connect via IP address.
+
+5. **Check logs**: Look for mDNS-related warnings in the server console output.
 
 ## License
 
