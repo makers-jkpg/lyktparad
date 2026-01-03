@@ -26,10 +26,13 @@ const { registerRootNode } = require('./lib/registration');
 const { proxyHandler } = require('./routes/proxy');
 const { closeUdpSocket } = require('./lib/udp-client');
 const { storeMeshState, getFirstMeshState, isStateStale } = require('./lib/state-storage');
+const { startBroadcast, stopBroadcast } = require('./lib/udp-broadcast');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 const UDP_PORT = process.env.UDP_PORT || 8081;
+const BROADCAST_PORT = process.env.BROADCAST_PORT || 5353;
+const BROADCAST_INTERVAL = process.env.BROADCAST_INTERVAL ? parseInt(process.env.BROADCAST_INTERVAL, 10) : 30000;
 const serverStartTime = Date.now();
 
 // Server version (from package.json or constant)
@@ -439,6 +442,17 @@ const server = app.listen(PORT, () => {
 
         mdns.registerService(PORT, serviceName, metadata);
     }
+
+    // Start UDP broadcast (fallback discovery mechanism)
+    startBroadcast({
+        broadcastPort: BROADCAST_PORT,
+        broadcastInterval: BROADCAST_INTERVAL,
+        service: 'lyktparad-web',
+        port: parseInt(PORT, 10),
+        udpPort: parseInt(UDP_PORT, 10),
+        protocol: 'udp',
+        version: SERVER_VERSION
+    });
 });
 
 // Error handling for port conflicts
@@ -457,6 +471,9 @@ server.on('error', (err) => {
 
 function gracefulShutdown() {
     console.log('\nShutting down gracefully...');
+
+    // Stop UDP broadcast
+    stopBroadcast();
 
     // Unregister mDNS service
     if (mdns) {

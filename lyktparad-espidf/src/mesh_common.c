@@ -528,17 +528,19 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "[STATUS CHANGE] Layer: %d -> %d | Node Type: %s",
                  last_layer, mesh_layer, is_root_now ? "ROOT NODE" : "NON-ROOT NODE");
 
-        /* Handle heartbeat and state updates on role change */
+        /* Handle heartbeat, state updates, and broadcast listener on role change */
         if (was_root_before && !is_root_now) {
-            /* Node lost root status - stop heartbeat and state updates */
+            /* Node lost root status - stop heartbeat, state updates, and broadcast listener */
             mesh_udp_bridge_stop_heartbeat();
             mesh_udp_bridge_stop_state_updates();
+            mesh_udp_bridge_broadcast_listener_stop();
         } else if (!was_root_before && is_root_now) {
             /* Node became root - start heartbeat and state updates if registered */
             if (mesh_udp_bridge_is_registered()) {
                 mesh_udp_bridge_start_heartbeat();
                 mesh_udp_bridge_start_state_updates();
             }
+            /* Broadcast listener will be started in mesh_root_ip_callback when IP is obtained */
         }
 
         /* Update previous root status */
@@ -584,16 +586,18 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "[STATUS CHANGE] Root switch acknowledged - Node Type: %s",
                  is_root_now ? "ROOT NODE" : "NON-ROOT NODE");
 
-        /* Handle heartbeat and state updates on root switch */
+        /* Handle heartbeat, state updates, and broadcast listener on root switch */
         if (!is_root_now) {
-            /* Node is no longer root - stop heartbeat and state updates */
+            /* Node is no longer root - stop heartbeat, state updates, and broadcast listener */
             mesh_udp_bridge_stop_heartbeat();
             mesh_udp_bridge_stop_state_updates();
+            mesh_udp_bridge_broadcast_listener_stop();
         } else if (mesh_udp_bridge_is_registered()) {
             /* Node is root and registered - start heartbeat and state updates */
             mesh_udp_bridge_start_heartbeat();
             mesh_udp_bridge_start_state_updates();
         }
+        /* Broadcast listener will be started in mesh_root_ip_callback when IP is obtained */
 
         /* Update previous root status */
         was_root_before = is_root_now;

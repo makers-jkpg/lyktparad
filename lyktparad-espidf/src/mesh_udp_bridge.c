@@ -1364,6 +1364,377 @@ static void mesh_udp_bridge_state_update_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
+/*******************************************************
+ *                UDP Broadcast Listener Implementation
+ *******************************************************/
+
+/* Broadcast listener task state */
+static TaskHandle_t s_broadcast_listener_task_handle = NULL;
+static bool s_broadcast_listener_running = false;
+static int s_broadcast_listener_socket = -1;
+
+/* Broadcast port (default 5353) */
+#define BROADCAST_LISTENER_PORT  5353
+
+/* Maximum broadcast payload size */
+#define MAX_BROADCAST_PAYLOAD_SIZE  256
+
+/**
+ * @brief Simple JSON parser for broadcast payload.
+ *
+ * Parses a simple JSON object like: {"service":"lyktparad-web","port":8080,"udp_port":8081,"protocol":"udp","version":"1.0.0"}
+ * This is a minimal parser that only handles the specific format we need.
+ *
+ * @param json JSON string to parse
+ * @param json_len Length of JSON string
+ * @param service_out Output buffer for service name (must be at least 32 bytes)
+ * @param port_out Output pointer for HTTP port number (optional, can be NULL)
+ * @param udp_port_out Output pointer for UDP port number (required)
+ * @param protocol_out Output buffer for protocol (must be at least 16 bytes)
+ * @param version_out Output buffer for version (must be at least 16 bytes)
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t parse_broadcast_json(const char *json, size_t json_len,
+                                      char *service_out, uint16_t *port_out,
+                                      uint16_t *udp_port_out,
+                                      char *protocol_out, char *version_out)
+{
+    if (json == NULL || service_out == NULL || udp_port_out == NULL ||
+        protocol_out == NULL || version_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Initialize outputs */
+    memset(service_out, 0, 32);
+    if (port_out != NULL) {
+        *port_out = 0;
+    }
+    *udp_port_out = 0;
+    memset(protocol_out, 0, 16);
+    memset(version_out, 0, 16);
+
+    /* Simple JSON parsing - look for key-value pairs */
+    const char *service_key = "\"service\":\"";
+    const char *port_key = "\"port\":";
+    const char *udp_port_key = "\"udp_port\":";
+    const char *protocol_key = "\"protocol\":\"";
+    const char *version_key = "\"version\":\"";
+
+    /* Find service */
+    const char *service_start = strstr(json, service_key);
+    if (service_start != NULL) {
+        service_start += strlen(service_key);
+        const char *service_end = strchr(service_start, '"');
+        if (service_end != NULL && (service_end - service_start) < 32) {
+            size_t service_len = service_end - service_start;
+            memcpy(service_out, service_start, service_len);
+            service_out[service_len] = '\0';
+        }
+    }
+
+    /* Find HTTP port (optional) */
+    if (port_out != NULL) {
+        const char *port_start = strstr(json, port_key);
+        if (port_start != NULL) {
+            port_start += strlen(port_key);
+            *port_out = (uint16_t)atoi(port_start);
+        }
+    }
+
+    /* Find UDP port (required) */
+    const char *udp_port_start = strstr(json, udp_port_key);
+    if (udp_port_start != NULL) {
+        udp_port_start += strlen(udp_port_key);
+        *udp_port_out = (uint16_t)atoi(udp_port_start);
+    } else {
+        /* Fallback: if udp_port not found, try to use port field */
+        const char *port_start = strstr(json, port_key);
+        if (port_start != NULL) {
+            port_start += strlen(port_key);
+            *udp_port_out = (uint16_t)atoi(port_start);
+        }
+    }
+
+    /* Find protocol */
+    const char *protocol_start = strstr(json, protocol_key);
+    if (protocol_start != NULL) {
+        protocol_start += strlen(protocol_key);
+        const char *protocol_end = strchr(protocol_start, '"');
+        if (protocol_end != NULL && (protocol_end - protocol_start) < 16) {
+            size_t protocol_len = protocol_end - protocol_start;
+            memcpy(protocol_out, protocol_start, protocol_len);
+            protocol_out[protocol_len] = '\0';
+        }
+    }
+
+    /* Find version */
+    const char *version_start = strstr(json, version_key);
+    if (version_start != NULL) {
+        version_start += strlen(version_key);
+        const char *version_end = strchr(version_start, '"');
+        if (version_end != NULL && (version_end - version_start) < 16) {
+            size_t version_len = version_end - version_start;
+            memcpy(version_out, version_start, version_len);
+            version_out[version_len] = '\0';
+        }
+    }
+
+    /* Validate required fields */
+    if (strlen(service_out) == 0 || *udp_port_out == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handle received UDP broadcast packet.
+ *
+ * Parses the broadcast payload and updates the discovered server address.
+ *
+ * @param buffer Received packet buffer
+ * @param len Length of received packet
+ * @param from_addr Source address of the broadcast
+ */
+static void handle_broadcast_packet(const uint8_t *buffer, size_t len,
+                                    const struct sockaddr_in *from_addr)
+{
+    if (buffer == NULL || len == 0 || from_addr == NULL) {
+        return;
+    }
+
+    /* Limit payload size */
+    if (len > MAX_BROADCAST_PAYLOAD_SIZE) {
+        ESP_LOGD(TAG, "Broadcast packet too large: %zu bytes (max %d), ignoring", len, MAX_BROADCAST_PAYLOAD_SIZE);
+        return;
+    }
+
+    /* Null-terminate JSON string */
+    char json[MAX_BROADCAST_PAYLOAD_SIZE + 1];
+    if (len >= sizeof(json)) {
+        len = sizeof(json) - 1;
+    }
+    memcpy(json, buffer, len);
+    json[len] = '\0';
+
+    /* Parse JSON */
+    char service[32] = {0};
+    uint16_t http_port = 0;
+    uint16_t udp_port = 0;
+    char protocol[16] = {0};
+    char version[16] = {0};
+
+    esp_err_t err = parse_broadcast_json(json, len, service, &http_port, &udp_port, protocol, version);
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "Failed to parse broadcast JSON: %s", esp_err_to_name(err));
+        return;
+    }
+
+    /* Validate service name */
+    if (strcmp(service, "lyktparad-web") != 0) {
+        ESP_LOGD(TAG, "Broadcast from wrong service: %s (expected lyktparad-web), ignoring", service);
+        return;
+    }
+
+    /* Validate UDP port (required for registration) */
+    if (udp_port == 0 || udp_port > 65535) {
+        ESP_LOGD(TAG, "Invalid UDP port in broadcast: %d, ignoring", udp_port);
+        return;
+    }
+
+    /* Extract IP address from source address */
+    uint8_t server_ip[4];
+    memcpy(server_ip, &from_addr->sin_addr.s_addr, 4);
+
+    /* Cache discovered address in NVS */
+    nvs_handle_t nvs_handle;
+    err = nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READWRITE, &nvs_handle);
+    if (err == ESP_OK) {
+        char ip_str[16];
+        snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d",
+                 server_ip[0], server_ip[1], server_ip[2], server_ip[3]);
+
+        nvs_set_str(nvs_handle, "server_ip", ip_str);
+        nvs_set_u16(nvs_handle, "server_port", udp_port);
+        nvs_set_u32(nvs_handle, "server_timestamp", (uint32_t)time(NULL));
+        nvs_commit(nvs_handle);
+        nvs_close(nvs_handle);
+
+        ESP_LOGI(TAG, "UDP broadcast discovery: server=%s:%d (HTTP:%d, protocol=%s, version=%s)",
+                 ip_str, udp_port, http_port, protocol, version);
+
+        /* Update registration state (if not already registered) */
+        if (!s_server_registered) {
+            mesh_udp_bridge_set_registration(true, server_ip, udp_port);
+        }
+    } else {
+        ESP_LOGW(TAG, "Failed to cache discovered server address: %s", esp_err_to_name(err));
+    }
+}
+
+/**
+ * @brief UDP broadcast listener task function.
+ *
+ * This task listens for UDP broadcast packets on port 5353 and processes
+ * discovery broadcasts from the external web server.
+ */
+static void mesh_udp_bridge_broadcast_listener_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "UDP broadcast listener task started");
+
+    /* Create UDP socket for listening */
+    s_broadcast_listener_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s_broadcast_listener_socket < 0) {
+        ESP_LOGE(TAG, "Failed to create broadcast listener socket: %d", errno);
+        s_broadcast_listener_task_handle = NULL;
+        s_broadcast_listener_running = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    /* Set socket to allow broadcast reception */
+    int broadcast = 1;
+    if (setsockopt(s_broadcast_listener_socket, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast)) < 0) {
+        ESP_LOGE(TAG, "Failed to set broadcast option: %d", errno);
+        close(s_broadcast_listener_socket);
+        s_broadcast_listener_socket = -1;
+        s_broadcast_listener_task_handle = NULL;
+        s_broadcast_listener_running = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    /* Set socket to non-blocking */
+    int flags = fcntl(s_broadcast_listener_socket, F_GETFL, 0);
+    if (flags >= 0) {
+        fcntl(s_broadcast_listener_socket, F_SETFL, flags | O_NONBLOCK);
+    }
+
+    /* Bind to broadcast port */
+    struct sockaddr_in listen_addr = {0};
+    listen_addr.sin_family = AF_INET;
+    listen_addr.sin_addr.s_addr = INADDR_ANY;
+    listen_addr.sin_port = htons(BROADCAST_LISTENER_PORT);
+
+    if (bind(s_broadcast_listener_socket, (struct sockaddr *)&listen_addr, sizeof(listen_addr)) < 0) {
+        ESP_LOGE(TAG, "Failed to bind broadcast listener socket: %d", errno);
+        close(s_broadcast_listener_socket);
+        s_broadcast_listener_socket = -1;
+        s_broadcast_listener_task_handle = NULL;
+        s_broadcast_listener_running = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "UDP broadcast listener bound to port %d", BROADCAST_LISTENER_PORT);
+
+    /* Receive loop */
+    uint8_t recv_buffer[MAX_BROADCAST_PAYLOAD_SIZE];
+    while (1) {
+        /* Check if task should exit */
+        if (!s_broadcast_listener_running) {
+            break;
+        }
+
+        /* Receive broadcast packet */
+        struct sockaddr_in from_addr;
+        socklen_t from_len = sizeof(from_addr);
+        ssize_t received = recvfrom(s_broadcast_listener_socket, recv_buffer, sizeof(recv_buffer), 0,
+                                     (struct sockaddr *)&from_addr, &from_len);
+
+        if (received > 0) {
+            /* Handle received broadcast */
+            handle_broadcast_packet(recv_buffer, received, &from_addr);
+        } else if (received < 0) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                ESP_LOGD(TAG, "Broadcast receive error: %d (non-critical)", errno);
+            }
+        }
+
+        /* Small delay to prevent busy-waiting */
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    /* Clean up on exit */
+    if (s_broadcast_listener_socket >= 0) {
+        close(s_broadcast_listener_socket);
+        s_broadcast_listener_socket = -1;
+    }
+
+    s_broadcast_listener_task_handle = NULL;
+    s_broadcast_listener_running = false;
+    ESP_LOGI(TAG, "UDP broadcast listener task stopped");
+    vTaskDelete(NULL);
+}
+
+/**
+ * @brief Start the UDP broadcast listener task.
+ *
+ * Starts a FreeRTOS task that listens for UDP broadcast packets on port 5353.
+ * The listener is completely optional and does not affect embedded web server operation.
+ */
+void mesh_udp_bridge_broadcast_listener_start(void)
+{
+    /* Check if task already running */
+    if (s_broadcast_listener_running && s_broadcast_listener_task_handle != NULL) {
+        ESP_LOGD(TAG, "Broadcast listener task already running");
+        return;
+    }
+
+    /* Only root node should listen for broadcasts */
+    if (!esp_mesh_is_root()) {
+        ESP_LOGD(TAG, "Not root node, skipping broadcast listener start");
+        return;
+    }
+
+    /* Create FreeRTOS task */
+    BaseType_t task_err = xTaskCreate(mesh_udp_bridge_broadcast_listener_task, "udp_broadcast_listener",
+                                      4096, NULL, 1, &s_broadcast_listener_task_handle);
+    if (task_err != pdPASS) {
+        ESP_LOGW(TAG, "Failed to create broadcast listener task");
+        s_broadcast_listener_task_handle = NULL;
+        s_broadcast_listener_running = false;
+    } else {
+        s_broadcast_listener_running = true;
+        ESP_LOGI(TAG, "Broadcast listener task started");
+    }
+}
+
+/**
+ * @brief Stop the UDP broadcast listener task.
+ *
+ * Stops the broadcast listener task and cleans up resources.
+ * This function is safe to call even if the task is not running.
+ */
+void mesh_udp_bridge_broadcast_listener_stop(void)
+{
+    if (!s_broadcast_listener_running || s_broadcast_listener_task_handle == NULL) {
+        /* Task not running, nothing to stop */
+        return;
+    }
+
+    /* Signal task to exit */
+    s_broadcast_listener_running = false;
+
+    /* Wait a bit for task to exit */
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    /* Delete task if still running */
+    if (s_broadcast_listener_task_handle != NULL) {
+        vTaskDelete(s_broadcast_listener_task_handle);
+        s_broadcast_listener_task_handle = NULL;
+    }
+
+    /* Close socket if still open */
+    if (s_broadcast_listener_socket >= 0) {
+        close(s_broadcast_listener_socket);
+        s_broadcast_listener_socket = -1;
+    }
+
+    s_broadcast_listener_running = false;
+    ESP_LOGI(TAG, "Broadcast listener task stopped");
+}
+
 /**
  * @brief Start the state update task.
  *

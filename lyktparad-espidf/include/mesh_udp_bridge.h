@@ -291,4 +291,25 @@ void mesh_udp_bridge_start_state_updates(void);
  */
 void mesh_udp_bridge_stop_state_updates(void);
 
+/*******************************************************
+ *                UDP Broadcast Listener Functions
+ *******************************************************/
+
+/**
+ * @brief Start the UDP broadcast listener task.
+ *
+ * Starts a FreeRTOS task that listens for UDP broadcast packets on port 5353.
+ * The listener is completely optional and does not affect embedded web server operation.
+ * Broadcast discovery runs in parallel with mDNS discovery (if available).
+ */
+void mesh_udp_bridge_broadcast_listener_start(void);
+
+/**
+ * @brief Stop the UDP broadcast listener task.
+ *
+ * Stops the broadcast listener task and cleans up resources.
+ * This function is safe to call even if the task is not running.
+ */
+void mesh_udp_bridge_broadcast_listener_stop(void);
+
 #endif /* __MESH_UDP_BRIDGE_H__ */

@@ -28,6 +28,7 @@
 #include "light_common_cathode.h"
 #include "config/mesh_config.h"
 #include "mesh_ota.h"
+#include "mesh_udp_bridge.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -511,6 +512,11 @@ static void mesh_root_ip_callback(void *arg, esp_event_base_t event_base,
         ESP_LOGE(mesh_common_get_tag(), "Failed to start web server: 0x%x", err);
     } else {
         ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Web server started successfully");
+
+        /* Start UDP broadcast listener (fallback discovery mechanism) */
+        /* This runs in parallel with mDNS discovery (if available) */
+        /* First success wins - whichever discovery succeeds first is used */
+        mesh_udp_bridge_broadcast_listener_start();
     }
 }
 
