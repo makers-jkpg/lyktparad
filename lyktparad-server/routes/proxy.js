@@ -87,10 +87,13 @@ async function processProxyRequest(req, res) {
         }
 
         // Send UDP command and wait for response
+        // Note: ESP32 listens for API commands on well-known port 8082
+        // (rootNode.udp_port is the server's UDP port, not the root's port)
+        const ESP32_API_PORT = 8082;
         const timeout = 8000; // 8 second timeout
         const udpResponse = await sendUdpCommandAndWait(
             rootNode.root_ip,
-            rootNode.udp_port,
+            ESP32_API_PORT,
             udpCommand.packet,
             udpCommand.sequenceNumber,
             timeout

@@ -502,12 +502,13 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "[STATUS CHANGE] Layer: %d -> %d | Node Type: %s",
                  last_layer, mesh_layer, is_root_now ? "ROOT NODE" : "NON-ROOT NODE");
 
-        /* Handle heartbeat, state updates, and broadcast listener on role change */
+        /* Handle heartbeat, state updates, broadcast listener, and API listener on role change */
         if (was_root_before && !is_root_now) {
-            /* Node lost root status - stop heartbeat, state updates, and broadcast listener */
+            /* Node lost root status - stop heartbeat, state updates, broadcast listener, and API listener */
             mesh_udp_bridge_stop_heartbeat();
             mesh_udp_bridge_stop_state_updates();
             mesh_udp_bridge_broadcast_listener_stop();
+            mesh_udp_bridge_api_listener_stop();
             /* Update status LED to OFF */
             root_status_led_set_root(false);
         } else if (!was_root_before && is_root_now) {
@@ -567,12 +568,13 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "[STATUS CHANGE] Root switch acknowledged - Node Type: %s",
                  is_root_now ? "ROOT NODE" : "NON-ROOT NODE");
 
-        /* Handle heartbeat, state updates, and broadcast listener on root switch */
+        /* Handle heartbeat, state updates, broadcast listener, and API listener on root switch */
         if (!is_root_now) {
-            /* Node is no longer root - stop heartbeat, state updates, and broadcast listener */
+            /* Node is no longer root - stop heartbeat, state updates, broadcast listener, and API listener */
             mesh_udp_bridge_stop_heartbeat();
             mesh_udp_bridge_stop_state_updates();
             mesh_udp_bridge_broadcast_listener_stop();
+            mesh_udp_bridge_api_listener_stop();
             /* Update status LED to OFF */
             root_status_led_set_root(false);
         } else if (mesh_udp_bridge_is_registered()) {

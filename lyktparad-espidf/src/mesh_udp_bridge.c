@@ -13,6 +13,7 @@
 #include "config/mesh_config.h"
 #include "node_sequence.h"
 #include "mesh_ota.h"
+#include "light_neopixel.h"
 #include "esp_log.h"
 #include "esp_mesh.h"
 #include "esp_netif.h"
@@ -1793,4 +1794,1148 @@ void mesh_udp_bridge_stop_state_updates(void)
     s_state_update_task_handle = NULL;
     s_state_update_running = false;
     ESP_LOGI(TAG, "State update task stopped");
+}
+
+/*******************************************************
+ *                UDP API Command Listener Implementation
+ *******************************************************/
+
+/* API listener task state */
+static TaskHandle_t s_api_listener_task_handle = NULL;
+static bool s_api_listener_running = false;
+static int s_api_listener_socket = -1;
+
+/* API listener port (uses same port as registration, but bound to receive) */
+/* Note: We'll bind to INADDR_ANY to receive from any source */
+
+/* Maximum API command payload size */
+#define MAX_API_PAYLOAD_SIZE  1500
+
+/**
+ * @brief Calculate checksum for UDP packet.
+ *
+ * @param data Data buffer
+ * @param len Length of data
+ * @return 16-bit checksum
+ */
+static uint16_t calculate_udp_checksum(const uint8_t *data, size_t len)
+{
+    uint16_t sum = 0;
+    for (size_t i = 0; i < len; i++) {
+        sum = (sum + data[i]) & 0xFFFF;
+    }
+    return sum;
+}
+
+/**
+ * @brief Build UDP API response packet.
+ *
+ * Packet format: [CMD:1][LEN:2][SEQ:2][PAYLOAD:N][CHKSUM:2]
+ *
+ * @param commandId Command ID (same as request)
+ * @param seqNum Sequence number (same as request)
+ * @param payload Response payload buffer
+ * @param payload_size Payload size
+ * @param packet_out Output buffer for complete packet
+ * @param packet_size_out Output parameter for packet size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t build_api_response_packet(uint8_t commandId, uint16_t seqNum,
+                                            const uint8_t *payload, size_t payload_size,
+                                            uint8_t *packet_out, size_t *packet_size_out)
+{
+    if (packet_out == NULL || packet_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Calculate packet size: CMD(1) + LEN(2) + SEQ(2) + PAYLOAD(N) + CHKSUM(2) */
+    size_t packet_size = 1 + 2 + 2 + payload_size + 2;
+
+    /* Check UDP MTU limit */
+    if (packet_size > 1472) {
+        ESP_LOGW(TAG, "API response packet too large: %zu bytes (max 1472)", packet_size);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    /* Build packet without checksum */
+    size_t offset = 0;
+    packet_out[offset++] = commandId;
+    packet_out[offset++] = (payload_size >> 8) & 0xFF; /* Length MSB */
+    packet_out[offset++] = payload_size & 0xFF; /* Length LSB */
+    packet_out[offset++] = (seqNum >> 8) & 0xFF; /* Sequence MSB */
+    packet_out[offset++] = seqNum & 0xFF; /* Sequence LSB */
+    if (payload_size > 0 && payload != NULL) {
+        memcpy(&packet_out[offset], payload, payload_size);
+        offset += payload_size;
+    }
+
+    /* Calculate checksum over packet without checksum bytes */
+    uint16_t checksum = calculate_udp_checksum(packet_out, offset);
+
+    /* Add checksum */
+    packet_out[offset++] = (checksum >> 8) & 0xFF; /* Checksum MSB */
+    packet_out[offset++] = checksum & 0xFF; /* Checksum LSB */
+
+    *packet_size_out = packet_size;
+    return ESP_OK;
+}
+
+/**
+ * @brief Handle API command: GET /api/nodes
+ *
+ * @param payload_out Output buffer for response payload
+ * @param payload_size_out Output parameter for payload size
+ * @param max_payload_size Maximum payload buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_nodes(uint8_t *payload_out, size_t *payload_size_out, size_t max_payload_size)
+{
+    if (payload_out == NULL || payload_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    int node_count = mesh_get_node_count();
+
+    /* Response format: [node_count:4 bytes, network byte order] */
+    if (max_payload_size < 4) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    uint32_t node_count_net = htonl((uint32_t)node_count);
+    memcpy(payload_out, &node_count_net, 4);
+    *payload_size_out = 4;
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handle API command: GET /api/color
+ *
+ * @param payload_out Output buffer for response payload
+ * @param payload_size_out Output parameter for payload size
+ * @param max_payload_size Maximum payload buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_color_get(uint8_t *payload_out, size_t *payload_size_out, size_t max_payload_size)
+{
+    if (payload_out == NULL || payload_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Response format: [r:1][g:1][b:1][is_set:1] */
+    if (max_payload_size < 4) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    uint8_t r, g, b;
+    bool is_set;
+    mesh_get_current_rgb(&r, &g, &b, &is_set);
+
+    payload_out[0] = r;
+    payload_out[1] = g;
+    payload_out[2] = b;
+    payload_out[3] = is_set ? 1 : 0;
+    *payload_size_out = 4;
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handle API command: POST /api/color
+ *
+ * @param payload Request payload [r:1][g:1][b:1]
+ * @param payload_size Payload size
+ * @param response_out Output buffer for response payload
+ * @param response_size_out Output parameter for response size
+ * @param max_response_size Maximum response buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_color_post(const uint8_t *payload, size_t payload_size,
+                                       uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+{
+    if (payload == NULL || payload_size < 3 || response_out == NULL || response_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Request format: [r:1][g:1][b:1] */
+    uint8_t r = payload[0];
+    uint8_t g = payload[1];
+    uint8_t b = payload[2];
+
+    /* Apply color via mesh */
+    esp_err_t err = mesh_send_rgb(r, g, b);
+
+    /* Response format: [success:1] (0=failure, 1=success) */
+    if (max_response_size < 1) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    response_out[0] = (err == ESP_OK) ? 1 : 0;
+    *response_size_out = 1;
+
+    return (err == ESP_OK) ? ESP_OK : ESP_FAIL;
+}
+
+/**
+ * @brief Handle API command: POST /api/sequence
+ *
+ * @param payload Request payload [rhythm:1][num_rows:1][color_data:N]
+ * @param payload_size Payload size
+ * @param response_out Output buffer for response payload
+ * @param response_size_out Output parameter for response size
+ * @param max_response_size Maximum response buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_sequence_post(const uint8_t *payload, size_t payload_size,
+                                          uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+{
+    if (payload == NULL || payload_size < 2 || response_out == NULL || response_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!esp_mesh_is_root()) {
+        /* Response format: [success:1] (0=failure) */
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Request format: [rhythm:1][num_rows:1][color_data:N] */
+    uint8_t rhythm = payload[0];
+    uint8_t num_rows = payload[1];
+
+    /* Validate rhythm (1-255) */
+    if (rhythm == 0) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Validate num_rows (1-16) */
+    if (num_rows < 1 || num_rows > 16) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Calculate expected payload size */
+    uint16_t expected_size = sequence_payload_size(num_rows);
+    if (payload_size != expected_size) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    /* Extract color data */
+    const uint8_t *color_data = &payload[2];
+    uint16_t color_data_len = payload_size - 2;
+
+    /* Store and broadcast sequence data */
+    esp_err_t err = mode_sequence_root_store_and_broadcast(rhythm, num_rows, (uint8_t *)color_data, color_data_len);
+
+    /* Response format: [success:1] (0=failure, 1=success) */
+    if (max_response_size < 1) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    response_out[0] = (err == ESP_OK) ? 1 : 0;
+    *response_size_out = 1;
+
+    return (err == ESP_OK) ? ESP_OK : ESP_FAIL;
+}
+
+/**
+ * @brief Handle API command: GET /api/sequence/pointer
+ *
+ * @param payload_out Output buffer for response payload
+ * @param payload_size_out Output parameter for payload size
+ * @param max_payload_size Maximum payload buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_sequence_pointer(uint8_t *payload_out, size_t *payload_size_out, size_t max_payload_size)
+{
+    if (payload_out == NULL || payload_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!esp_mesh_is_root()) {
+        /* Return 0 if not root */
+        if (max_payload_size < 2) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        uint16_t zero = 0;
+        memcpy(payload_out, &zero, 2);
+        *payload_size_out = 2;
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Response format: [pointer:2 bytes, network byte order] */
+    if (max_payload_size < 2) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    uint16_t pointer = mode_sequence_root_get_pointer();
+    uint16_t pointer_net = htons(pointer);
+    memcpy(payload_out, &pointer_net, 2);
+    *payload_size_out = 2;
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handle API command: POST /api/sequence/start
+ *
+ * @param response_out Output buffer for response payload
+ * @param response_size_out Output parameter for response size
+ * @param max_response_size Maximum response buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_sequence_start(uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+{
+    if (response_out == NULL || response_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!esp_mesh_is_root()) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = mode_sequence_root_start();
+
+    /* Response format: [success:1] (0=failure, 1=success) */
+    if (max_response_size < 1) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    response_out[0] = (err == ESP_OK) ? 1 : 0;
+    *response_size_out = 1;
+
+    return (err == ESP_OK) ? ESP_OK : ESP_FAIL;
+}
+
+/**
+ * @brief Handle API command: POST /api/sequence/stop
+ *
+ * @param response_out Output buffer for response payload
+ * @param response_size_out Output parameter for response size
+ * @param max_response_size Maximum response buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_sequence_stop(uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+{
+    if (response_out == NULL || response_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!esp_mesh_is_root()) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = mode_sequence_root_stop();
+
+    /* Response format: [success:1] (0=failure, 1=success) */
+    if (max_response_size < 1) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    response_out[0] = (err == ESP_OK) ? 1 : 0;
+    *response_size_out = 1;
+
+    return (err == ESP_OK) ? ESP_OK : ESP_FAIL;
+}
+
+/**
+ * @brief Handle API command: POST /api/sequence/reset
+ *
+ * @param response_out Output buffer for response payload
+ * @param response_size_out Output parameter for response size
+ * @param max_response_size Maximum response buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_sequence_reset(uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+{
+    if (response_out == NULL || response_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!esp_mesh_is_root()) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = mode_sequence_root_reset();
+
+    /* Response format: [success:1] (0=failure, 1=success) */
+    if (max_response_size < 1) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    response_out[0] = (err == ESP_OK) ? 1 : 0;
+    *response_size_out = 1;
+
+    return (err == ESP_OK) ? ESP_OK : ESP_FAIL;
+}
+
+/**
+ * @brief Handle API command: GET /api/sequence/status
+ *
+ * @param payload_out Output buffer for response payload
+ * @param payload_size_out Output parameter for payload size
+ * @param max_payload_size Maximum payload buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_sequence_status(uint8_t *payload_out, size_t *payload_size_out, size_t max_payload_size)
+{
+    if (payload_out == NULL || payload_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!esp_mesh_is_root()) {
+        /* Return inactive if not root */
+        if (max_payload_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        payload_out[0] = 0;
+        *payload_size_out = 1;
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Response format: [active:1] (0=inactive, 1=active) */
+    if (max_payload_size < 1) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    bool active = mode_sequence_root_is_active();
+    payload_out[0] = active ? 1 : 0;
+    *payload_size_out = 1;
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handle API command: POST /api/ota/download
+ *
+ * @param payload Request payload [url_len:1][url:N bytes]
+ * @param payload_size Payload size
+ * @param response_out Output buffer for response payload
+ * @param response_size_out Output parameter for response size
+ * @param max_response_size Maximum response buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_ota_download(const uint8_t *payload, size_t payload_size,
+                                         uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+{
+    if (payload == NULL || payload_size < 1 || response_out == NULL || response_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!esp_mesh_is_root()) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Request format: [url_len:1][url:N bytes] */
+    uint8_t url_len = payload[0];
+    if (url_len == 0 || url_len > (payload_size - 1) || url_len > 255) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Extract URL string */
+    char url[256];
+    if (url_len >= sizeof(url)) {
+        url_len = sizeof(url) - 1;
+    }
+    memcpy(url, &payload[1], url_len);
+    url[url_len] = '\0';
+
+    /* Start OTA download */
+    esp_err_t err = mesh_ota_download_firmware(url);
+
+    /* Response format: [success:1] (0=failure, 1=success) */
+    if (max_response_size < 1) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    response_out[0] = (err == ESP_OK) ? 1 : 0;
+    *response_size_out = 1;
+
+    return (err == ESP_OK) ? ESP_OK : ESP_FAIL;
+}
+
+/**
+ * @brief Handle API command: GET /api/ota/status
+ *
+ * @param payload_out Output buffer for response payload
+ * @param payload_size_out Output parameter for payload size
+ * @param max_payload_size Maximum payload buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_ota_status(uint8_t *payload_out, size_t *payload_size_out, size_t max_payload_size)
+{
+    if (payload_out == NULL || payload_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Response format: [downloading:1][progress:4 bytes float, network byte order] */
+    if (max_payload_size < 5) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    bool downloading = mesh_ota_is_downloading();
+    float progress = mesh_ota_get_download_progress();
+
+    payload_out[0] = downloading ? 1 : 0;
+    /* Convert float to network byte order (simple approach: use uint32_t representation) */
+    union {
+        float f;
+        uint32_t i;
+    } progress_union;
+    progress_union.f = progress;
+    uint32_t progress_net = htonl(progress_union.i);
+    memcpy(&payload_out[1], &progress_net, 4);
+
+    *payload_size_out = 5;
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handle API command: GET /api/ota/version
+ *
+ * @param payload_out Output buffer for response payload
+ * @param payload_size_out Output parameter for payload size
+ * @param max_payload_size Maximum payload buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_ota_version(uint8_t *payload_out, size_t *payload_size_out, size_t max_payload_size)
+{
+    if (payload_out == NULL || payload_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const char *version = mesh_version_get_string();
+    if (version == NULL) {
+        version = "unknown";
+    }
+
+    size_t version_len = strlen(version);
+    if (version_len > 255) {
+        version_len = 255;
+    }
+
+    /* Response format: [version_len:1][version:N bytes] */
+    if (max_payload_size < 1 + version_len) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    payload_out[0] = (uint8_t)version_len;
+    memcpy(&payload_out[1], version, version_len);
+    *payload_size_out = 1 + version_len;
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handle API command: POST /api/ota/cancel
+ *
+ * @param response_out Output buffer for response payload
+ * @param response_size_out Output parameter for response size
+ * @param max_response_size Maximum response buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_ota_cancel(uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+{
+    if (response_out == NULL || response_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = mesh_ota_cancel_download();
+
+    /* Response format: [success:1] (0=failure, 1=success) */
+    if (max_response_size < 1) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    response_out[0] = (err == ESP_OK) ? 1 : 0;
+    *response_size_out = 1;
+
+    return (err == ESP_OK) ? ESP_OK : ESP_FAIL;
+}
+
+/**
+ * @brief Handle API command: POST /api/ota/distribute
+ *
+ * @param response_out Output buffer for response payload
+ * @param response_size_out Output parameter for response size
+ * @param max_response_size Maximum response buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_ota_distribute(uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+{
+    if (response_out == NULL || response_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!esp_mesh_is_root()) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = mesh_ota_distribute_firmware();
+
+    /* Response format: [success:1] (0=failure, 1=success) */
+    if (max_response_size < 1) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    response_out[0] = (err == ESP_OK) ? 1 : 0;
+    *response_size_out = 1;
+
+    return (err == ESP_OK) ? ESP_OK : ESP_FAIL;
+}
+
+/**
+ * @brief Handle API command: GET /api/ota/distribution/status
+ *
+ * @param payload_out Output buffer for response payload
+ * @param payload_size_out Output parameter for payload size
+ * @param max_payload_size Maximum payload buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_ota_distribution_status(uint8_t *payload_out, size_t *payload_size_out, size_t max_payload_size)
+{
+    if (payload_out == NULL || payload_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    mesh_ota_distribution_status_t status;
+    esp_err_t err = mesh_ota_get_distribution_status(&status);
+
+    /* Response format: [distributing:1] (0=not distributing, 1=distributing) */
+    if (max_payload_size < 1) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    payload_out[0] = (err == ESP_OK && status.distributing) ? 1 : 0;
+    *payload_size_out = 1;
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handle API command: GET /api/ota/distribution/progress
+ *
+ * @param payload_out Output buffer for response payload
+ * @param payload_size_out Output parameter for payload size
+ * @param max_payload_size Maximum payload buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_ota_distribution_progress(uint8_t *payload_out, size_t *payload_size_out, size_t max_payload_size)
+{
+    if (payload_out == NULL || payload_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    float progress = mesh_ota_get_distribution_progress();
+
+    /* Response format: [progress:4 bytes float, network byte order] */
+    if (max_payload_size < 4) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    union {
+        float f;
+        uint32_t i;
+    } progress_union;
+    progress_union.f = progress;
+    uint32_t progress_net = htonl(progress_union.i);
+    memcpy(payload_out, &progress_net, 4);
+
+    *payload_size_out = 4;
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handle API command: POST /api/ota/distribution/cancel
+ *
+ * @param response_out Output buffer for response payload
+ * @param response_size_out Output parameter for response size
+ * @param max_response_size Maximum response buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_ota_distribution_cancel(uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+{
+    if (response_out == NULL || response_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = mesh_ota_cancel_distribution();
+
+    /* Response format: [success:1] (0=failure, 1=success) */
+    if (max_response_size < 1) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    response_out[0] = (err == ESP_OK) ? 1 : 0;
+    *response_size_out = 1;
+
+    return (err == ESP_OK) ? ESP_OK : ESP_FAIL;
+}
+
+/**
+ * @brief Handle API command: POST /api/ota/reboot
+ *
+ * @param payload Request payload [timeout:2][delay:2] (network byte order)
+ * @param payload_size Payload size
+ * @param response_out Output buffer for response payload
+ * @param response_size_out Output parameter for response size
+ * @param max_response_size Maximum response buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_ota_reboot(const uint8_t *payload, size_t payload_size,
+                                       uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+{
+    if (payload == NULL || payload_size < 4 || response_out == NULL || response_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!esp_mesh_is_root()) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Request format: [timeout:2 bytes, network byte order][delay:2 bytes, network byte order] */
+    /* Read network byte order values safely (avoid alignment issues) */
+    uint16_t timeout = ((uint16_t)payload[0] << 8) | payload[1];
+    uint16_t delay = ((uint16_t)payload[2] << 8) | payload[3];
+
+    /* Defaults if 0 */
+    if (timeout == 0) {
+        timeout = 10;
+    }
+    if (delay == 0) {
+        delay = 1000;
+    }
+
+    /* Initiate coordinated reboot */
+    esp_err_t err = mesh_ota_initiate_coordinated_reboot(timeout, delay);
+
+    /* Response format: [success:1] (0=failure, 1=success) */
+    if (max_response_size < 1) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    response_out[0] = (err == ESP_OK) ? 1 : 0;
+    *response_size_out = 1;
+
+    return (err == ESP_OK) ? ESP_OK : ESP_FAIL;
+}
+
+/**
+ * @brief Process incoming UDP API command and send response.
+ *
+ * @param commandId Command ID
+ * @param seqNum Sequence number
+ * @param payload Request payload
+ * @param payload_size Payload size
+ * @param from_addr Source address (to send response back)
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t process_api_command(uint8_t commandId, uint16_t seqNum,
+                                     const uint8_t *payload, size_t payload_size,
+                                     const struct sockaddr_in *from_addr)
+{
+    if (from_addr == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Note: payload can be NULL for GET commands (no request body) */
+
+    /* Response buffer */
+    uint8_t response_payload[512];
+    size_t response_payload_size = 0;
+    esp_err_t err = ESP_OK;
+
+    /* Route command to appropriate handler */
+    switch (commandId) {
+        case UDP_CMD_API_NODES:
+            err = handle_api_nodes(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_COLOR_GET:
+            err = handle_api_color_get(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_COLOR_POST:
+            err = handle_api_color_post(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_SEQUENCE_POST:
+            err = handle_api_sequence_post(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_SEQUENCE_POINTER:
+            err = handle_api_sequence_pointer(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_SEQUENCE_START:
+            err = handle_api_sequence_start(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_SEQUENCE_STOP:
+            err = handle_api_sequence_stop(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_SEQUENCE_RESET:
+            err = handle_api_sequence_reset(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_SEQUENCE_STATUS:
+            err = handle_api_sequence_status(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_OTA_DOWNLOAD:
+            err = handle_api_ota_download(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_OTA_STATUS:
+            err = handle_api_ota_status(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_OTA_VERSION:
+            err = handle_api_ota_version(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_OTA_CANCEL:
+            err = handle_api_ota_cancel(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_OTA_DISTRIBUTE:
+            err = handle_api_ota_distribute(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_OTA_DISTRIBUTION_STATUS:
+            err = handle_api_ota_distribution_status(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_OTA_DISTRIBUTION_PROGRESS:
+            err = handle_api_ota_distribution_progress(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_OTA_DISTRIBUTION_CANCEL:
+            err = handle_api_ota_distribution_cancel(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_OTA_REBOOT:
+            err = handle_api_ota_reboot(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        default:
+            ESP_LOGW(TAG, "Unknown API command: 0x%02X", commandId);
+            /* Send error response */
+            if (sizeof(response_payload) >= 1) {
+                response_payload[0] = 0; /* failure */
+                response_payload_size = 1;
+            } else {
+                return ESP_ERR_INVALID_ARG;
+            }
+            err = ESP_ERR_NOT_SUPPORTED;
+            break;
+    }
+
+    /* Build response packet */
+    uint8_t response_packet[1472];
+    size_t response_packet_size = 0;
+    esp_err_t build_err = build_api_response_packet(commandId, seqNum, response_payload, response_payload_size,
+                                                     response_packet, &response_packet_size);
+    if (build_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to build API response packet: %s", esp_err_to_name(build_err));
+        return build_err;
+    }
+
+    /* Send response back to sender */
+    if (s_api_listener_socket < 0) {
+        ESP_LOGE(TAG, "API listener socket not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ssize_t sent = sendto(s_api_listener_socket, response_packet, response_packet_size, 0,
+                          (struct sockaddr *)from_addr, sizeof(*from_addr));
+    if (sent < 0) {
+        ESP_LOGE(TAG, "Failed to send API response: %d", errno);
+        return ESP_FAIL;
+    }
+
+    if (sent != (ssize_t)response_packet_size) {
+        ESP_LOGW(TAG, "Partial send: %d/%zu bytes", sent, response_packet_size);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGD(TAG, "API command 0x%02X processed, response sent", commandId);
+    return ESP_OK;
+}
+
+/**
+ * @brief UDP API command listener task function.
+ *
+ * This task listens for UDP API commands from the external web server and processes them.
+ * The task exits if the node is no longer root.
+ */
+static void mesh_udp_bridge_api_listener_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "UDP API listener task started");
+
+    /* Create UDP socket for listening */
+    s_api_listener_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s_api_listener_socket < 0) {
+        ESP_LOGE(TAG, "Failed to create API listener socket: %d", errno);
+        s_api_listener_task_handle = NULL;
+        s_api_listener_running = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    /* Set socket to non-blocking */
+    int flags = fcntl(s_api_listener_socket, F_GETFL, 0);
+    if (flags >= 0) {
+        fcntl(s_api_listener_socket, F_SETFL, flags | O_NONBLOCK);
+    }
+
+    /* Bind to INADDR_ANY to receive from any source */
+    /* Use the same port as registration (UDP_PORT from server, but we need to bind to a port) */
+    /* For now, we'll bind to port 0 (ephemeral) and use the same socket for sending/receiving */
+    /* Actually, we should bind to a specific port. Let's use a configurable port or the same as registration */
+    /* Since registration uses the server's UDP_PORT, we need to bind to receive on that port */
+    /* But we don't know the server's UDP_PORT. Let's bind to INADDR_ANY:0 (ephemeral) for now */
+    /* Actually, the server sends to the root node's IP on UDP_PORT. We need to receive on that port. */
+    /* But we don't have a fixed port. Let's use a well-known port or make it configurable. */
+    /* For simplicity, let's bind to port 0 (ephemeral) and the server will need to discover it */
+    /* Wait, the server already knows the root node's IP from registration. But it doesn't know the UDP port. */
+    /* Actually, looking at the server code, it sends to rootNode.udp_port which comes from registration. */
+    /* But registration doesn't include the root's UDP port. Let's check... */
+    /* Actually, the server sends API commands to rootNode.root_ip:rootNode.udp_port where udp_port is the SERVER's UDP port */
+    /* No wait, that doesn't make sense. Let me re-read the server code... */
+    /* Looking at routes/proxy.js, it uses rootNode.root_ip and rootNode.udp_port */
+    /* rootNode.udp_port comes from registration, but registration doesn't send the root's UDP port */
+    /* This is a problem. The server needs to know what port to send to. */
+    /* Options: */
+    /* 1. Include root UDP port in registration (requires registration protocol change) */
+    /* 2. Use a well-known port for API commands */
+    /* 3. Server sends to same port it receives registration on (but that's the server's port) */
+    /* Actually, I think the server should send API commands to the root's IP on a well-known port */
+    /* Or, we can use the same socket that's used for registration (s_udp_socket) */
+    /* But that socket is not bound. Let's bind s_udp_socket to receive, or create a separate bound socket */
+    /* For now, let's bind to a well-known port. Let's use 8082 (next after 8081) or make it configurable */
+    /* Actually, let's bind to the same port we use for sending (but we don't bind for sending) */
+    /* Let's use a separate port for API commands. Let's use 8082. */
+    struct sockaddr_in listen_addr = {0};
+    listen_addr.sin_family = AF_INET;
+    listen_addr.sin_addr.s_addr = INADDR_ANY;
+    listen_addr.sin_port = htons(8082); /* Well-known port for API commands */
+
+    if (bind(s_api_listener_socket, (struct sockaddr *)&listen_addr, sizeof(listen_addr)) < 0) {
+        ESP_LOGE(TAG, "Failed to bind API listener socket: %d", errno);
+        close(s_api_listener_socket);
+        s_api_listener_socket = -1;
+        s_api_listener_task_handle = NULL;
+        s_api_listener_running = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "UDP API listener bound to port 8082");
+
+    /* Receive loop */
+    uint8_t recv_buffer[MAX_API_PAYLOAD_SIZE + 10]; /* Extra space for packet header */
+    while (1) {
+        /* Check if task should exit */
+        if (!s_api_listener_running) {
+            break;
+        }
+
+        /* Check if still root node */
+        if (!esp_mesh_is_root()) {
+            ESP_LOGI(TAG, "API listener task exiting: not root node");
+            break;
+        }
+
+        /* Receive API command packet */
+        struct sockaddr_in from_addr;
+        socklen_t from_len = sizeof(from_addr);
+        ssize_t received = recvfrom(s_api_listener_socket, recv_buffer, sizeof(recv_buffer), 0,
+                                     (struct sockaddr *)&from_addr, &from_len);
+
+        if (received > 0) {
+            /* Minimum packet size: [CMD:1][LEN:2][SEQ:2][CHKSUM:2] = 7 bytes */
+            if (received < 7) {
+                ESP_LOGD(TAG, "API packet too short: %d bytes (min 7)", received);
+                continue;
+            }
+
+            /* Parse packet: [CMD:1][LEN:2][SEQ:2][PAYLOAD:N][CHKSUM:2] */
+            uint8_t commandId = recv_buffer[0];
+            uint16_t payload_len = (recv_buffer[1] << 8) | recv_buffer[2];
+            uint16_t seqNum = (recv_buffer[3] << 8) | recv_buffer[4];
+            uint16_t checksum = (recv_buffer[received - 2] << 8) | recv_buffer[received - 1];
+
+            /* Verify packet size */
+            size_t expected_size = 1 + 2 + 2 + payload_len + 2; /* CMD + LEN + SEQ + PAYLOAD + CHKSUM */
+            if (received != expected_size) {
+                ESP_LOGD(TAG, "API packet size mismatch: expected %zu, got %d", expected_size, received);
+                continue;
+            }
+
+            /* Verify checksum (optional, but recommended) */
+            uint16_t calculated_checksum = calculate_udp_checksum(recv_buffer, received - 2);
+            if (checksum != calculated_checksum) {
+                ESP_LOGW(TAG, "API packet checksum mismatch: expected 0x%04X, got 0x%04X", checksum, calculated_checksum);
+                /* Continue anyway (checksum verification is optional) */
+            }
+
+            /* Extract payload */
+            const uint8_t *payload = NULL;
+            size_t payload_size = 0;
+            if (payload_len > 0 && received >= (5 + payload_len + 2)) {
+                payload = &recv_buffer[5];
+                payload_size = payload_len;
+            }
+
+            /* Process command and send response */
+            esp_err_t err = process_api_command(commandId, seqNum, payload, payload_size, &from_addr);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to process API command 0x%02X: %s", commandId, esp_err_to_name(err));
+            }
+        } else if (received < 0) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                ESP_LOGD(TAG, "API receive error: %d (non-critical)", errno);
+            }
+        }
+
+        /* Small delay to prevent busy-waiting */
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    /* Clean up on exit */
+    if (s_api_listener_socket >= 0) {
+        close(s_api_listener_socket);
+        s_api_listener_socket = -1;
+    }
+
+    s_api_listener_task_handle = NULL;
+    s_api_listener_running = false;
+    ESP_LOGI(TAG, "UDP API listener task stopped");
+    vTaskDelete(NULL);
+}
+
+/**
+ * @brief Start the UDP API command listener task.
+ *
+ * Starts a FreeRTOS task that listens for UDP API commands from the external web server.
+ * Only starts if the node is root. The listener is completely optional and does not affect
+ * embedded web server operation.
+ */
+void mesh_udp_bridge_api_listener_start(void)
+{
+    /* Check if task already running */
+    if (s_api_listener_running && s_api_listener_task_handle != NULL) {
+        ESP_LOGD(TAG, "API listener task already running");
+        return;
+    }
+
+    /* Only root node should listen for API commands */
+    if (!esp_mesh_is_root()) {
+        ESP_LOGD(TAG, "Not root node, skipping API listener start");
+        return;
+    }
+
+    /* Create FreeRTOS task */
+    BaseType_t task_err = xTaskCreate(mesh_udp_bridge_api_listener_task, "udp_api_listener",
+                                      4096, NULL, 2, &s_api_listener_task_handle);
+    if (task_err != pdPASS) {
+        ESP_LOGW(TAG, "Failed to create API listener task");
+        s_api_listener_task_handle = NULL;
+        s_api_listener_running = false;
+    } else {
+        s_api_listener_running = true;
+        ESP_LOGI(TAG, "API listener task started");
+    }
+}
+
+/**
+ * @brief Stop the UDP API command listener task.
+ *
+ * Stops the API command listener task and cleans up resources.
+ * This function is safe to call even if the task is not running.
+ */
+void mesh_udp_bridge_api_listener_stop(void)
+{
+    if (!s_api_listener_running || s_api_listener_task_handle == NULL) {
+        /* Task not running, nothing to stop */
+        return;
+    }
+
+    /* Signal task to exit */
+    s_api_listener_running = false;
+
+    /* Wait a bit for task to exit */
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    /* Delete task if still running */
+    if (s_api_listener_task_handle != NULL) {
+        vTaskDelete(s_api_listener_task_handle);
+        s_api_listener_task_handle = NULL;
+    }
+
+    /* Close socket if still open */
+    if (s_api_listener_socket >= 0) {
+        close(s_api_listener_socket);
+        s_api_listener_socket = -1;
+    }
+
+    s_api_listener_running = false;
+    ESP_LOGI(TAG, "API listener task stopped");
 }

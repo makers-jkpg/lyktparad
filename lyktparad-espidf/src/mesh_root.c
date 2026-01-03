@@ -556,6 +556,9 @@ static void mesh_root_ip_callback(void *arg, esp_event_base_t event_base,
         /* This runs in parallel with mDNS discovery (if available) */
         /* First success wins - whichever discovery succeeds first is used */
         mesh_udp_bridge_broadcast_listener_start();
+
+        /* Start UDP API command listener (for external server API proxy) */
+        mesh_udp_bridge_api_listener_start();
     }
 }
 

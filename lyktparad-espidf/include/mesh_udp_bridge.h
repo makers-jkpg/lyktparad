@@ -35,6 +35,26 @@
 /* UDP Command ID for State Update */
 #define UDP_CMD_STATE_UPDATE  0xE2
 
+/* UDP Command IDs for API Commands (0xE7-0xF8) */
+#define UDP_CMD_API_NODES  0xE7
+#define UDP_CMD_API_COLOR_GET  0xE8
+#define UDP_CMD_API_COLOR_POST  0xE9
+#define UDP_CMD_API_SEQUENCE_POST  0xEA
+#define UDP_CMD_API_SEQUENCE_POINTER  0xEB
+#define UDP_CMD_API_SEQUENCE_START  0xEC
+#define UDP_CMD_API_SEQUENCE_STOP  0xED
+#define UDP_CMD_API_SEQUENCE_RESET  0xEE
+#define UDP_CMD_API_SEQUENCE_STATUS  0xEF
+#define UDP_CMD_API_OTA_DOWNLOAD  0xF0
+#define UDP_CMD_API_OTA_STATUS  0xF1
+#define UDP_CMD_API_OTA_VERSION  0xF2
+#define UDP_CMD_API_OTA_CANCEL  0xF3
+#define UDP_CMD_API_OTA_DISTRIBUTE  0xF4
+#define UDP_CMD_API_OTA_DISTRIBUTION_STATUS  0xF5
+#define UDP_CMD_API_OTA_DISTRIBUTION_PROGRESS  0xF6
+#define UDP_CMD_API_OTA_DISTRIBUTION_CANCEL  0xF7
+#define UDP_CMD_API_OTA_REBOOT  0xF8
+
 /*******************************************************
  *                State Update Data Structures
  *******************************************************/
@@ -311,5 +331,27 @@ void mesh_udp_bridge_broadcast_listener_start(void);
  * This function is safe to call even if the task is not running.
  */
 void mesh_udp_bridge_broadcast_listener_stop(void);
+
+/*******************************************************
+ *                UDP API Command Listener Functions
+ *******************************************************/
+
+/**
+ * @brief Start the UDP API command listener task.
+ *
+ * Starts a FreeRTOS task that listens for UDP API commands (0xE7-0xF8) from the external server.
+ * The listener processes API commands and sends responses back to the server.
+ * Only starts if the node is root. The listener is completely optional and does not affect
+ * embedded web server operation.
+ */
+void mesh_udp_bridge_api_listener_start(void);
+
+/**
+ * @brief Stop the UDP API command listener task.
+ *
+ * Stops the API command listener task and cleans up resources.
+ * This function is safe to call even if the task is not running.
+ */
+void mesh_udp_bridge_api_listener_stop(void);
 
 #endif /* __MESH_UDP_BRIDGE_H__ */
