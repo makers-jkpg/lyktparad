@@ -111,7 +111,21 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
  *                Mesh Send Bridge Wrapper
  *******************************************************/
 
-/* Wrapper function to send mesh data and optionally forward to UDP bridge */
+/**
+ * @brief Send mesh data with optional bridge forwarding to external server.
+ *
+ * This wrapper function calls esp_mesh_send() and optionally forwards the
+ * command to an external server via UDP if registered. The forwarding is
+ * non-blocking and fire-and-forget. The function signature matches esp_mesh_send()
+ * for drop-in replacement.
+ *
+ * @param to Destination mesh address (NULL for broadcast)
+ * @param data Mesh data to send
+ * @param flag Send flag (MESH_DATA_P2P, etc.)
+ * @param opt Optional mesh options
+ * @param opt_count Number of options
+ * @return Result from esp_mesh_send() call
+ */
 esp_err_t mesh_send_with_bridge(const mesh_addr_t *to, const mesh_data_t *data,
                                  int flag, const mesh_opt_t opt[], int opt_count);
 

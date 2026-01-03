@@ -125,7 +125,6 @@ typedef struct {
     uint32_t timestamp;    /* Unix timestamp (network byte order) */
     uint8_t node_count;    /* Number of connected nodes (optional) */
 } __attribute__((packed)) mesh_heartbeat_payload_t;
-
 /*******************************************************
  *                Bridge Functions
  *******************************************************/
@@ -353,5 +352,4 @@ void mesh_udp_bridge_api_listener_start(void);
  * This function is safe to call even if the task is not running.
  */
 void mesh_udp_bridge_api_listener_stop(void);
-
 #endif /* __MESH_UDP_BRIDGE_H__ */

@@ -74,6 +74,7 @@
 #include "mesh_ota.h"
 #include "mesh_udp_bridge.h"
 #include "root_status_led.h"
+#include "mesh_udp_bridge.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
