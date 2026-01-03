@@ -32,6 +32,46 @@
 /* UDP Command ID for Mesh Command Forward */
 #define UDP_CMD_MESH_COMMAND_FORWARD  0xE6
 
+/* UDP Command ID for State Update */
+#define UDP_CMD_STATE_UPDATE  0xE2
+
+/*******************************************************
+ *                State Update Data Structures
+ *******************************************************/
+
+/**
+ * @brief Node entry structure for state updates.
+ *
+ * Represents a single node in the mesh network.
+ */
+typedef struct {
+    uint8_t node_id[6];      /* Node MAC address (6 bytes) */
+    uint8_t ip[4];          /* Node IP address (network byte order) */
+    uint8_t layer;           /* Mesh layer */
+    uint8_t parent_id[6];    /* Parent node MAC address (6 bytes) */
+    uint8_t role;            /* Node role (0=root, 1=child, 2=leaf) */
+    uint8_t status;          /* Node status (0=disconnected, 1=connected) */
+} __attribute__((packed)) mesh_node_entry_t;
+
+/**
+ * @brief Mesh state data structure.
+ *
+ * Contains complete mesh network state information.
+ */
+typedef struct {
+    uint8_t root_ip[4];              /* Root node IP address (network byte order) */
+    uint8_t mesh_id[6];               /* Mesh ID (MAC address) */
+    uint32_t timestamp;               /* Unix timestamp (network byte order) */
+    uint8_t mesh_state;               /* Mesh state (0=disconnected, 1=connected) */
+    uint8_t node_count;               /* Number of connected nodes */
+    mesh_node_entry_t *nodes;         /* Array of node entries (dynamically allocated) */
+    uint8_t sequence_active;          /* Sequence active flag (0=inactive, 1=active) */
+    uint16_t sequence_position;     /* Current sequence position (network byte order) */
+    uint16_t sequence_total;          /* Total sequence length (network byte order) */
+    uint8_t ota_in_progress;          /* OTA distribution in progress (0=no, 1=yes) */
+    uint8_t ota_progress;             /* OTA progress percentage (0-100) */
+} mesh_state_data_t;
+
 /*******************************************************
  *                Registration Payload Structure
  *******************************************************/
@@ -191,5 +231,64 @@ void mesh_udp_bridge_stop_heartbeat(void);
 void mesh_udp_bridge_forward_mesh_command_async(uint8_t mesh_cmd,
                                                  const void *mesh_payload,
                                                  size_t mesh_payload_len);
+
+/*******************************************************
+ *                State Update Functions
+ *******************************************************/
+
+/**
+ * @brief Collect mesh state information.
+ *
+ * Collects complete mesh network state including nodes, sequence state, and OTA state.
+ * This function allocates memory for the node list which must be freed by the caller.
+ *
+ * @param state Output structure to fill with state data
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_collect_state(mesh_state_data_t *state);
+
+/**
+ * @brief Build binary payload from state data.
+ *
+ * Encodes the state data structure into a binary payload for UDP transmission.
+ *
+ * @param state State data structure
+ * @param buffer Output buffer for binary payload
+ * @param buffer_size Size of output buffer
+ * @param payload_size Output parameter for actual payload size
+ * @return ESP_OK on success, ESP_ERR_INVALID_SIZE if buffer too small, error code on failure
+ */
+esp_err_t mesh_udp_bridge_build_state_payload(const mesh_state_data_t *state,
+                                               uint8_t *buffer, size_t buffer_size,
+                                               size_t *payload_size);
+
+/**
+ * @brief Send state update to external server.
+ *
+ * Sends a state update UDP packet to the external web server (if registered).
+ * State updates are fire-and-forget (no ACK required) and completely optional.
+ *
+ * @param payload Binary payload buffer
+ * @param payload_size Size of payload in bytes
+ * @return ESP_OK on send attempt (even if send fails), ESP_ERR_INVALID_STATE if not registered or not root
+ */
+esp_err_t mesh_udp_bridge_send_state_update(const uint8_t *payload, size_t payload_size);
+
+/**
+ * @brief Start the state update task.
+ *
+ * Starts a periodic FreeRTOS task that sends state updates at regular intervals.
+ * Only starts if the node is root and registered with an external server.
+ * State updates are completely optional and do not affect embedded web server operation.
+ */
+void mesh_udp_bridge_start_state_updates(void);
+
+/**
+ * @brief Stop the state update task.
+ *
+ * Stops the periodic state update task and cleans up resources.
+ * This function is safe to call even if the task is not running.
+ */
+void mesh_udp_bridge_stop_state_updates(void);
 
 #endif /* __MESH_UDP_BRIDGE_H__ */

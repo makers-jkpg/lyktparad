@@ -11,6 +11,8 @@
 #include "mesh_common.h"
 #include "mesh_version.h"
 #include "config/mesh_config.h"
+#include "node_sequence.h"
+#include "mesh_ota.h"
 #include "esp_log.h"
 #include "esp_mesh.h"
 #include "esp_netif.h"
@@ -495,8 +497,9 @@ esp_err_t mesh_udp_bridge_register(void)
             registration_success = true;
             s_registration_complete = true;
             ESP_LOGI(TAG, "Registration successful");
-            /* Start heartbeat after successful registration */
+            /* Start heartbeat and state updates after successful registration */
             mesh_udp_bridge_start_heartbeat();
+            mesh_udp_bridge_start_state_updates();
             break;
         } else if (err == ESP_ERR_TIMEOUT) {
             ESP_LOGW(TAG, "Registration ACK timeout (attempt %d/%d)", attempt + 1, max_retries);
@@ -550,8 +553,9 @@ void mesh_udp_bridge_set_registration(bool registered, const uint8_t *server_ip,
         memset(&s_server_addr, 0, sizeof(s_server_addr));
         ESP_LOGI(TAG, "External server registration cleared");
         s_registration_complete = false;
-        /* Stop heartbeat when registration is cleared */
+        /* Stop heartbeat and state updates when registration is cleared */
         mesh_udp_bridge_stop_heartbeat();
+        mesh_udp_bridge_stop_state_updates();
     }
 }
 
@@ -895,4 +899,527 @@ void mesh_udp_bridge_forward_mesh_command_async(uint8_t mesh_cmd,
     /* Free allocated buffers */
     free(udp_payload);
     free(packet);
+}
+
+/*******************************************************
+ *                State Update Implementation
+ *******************************************************/
+
+/* State update task state */
+static TaskHandle_t s_state_update_task_handle = NULL;
+static bool s_state_update_running = false;
+
+/* State update interval (default 3 seconds) */
+#define STATE_UPDATE_INTERVAL_SECONDS  3
+
+/* Maximum number of nodes in state update (safety limit) */
+#define MAX_STATE_UPDATE_NODES  50
+
+/**
+ * @brief Collect mesh state information.
+ *
+ * Collects complete mesh network state including nodes, sequence state, and OTA state.
+ * This function allocates memory for the node list which must be freed by the caller.
+ *
+ * @param state Output structure to fill with state data
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_collect_state(mesh_state_data_t *state)
+{
+    if (state == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Initialize state structure */
+    memset(state, 0, sizeof(mesh_state_data_t));
+    state->nodes = NULL;
+
+    /* Check if root node */
+    if (!esp_mesh_is_root()) {
+        ESP_LOGE(TAG, "Not root node, cannot collect state");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Get root IP address */
+    esp_err_t err = mesh_udp_bridge_get_root_ip(state->root_ip);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get root IP: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Get mesh ID */
+    err = mesh_udp_bridge_get_mesh_id(state->mesh_id);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get mesh ID: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Get timestamp */
+    state->timestamp = mesh_udp_bridge_get_timestamp();
+
+    /* Get mesh state (connected/disconnected) */
+    state->mesh_state = mesh_common_is_connected() ? 1 : 0;
+
+    /* Get routing table */
+    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+    int route_table_size = 0;
+    esp_mesh_get_routing_table((mesh_addr_t *)route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+
+    /* Calculate child node count (excluding root) */
+    mesh_addr_t root_addr;
+    uint8_t mac[6];
+    esp_err_t mac_err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    if (mac_err == ESP_OK) {
+        memcpy(root_addr.addr, mac, 6);
+    } else {
+        /* Fallback: use first entry in routing table */
+        if (route_table_size > 0) {
+            root_addr = route_table[0];
+        } else {
+            root_addr.addr[0] = 0;
+        }
+    }
+
+    /* Count child nodes (excluding root) */
+    int child_count = 0;
+    for (int i = 0; i < route_table_size; i++) {
+        bool is_root = true;
+        for (int j = 0; j < 6; j++) {
+            if (route_table[i].addr[j] != root_addr.addr[j]) {
+                is_root = false;
+                break;
+            }
+        }
+        if (!is_root) {
+            child_count++;
+        }
+    }
+
+    state->node_count = (uint8_t)child_count;
+
+    /* Allocate node list */
+    if (child_count > 0 && child_count <= MAX_STATE_UPDATE_NODES) {
+        state->nodes = (mesh_node_entry_t *)malloc(child_count * sizeof(mesh_node_entry_t));
+        if (state->nodes == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate node list");
+            return ESP_ERR_NO_MEM;
+        }
+        memset(state->nodes, 0, child_count * sizeof(mesh_node_entry_t));
+
+        /* Fill node list */
+        int node_idx = 0;
+        for (int i = 0; i < route_table_size; i++) {
+            /* Skip root node */
+            bool is_root = true;
+            for (int j = 0; j < 6; j++) {
+                if (route_table[i].addr[j] != root_addr.addr[j]) {
+                    is_root = false;
+                    break;
+                }
+            }
+            if (is_root) {
+                continue;
+            }
+
+            /* Get node information */
+            mesh_node_entry_t *node = &state->nodes[node_idx];
+            memcpy(node->node_id, route_table[i].addr, 6);
+
+            /* Get node IP address (from routing table or mesh API) */
+            /* Note: ESP-MESH routing table doesn't directly provide IP addresses */
+            /* We'll set IP to 0.0.0.0 for now - this can be enhanced later */
+            node->ip[0] = 0;
+            node->ip[1] = 0;
+            node->ip[2] = 0;
+            node->ip[3] = 0;
+
+            /* Layer information: ESP-MESH routing table doesn't provide individual node layers */
+            /* For nodes in root's routing table, they are typically layer 1 (direct children) */
+            /* Set to 1 as default for direct children of root */
+            node->layer = 1;
+
+            /* Parent ID: For nodes in root's routing table, parent is typically the root */
+            /* Note: This may be incorrect for multi-layer meshes, but ESP-MESH API doesn't provide parent info */
+            memcpy(node->parent_id, root_addr.addr, 6);
+
+            /* Role: 0=root, 1=child, 2=leaf */
+            /* Nodes in routing table (excluding root) are child nodes */
+            node->role = 1;
+
+            /* Status: 1=connected (nodes in routing table are connected) */
+            node->status = 1;
+
+            node_idx++;
+        }
+
+        /* Validate node_count matches actual nodes collected */
+        if (node_idx != child_count) {
+            ESP_LOGW(TAG, "Node count mismatch: expected %d, collected %d", child_count, node_idx);
+            /* Update node_count to match actual collected nodes */
+            state->node_count = (uint8_t)node_idx;
+        }
+    } else if (child_count > MAX_STATE_UPDATE_NODES) {
+        ESP_LOGW(TAG, "Too many nodes (%d > %d), limiting to %d", child_count, MAX_STATE_UPDATE_NODES, MAX_STATE_UPDATE_NODES);
+        state->node_count = MAX_STATE_UPDATE_NODES;
+        /* Allocate for maximum nodes */
+        state->nodes = (mesh_node_entry_t *)malloc(MAX_STATE_UPDATE_NODES * sizeof(mesh_node_entry_t));
+        if (state->nodes == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate node list");
+            return ESP_ERR_NO_MEM;
+        }
+        memset(state->nodes, 0, MAX_STATE_UPDATE_NODES * sizeof(mesh_node_entry_t));
+
+        /* Fill node list (limited to MAX_STATE_UPDATE_NODES) */
+        int node_idx = 0;
+        for (int i = 0; i < route_table_size && node_idx < MAX_STATE_UPDATE_NODES; i++) {
+            /* Skip root node */
+            bool is_root = true;
+            for (int j = 0; j < 6; j++) {
+                if (route_table[i].addr[j] != root_addr.addr[j]) {
+                    is_root = false;
+                    break;
+                }
+            }
+            if (is_root) {
+                continue;
+            }
+
+            /* Get node information */
+            mesh_node_entry_t *node = &state->nodes[node_idx];
+            memcpy(node->node_id, route_table[i].addr, 6);
+            node->ip[0] = 0;
+            node->ip[1] = 0;
+            node->ip[2] = 0;
+            node->ip[3] = 0;
+            node->layer = 1;
+            memcpy(node->parent_id, root_addr.addr, 6);
+            node->role = 1;
+            node->status = 1;
+            node_idx++;
+        }
+
+        /* Validate node_count matches actual nodes collected */
+        if (node_idx != MAX_STATE_UPDATE_NODES) {
+            ESP_LOGW(TAG, "Node count mismatch: expected %d, collected %d", MAX_STATE_UPDATE_NODES, node_idx);
+            /* Update node_count to match actual collected nodes */
+            state->node_count = (uint8_t)node_idx;
+        }
+    }
+
+    /* Get sequence state */
+    state->sequence_active = mode_sequence_root_is_active() ? 1 : 0;
+    if (state->sequence_active) {
+        state->sequence_position = htons(mode_sequence_root_get_pointer());
+        /* Note: sequence_total is not directly available, we'll set it to 0 for now */
+        state->sequence_total = 0;
+    } else {
+        state->sequence_position = 0;
+        state->sequence_total = 0;
+    }
+
+    /* Get OTA state */
+    mesh_ota_distribution_status_t ota_status;
+    err = mesh_ota_get_distribution_status(&ota_status);
+    if (err == ESP_OK && ota_status.distributing) {
+        state->ota_in_progress = 1;
+        float progress = mesh_ota_get_distribution_progress();
+        state->ota_progress = (uint8_t)(progress * 100.0f);
+        if (state->ota_progress > 100) {
+            state->ota_progress = 100;
+        }
+    } else {
+        state->ota_in_progress = 0;
+        state->ota_progress = 0;
+    }
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Build binary payload from state data.
+ *
+ * Encodes the state data structure into a binary payload for UDP transmission.
+ *
+ * @param state State data structure
+ * @param buffer Output buffer for binary payload
+ * @param buffer_size Size of output buffer
+ * @param payload_size Output parameter for actual payload size
+ * @return ESP_OK on success, ESP_ERR_INVALID_SIZE if buffer too small, error code on failure
+ */
+esp_err_t mesh_udp_bridge_build_state_payload(const mesh_state_data_t *state,
+                                                uint8_t *buffer, size_t buffer_size,
+                                                size_t *payload_size)
+{
+    if (state == NULL || buffer == NULL || payload_size == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Calculate required payload size */
+    size_t required_size = 4 + 6 + 4 + 1 + 1 + (state->node_count * sizeof(mesh_node_entry_t)) + 1 + 2 + 2 + 1 + 1;
+    if (buffer_size < required_size) {
+        ESP_LOGE(TAG, "Buffer too small: %zu < %zu", buffer_size, required_size);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    size_t offset = 0;
+
+    /* Encode root IP (4 bytes, network byte order) */
+    memcpy(&buffer[offset], state->root_ip, 4);
+    offset += 4;
+
+    /* Encode mesh ID (6 bytes) */
+    memcpy(&buffer[offset], state->mesh_id, 6);
+    offset += 6;
+
+    /* Encode timestamp (4 bytes, network byte order) */
+    memcpy(&buffer[offset], &state->timestamp, 4);
+    offset += 4;
+
+    /* Encode mesh state (1 byte) */
+    buffer[offset++] = state->mesh_state;
+
+    /* Encode node count (1 byte) */
+    buffer[offset++] = state->node_count;
+
+    /* Encode node list */
+    if (state->nodes != NULL && state->node_count > 0) {
+        for (uint8_t i = 0; i < state->node_count; i++) {
+            mesh_node_entry_t *node = &state->nodes[i];
+            /* Node ID (6 bytes) */
+            memcpy(&buffer[offset], node->node_id, 6);
+            offset += 6;
+            /* IP (4 bytes, network byte order) */
+            memcpy(&buffer[offset], node->ip, 4);
+            offset += 4;
+            /* Layer (1 byte) */
+            buffer[offset++] = node->layer;
+            /* Parent ID (6 bytes) */
+            memcpy(&buffer[offset], node->parent_id, 6);
+            offset += 6;
+            /* Role (1 byte) */
+            buffer[offset++] = node->role;
+            /* Status (1 byte) */
+            buffer[offset++] = node->status;
+        }
+    }
+
+    /* Encode sequence state */
+    buffer[offset++] = state->sequence_active;
+    memcpy(&buffer[offset], &state->sequence_position, 2);
+    offset += 2;
+    memcpy(&buffer[offset], &state->sequence_total, 2);
+    offset += 2;
+
+    /* Encode OTA state */
+    buffer[offset++] = state->ota_in_progress;
+    buffer[offset++] = state->ota_progress;
+
+    *payload_size = offset;
+    return ESP_OK;
+}
+
+/**
+ * @brief Send state update to external server.
+ *
+ * Sends a state update UDP packet to the external web server (if registered).
+ * State updates are fire-and-forget (no ACK required) and completely optional.
+ *
+ * @param payload Binary payload buffer
+ * @param payload_size Size of payload in bytes
+ * @return ESP_OK on send attempt (even if send fails), ESP_ERR_INVALID_STATE if not registered or not root
+ */
+esp_err_t mesh_udp_bridge_send_state_update(const uint8_t *payload, size_t payload_size)
+{
+    /* Check if registered */
+    if (!mesh_udp_bridge_is_registered()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Check if root node */
+    if (!esp_mesh_is_root()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Initialize UDP socket if needed */
+    esp_err_t err = init_udp_socket();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize UDP socket: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Check UDP MTU limit (1472 bytes) */
+    size_t packet_size = 1 + 2 + payload_size + 2; /* CMD + LEN + PAYLOAD + CHKSUM */
+    if (packet_size > 1472) {
+        ESP_LOGW(TAG, "State update packet too large: %zu bytes (max 1472), skipping", packet_size);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    /* Allocate packet buffer */
+    uint8_t *packet = (uint8_t *)malloc(packet_size);
+    if (packet == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate packet buffer");
+        return ESP_ERR_NO_MEM;
+    }
+
+    /* Pack UDP packet: [CMD:0xE2][LEN:2][PAYLOAD:N][CHKSUM:2] */
+    packet[0] = UDP_CMD_STATE_UPDATE;
+    packet[1] = (payload_size >> 8) & 0xFF; /* Length MSB */
+    packet[2] = payload_size & 0xFF; /* Length LSB */
+    memcpy(&packet[3], payload, payload_size);
+
+    /* Calculate checksum (16-bit sum of all bytes excluding checksum) */
+    uint16_t checksum = 0;
+    for (size_t i = 0; i < packet_size - 2; i++) {
+        checksum = (checksum + packet[i]) & 0xFFFF;
+    }
+    packet[packet_size - 2] = (checksum >> 8) & 0xFF; /* Checksum MSB */
+    packet[packet_size - 1] = checksum & 0xFF; /* Checksum LSB */
+
+    /* Send UDP packet (fire-and-forget, no ACK wait) */
+    ssize_t sent = sendto(s_udp_socket, packet, packet_size, 0,
+                          (struct sockaddr *)&s_server_addr, sizeof(s_server_addr));
+    if (sent < 0) {
+        /* Log at debug level - packet loss is acceptable for state updates */
+        ESP_LOGD(TAG, "State update send failed: %d (acceptable for fire-and-forget)", errno);
+    } else {
+        ESP_LOGD(TAG, "State update sent: payload_size=%zu", payload_size);
+    }
+
+    free(packet);
+    return ESP_OK; /* Return OK even if send failed (fire-and-forget) */
+}
+
+/**
+ * @brief State update task function.
+ *
+ * This task periodically collects mesh state and sends state updates to the external web server.
+ * The task exits if the node is no longer root or registration is lost.
+ */
+static void mesh_udp_bridge_state_update_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "State update task started");
+
+    while (1) {
+        /* Check if still root and registered */
+        if (!esp_mesh_is_root() || !mesh_udp_bridge_is_registered()) {
+            ESP_LOGI(TAG, "State update task exiting: not root or not registered");
+            break;
+        }
+
+        /* Collect mesh state */
+        mesh_state_data_t state;
+        esp_err_t err = mesh_udp_bridge_collect_state(&state);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to collect state: %s (continuing)", esp_err_to_name(err));
+            vTaskDelay(pdMS_TO_TICKS(STATE_UPDATE_INTERVAL_SECONDS * 1000));
+            continue;
+        }
+
+        /* Build binary payload */
+        size_t payload_size = 0;
+        size_t buffer_size = 4 + 6 + 4 + 1 + 1 + (MAX_STATE_UPDATE_NODES * sizeof(mesh_node_entry_t)) + 1 + 2 + 2 + 1 + 1;
+        uint8_t *payload_buffer = (uint8_t *)malloc(buffer_size);
+        if (payload_buffer == NULL) {
+            ESP_LOGW(TAG, "Failed to allocate payload buffer (continuing)");
+            /* Free node list */
+            if (state.nodes != NULL) {
+                free(state.nodes);
+            }
+            vTaskDelay(pdMS_TO_TICKS(STATE_UPDATE_INTERVAL_SECONDS * 1000));
+            continue;
+        }
+
+        err = mesh_udp_bridge_build_state_payload(&state, payload_buffer, buffer_size, &payload_size);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to build state payload: %s (continuing)", esp_err_to_name(err));
+            free(payload_buffer);
+            /* Free node list */
+            if (state.nodes != NULL) {
+                free(state.nodes);
+            }
+            vTaskDelay(pdMS_TO_TICKS(STATE_UPDATE_INTERVAL_SECONDS * 1000));
+            continue;
+        }
+
+        /* Send state update */
+        err = mesh_udp_bridge_send_state_update(payload_buffer, payload_size);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGD(TAG, "State update send error: %s (continuing)", esp_err_to_name(err));
+        }
+
+        /* Free buffers */
+        free(payload_buffer);
+        if (state.nodes != NULL) {
+            free(state.nodes);
+        }
+
+        /* Sleep for interval */
+        vTaskDelay(pdMS_TO_TICKS(STATE_UPDATE_INTERVAL_SECONDS * 1000));
+    }
+
+    /* Clean up on exit */
+    s_state_update_task_handle = NULL;
+    s_state_update_running = false;
+    ESP_LOGI(TAG, "State update task stopped");
+    vTaskDelete(NULL);
+}
+
+/**
+ * @brief Start the state update task.
+ *
+ * Starts a periodic FreeRTOS task that sends state updates at regular intervals.
+ * Only starts if the node is root and registered with an external server.
+ * State updates are completely optional and do not affect embedded web server operation.
+ */
+void mesh_udp_bridge_start_state_updates(void)
+{
+    /* Check if task already running */
+    if (s_state_update_running && s_state_update_task_handle != NULL) {
+        ESP_LOGD(TAG, "State update task already running");
+        return;
+    }
+
+    /* Check if registered */
+    if (!mesh_udp_bridge_is_registered()) {
+        ESP_LOGD(TAG, "Not registered, skipping state update start");
+        return;
+    }
+
+    /* Check if root node */
+    if (!esp_mesh_is_root()) {
+        ESP_LOGD(TAG, "Not root node, skipping state update start");
+        return;
+    }
+
+    /* Create FreeRTOS task */
+    BaseType_t task_err = xTaskCreate(mesh_udp_bridge_state_update_task, "udp_state_update",
+                                      4096, NULL, 1, &s_state_update_task_handle);
+    if (task_err != pdPASS) {
+        ESP_LOGW(TAG, "Failed to create state update task");
+        s_state_update_task_handle = NULL;
+        s_state_update_running = false;
+    } else {
+        s_state_update_running = true;
+        ESP_LOGI(TAG, "State update task started");
+    }
+}
+
+/**
+ * @brief Stop the state update task.
+ *
+ * Stops the periodic state update task and cleans up resources.
+ * This function is safe to call even if the task is not running.
+ */
+void mesh_udp_bridge_stop_state_updates(void)
+{
+    if (!s_state_update_running || s_state_update_task_handle == NULL) {
+        /* Task not running, nothing to stop */
+        return;
+    }
+
+    /* Delete task */
+    vTaskDelete(s_state_update_task_handle);
+    s_state_update_task_handle = NULL;
+    s_state_update_running = false;
+    ESP_LOGI(TAG, "State update task stopped");
 }

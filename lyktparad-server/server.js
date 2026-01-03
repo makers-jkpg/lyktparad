@@ -25,6 +25,7 @@ try {
 const { registerRootNode } = require('./lib/registration');
 const { proxyHandler } = require('./routes/proxy');
 const { closeUdpSocket } = require('./lib/udp-client');
+const { storeMeshState, getFirstMeshState, isStateStale } = require('./lib/state-storage');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -61,6 +62,56 @@ app.get('/health', (req, res) => {
     });
 });
 
+// API: GET /api/mesh/state - Returns latest mesh state
+app.get('/api/mesh/state', (req, res) => {
+    const state = getFirstMeshState();
+    if (!state) {
+        res.status(404).json({ error: 'No mesh state available' });
+        return;
+    }
+
+    // Check if state is stale
+    if (isStateStale(state, 10000)) { // 10 seconds
+        res.json({
+            ...state,
+            stale: true,
+            warning: 'State may be outdated'
+        });
+        return;
+    }
+
+    // Convert to JSON format
+    const jsonState = {
+        root_ip: state.root_ip,
+        mesh_id: state.mesh_id,
+        timestamp: state.timestamp,
+        timestamp_iso: new Date(state.timestamp * 1000).toISOString(),
+        mesh_state: state.mesh_state === 1 ? 'connected' : 'disconnected',
+        node_count: state.node_count,
+        nodes: state.nodes.map(node => ({
+            node_id: node.node_id,
+            ip: node.ip,
+            layer: node.layer,
+            parent_id: node.parent_id,
+            role: node.role === 0 ? 'root' : node.role === 1 ? 'child' : 'leaf',
+            status: node.status === 1 ? 'connected' : 'disconnected'
+        })),
+        sequence: {
+            active: state.sequence_state.active === 1,
+            position: state.sequence_state.position,
+            total: state.sequence_state.total
+        },
+        ota: {
+            in_progress: state.ota_state.in_progress === 1,
+            progress: state.ota_state.progress
+        },
+        updated_at: new Date(state.updated_at).toISOString(),
+        stale: false
+    };
+
+    res.json(jsonState);
+});
+
 // API proxy routes (before static file serving)
 app.all('/api/*', proxyHandler);
 
@@ -81,6 +132,7 @@ app.use(express.static(path.join(__dirname, 'web-ui'), {
  */
 const UDP_CMD_REGISTRATION = 0xE0;
 const UDP_CMD_REGISTRATION_ACK = 0xE3;
+const UDP_CMD_STATE_UPDATE = 0xE2;
 
 /**
  * Calculate simple checksum (16-bit sum of all bytes).
@@ -216,10 +268,143 @@ function handleRegistrationPacket(msg, rinfo, socket) {
 // Create UDP socket for registration and API commands
 const udpServer = dgram.createSocket('udp4');
 
+/**
+ * Handle state update packet (command 0xE2).
+ *
+ * @param {Buffer} msg - UDP message
+ * @param {Object} rinfo - Remote address info
+ */
+function handleStateUpdatePacket(msg, rinfo) {
+    // Minimum packet size: [CMD:1][LEN:2][CHKSUM:2] = 5 bytes
+    if (msg.length < 5) {
+        console.warn('State update packet too short:', msg.length);
+        return;
+    }
+
+    // Parse packet: [CMD:0xE2][LEN:2][PAYLOAD:N][CHKSUM:2]
+    const commandId = msg[0];
+    if (commandId !== UDP_CMD_STATE_UPDATE) {
+        return; // Not a state update packet
+    }
+
+    const payloadLen = (msg[1] << 8) | msg[2];
+    const checksum = (msg[msg.length - 2] << 8) | msg[msg.length - 1];
+
+    // Verify packet size
+    const expectedSize = 1 + 2 + payloadLen + 2; // CMD + LEN + PAYLOAD + CHKSUM
+    if (msg.length !== expectedSize) {
+        console.warn(`State update packet size mismatch: expected ${expectedSize}, got ${msg.length}`);
+        return;
+    }
+
+    // Verify checksum
+    const packetWithoutChecksum = msg.slice(0, msg.length - 2);
+    const calculatedChecksum = calculateChecksum(packetWithoutChecksum);
+    if (checksum !== calculatedChecksum) {
+        console.warn(`State update packet checksum mismatch: expected ${checksum}, got ${calculatedChecksum}`);
+        // Continue anyway (checksum verification is optional)
+    }
+
+    // Extract payload
+    const payload = msg.slice(3, 3 + payloadLen);
+
+    // Minimum payload: root_ip(4) + mesh_id(6) + timestamp(4) + mesh_state(1) + node_count(1) + sequence(5) + ota(2) = 23 bytes
+    if (payload.length < 23) {
+        console.warn('State update payload too short:', payload.length);
+        return;
+    }
+
+    // Parse payload: [root_ip:4][mesh_id:6][timestamp:4][mesh_state:1][node_count:1][nodes:N][sequence_active:1][sequence_position:2][sequence_total:2][ota_in_progress:1][ota_progress:1]
+    let offset = 0;
+
+    // Root IP (4 bytes, network byte order)
+    const root_ip = payload.slice(offset, offset + 4);
+    offset += 4;
+
+    // Mesh ID (6 bytes)
+    const mesh_id = payload.slice(offset, offset + 6);
+    offset += 6;
+
+    // Timestamp (4 bytes, network byte order)
+    const timestamp = payload.readUInt32BE(offset);
+    offset += 4;
+
+    // Mesh state (1 byte)
+    const mesh_state = payload[offset++];
+
+    // Node count (1 byte)
+    const node_count = payload[offset++];
+
+    // Node list (N * node_entry)
+    const nodes = [];
+    for (let i = 0; i < node_count; i++) {
+        if (offset + 19 > payload.length) {
+            console.warn('State update payload truncated at node list');
+            break;
+        }
+
+        const node = {
+            node_id: payload.slice(offset, offset + 6).toString('hex'),
+            ip: `${payload[offset + 6]}.${payload[offset + 7]}.${payload[offset + 8]}.${payload[offset + 9]}`,
+            layer: payload[offset + 10],
+            parent_id: payload.slice(offset + 11, offset + 17).toString('hex'),
+            role: payload[offset + 17],
+            status: payload[offset + 18]
+        };
+        nodes.push(node);
+        offset += 19; // 6 + 4 + 1 + 6 + 1 + 1 = 19 bytes per node
+    }
+
+    // Sequence state
+    if (offset + 5 > payload.length) {
+        console.warn('State update payload truncated at sequence state');
+        return;
+    }
+    const sequence_active = payload[offset++];
+    const sequence_position = payload.readUInt16BE(offset);
+    offset += 2;
+    const sequence_total = payload.readUInt16BE(offset);
+    offset += 2;
+
+    // OTA state
+    if (offset + 2 > payload.length) {
+        console.warn('State update payload truncated at OTA state');
+        return;
+    }
+    const ota_in_progress = payload[offset++];
+    const ota_progress = payload[offset++];
+
+    // Store state
+    try {
+        storeMeshState(
+            root_ip,
+            mesh_id,
+            timestamp,
+            mesh_state,
+            node_count,
+            nodes,
+            {
+                active: sequence_active,
+                position: sequence_position,
+                total: sequence_total
+            },
+            {
+                in_progress: ota_in_progress,
+                progress: ota_progress
+            }
+        );
+        console.log(`Mesh state updated: mesh_id=${mesh_id.toString('hex')}, nodes=${node_count}, sequence_active=${sequence_active}, ota_in_progress=${ota_in_progress}`);
+    } catch (error) {
+        console.error('State update storage error:', error);
+    }
+}
+
 udpServer.on('message', (msg, rinfo) => {
     // Check if this is a registration packet
     if (msg.length >= 1 && msg[0] === UDP_CMD_REGISTRATION) {
         handleRegistrationPacket(msg, rinfo, udpServer);
+    } else if (msg.length >= 1 && msg[0] === UDP_CMD_STATE_UPDATE) {
+        handleStateUpdatePacket(msg, rinfo);
     }
     // Other UDP commands (API responses) are handled by udp-client.js
 });
