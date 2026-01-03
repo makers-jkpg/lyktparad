@@ -556,6 +556,13 @@ static void discovery_task(void *pvParameters)
     char server_ip[16] = {0};
     uint16_t server_port = 0;
 
+    /* First, try to use cached IP if available (optimization) */
+    if (mesh_udp_bridge_use_cached_ip()) {
+        ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Using cached server IP (skipping mDNS)");
+        vTaskDelete(NULL);
+        return;
+    }
+
     /* Initialize mDNS if not already initialized */
     esp_err_t err = mesh_udp_bridge_mdns_init();
     if (err != ESP_OK) {
@@ -595,6 +602,9 @@ static void discovery_task(void *pvParameters)
         } else {
             ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] Failed to convert IP address: %s", server_ip);
         }
+
+        /* Broadcast discovered IP to all child nodes (optimization) */
+        mesh_udp_bridge_broadcast_server_ip(server_ip, server_port);
     } else {
         /* Discovery failed - try to use cached address */
         ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Discovery failed, trying cached address");

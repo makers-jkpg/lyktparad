@@ -20,12 +20,15 @@
 #include "mesh_child.h"
 #include "mesh_root.h"
 #include "mesh_commands.h"
+#include "mesh_udp_bridge.h"
 #include "light_neopixel.h"
 #include "node_sequence.h"
 #include "node_effects.h"
 #include "light_common_cathode.h"
 #include "config/mesh_config.h"
 #include "mesh_ota.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -180,10 +183,66 @@ void esp_mesh_p2p_rx_main(void *arg)
                 ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE CONTROL] failed to handle command 0x%02x: 0x%x", data.data[0], err);
             }
         } else if (data.proto == MESH_PROTO_BIN && data.size >= 1) {
-            /* Check for OTA messages (leaf nodes only) */
             uint8_t cmd = data.data[0];
-            if (cmd == MESH_CMD_OTA_START || cmd == MESH_CMD_OTA_BLOCK ||
-                cmd == MESH_CMD_OTA_PREPARE_REBOOT || cmd == MESH_CMD_OTA_REBOOT) {
+            /* Check for web server IP broadcast command */
+            if (cmd == MESH_CMD_WEBSERVER_IP_BROADCAST) {
+                /* Minimum size: command (1 byte) + payload (6 bytes for IP + port) */
+                if (data.size >= 7) {
+                    const mesh_webserver_ip_broadcast_t *payload = (const mesh_webserver_ip_broadcast_t *)(data.data + 1);
+
+                    /* Extract IP address from payload */
+                    char server_ip[16] = {0};
+                    snprintf(server_ip, sizeof(server_ip), "%d.%d.%d.%d",
+                             payload->ip[0], payload->ip[1], payload->ip[2], payload->ip[3]);
+
+                    /* Extract port from payload (convert from network byte order) */
+                    uint16_t server_port = ntohs(payload->port);
+
+                    /* Validate port range */
+                    if (server_port == 0 || server_port > 65535) {
+                        ESP_LOGW(MESH_TAG, "[WEBSERVER IP] Invalid port: %d", server_port);
+                    } else {
+                        /* Extract timestamp if present (optional, 10 bytes total) */
+                        uint32_t timestamp = 0;
+                        if (data.size >= 11) {
+                            timestamp = ntohl(payload->timestamp);
+                        }
+
+                        /* Store in NVS */
+                        nvs_handle_t nvs_handle;
+                        esp_err_t err = nvs_open("udp_bridge", NVS_READWRITE, &nvs_handle);
+                        if (err == ESP_OK) {
+                            /* Store server IP address */
+                            err = nvs_set_str(nvs_handle, "server_ip", server_ip);
+                            if (err == ESP_OK) {
+                                /* Store server port */
+                                err = nvs_set_u16(nvs_handle, "server_port", server_port);
+                                if (err == ESP_OK && timestamp > 0) {
+                                    /* Store timestamp if present */
+                                    nvs_set_u32(nvs_handle, "server_ip_timestamp", timestamp);
+                                }
+                                /* Commit changes */
+                                err = nvs_commit(nvs_handle);
+                                if (err == ESP_OK) {
+                                    ESP_LOGI(MESH_TAG, "[WEBSERVER IP] Cached external web server: %s:%d", server_ip, server_port);
+                                } else {
+                                    ESP_LOGW(MESH_TAG, "[WEBSERVER IP] Failed to commit NVS: %s", esp_err_to_name(err));
+                                }
+                            } else {
+                                ESP_LOGW(MESH_TAG, "[WEBSERVER IP] Failed to store IP in NVS: %s", esp_err_to_name(err));
+                            }
+                            nvs_close(nvs_handle);
+                        } else {
+                            ESP_LOGW(MESH_TAG, "[WEBSERVER IP] Failed to open NVS: %s", esp_err_to_name(err));
+                        }
+                    }
+                } else {
+                    ESP_LOGW(MESH_TAG, "[WEBSERVER IP] Invalid payload size: %d (expected >= 7)", data.size);
+                }
+            }
+            /* Check for OTA messages (leaf nodes only) */
+            else if (cmd == MESH_CMD_OTA_START || cmd == MESH_CMD_OTA_BLOCK ||
+                     cmd == MESH_CMD_OTA_PREPARE_REBOOT || cmd == MESH_CMD_OTA_REBOOT) {
                 mesh_ota_handle_leaf_message(&from, data.data, data.size);
             }
         } else {

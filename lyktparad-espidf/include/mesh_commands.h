@@ -33,8 +33,32 @@
 #define  MESH_CMD_SEQUENCE_BEAT  (0x08)  /* Tempo synchronization beat (2 bytes: command + 1-byte pointer) */
 #define  MESH_CMD_EFFECT         (0x09)  /* Effect command */
 
-/* Mesh Command Definitions - OTA/MUPDATE Commands */
-/* Commands with prefix 0xF are reserved for OTA/update functionality */
+/*******************************************************
+ *                Mesh Command Payload Structures
+ *******************************************************/
+
+/**
+ * @brief Payload structure for web server IP broadcast command.
+ *
+ * This structure is sent as the payload for MESH_CMD_WEBSERVER_IP_BROADCAST.
+ * The structure is packed to ensure consistent byte alignment across platforms.
+ *
+ * Fields:
+ * - ip[4]: IPv4 address in network byte order (4 bytes)
+ * - port: UDP port number in network byte order (2 bytes)
+ * - timestamp: Optional Unix timestamp for cache expiration (4 bytes, network byte order)
+ *
+ * Minimum size: 6 bytes (IP + port)
+ * Optional size: 10 bytes (IP + port + timestamp)
+ */
+typedef struct {
+    uint8_t ip[4];        /* IPv4 address in network byte order */
+    uint16_t port;        /* UDP port number in network byte order */
+    uint32_t timestamp;   /* Optional: Unix timestamp for expiration (network byte order) */
+} __attribute__((packed)) mesh_webserver_ip_broadcast_t;
+
+/* Mesh Command Definitions - Internal Mesh Use (0xF prefix) */
+/* Commands with prefix 0xF are reserved for internal mesh use (OTA/update and internal mesh operations) */
 #define  MESH_CMD_OTA_REQUEST    (0xF0)  /* Leaf node requests firmware update */
 #define  MESH_CMD_OTA_START      (0xF1)  /* Root starts OTA distribution */
 #define  MESH_CMD_OTA_BLOCK      (0xF2)  /* Firmware block data */
@@ -42,5 +66,6 @@
 #define  MESH_CMD_OTA_STATUS     (0xF4)  /* Update status query */
 #define  MESH_CMD_OTA_PREPARE_REBOOT (0xF5)  /* Prepare for coordinated reboot */
 #define  MESH_CMD_OTA_REBOOT     (0xF6)  /* Execute coordinated reboot */
+#define  MESH_CMD_WEBSERVER_IP_BROADCAST (0xF7)  /* Broadcast external web server IP and UDP port to child nodes */
 
 #endif /* __MESH_COMMANDS_H__ */

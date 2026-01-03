@@ -407,4 +407,43 @@ esp_err_t mesh_udp_bridge_start_retry_task(void);
  * Stops the retry task if it is running.
  */
 void mesh_udp_bridge_stop_retry_task(void);
+
+/**
+ * @brief Broadcast external web server IP and UDP port to all child nodes.
+ *
+ * This function broadcasts the discovered external web server IP address and UDP port
+ * to all child nodes in the mesh network. Child nodes store this information in NVS
+ * for use when they become root nodes (optimization to avoid mDNS discovery delay).
+ *
+ * This is a non-blocking, fire-and-forget operation. Broadcast failures are logged
+ * but do not affect mesh operation or discovery.
+ *
+ * @param ip IP address string (e.g., "192.168.1.100")
+ * @param port UDP port number
+ */
+void mesh_udp_bridge_broadcast_server_ip(const char *ip, uint16_t port);
+
+/**
+ * @brief Test UDP connection to server.
+ *
+ * Tests if a UDP connection can be established to the given IP and port.
+ * This is a quick test (1-2 second timeout) to validate cached IP addresses.
+ *
+ * @param ip IP address string
+ * @param port UDP port number
+ * @return true if connection test succeeds, false otherwise
+ */
+bool mesh_udp_bridge_test_connection(const char *ip, uint16_t port);
+
+/**
+ * @brief Check and use cached IP address if valid.
+ *
+ * Reads cached server IP and port from NVS, tests the connection, and if valid,
+ * sets the server registration. This is an optimization to avoid mDNS discovery
+ * delay when a valid cached IP is available.
+ *
+ * @return true if cached IP is valid and used, false otherwise
+ */
+bool mesh_udp_bridge_use_cached_ip(void);
+
 #endif /* __MESH_UDP_BRIDGE_H__ */

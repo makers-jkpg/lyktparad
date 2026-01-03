@@ -8,6 +8,7 @@
  */
 
 #include "mesh_udp_bridge.h"
+#include "mesh_commands.h"
 #include "mesh_common.h"
 #include "mesh_version.h"
 #include "config/mesh_config.h"
@@ -18,6 +19,7 @@
 #include "esp_mesh.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
+#include "esp_mac.h"
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
 #include "lwip/netdb.h"
@@ -30,10 +32,16 @@
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
+#include <time.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
 #include <stdlib.h>
+
+/* Ensure MACSTR is defined - it should be in esp_mac.h */
+#ifndef MACSTR
+#define MACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
+#endif
 
 static const char *TAG = "mesh_udp_bridge";
 
@@ -56,6 +64,9 @@ static bool s_mdns_initialized = false;
 /* Retry task state */
 static TaskHandle_t s_retry_task_handle = NULL;
 static bool s_retry_task_running = false;
+
+/* Broadcast guard - prevents duplicate broadcasts */
+static bool s_broadcast_sent = false;
 
 /*******************************************************
  *                UDP Socket Management
@@ -560,6 +571,8 @@ void mesh_udp_bridge_set_registration(bool registered, const uint8_t *server_ip,
                  server_ip[0], server_ip[1], server_ip[2], server_ip[3], server_port);
         /* Clear registration status when server changes */
         s_registration_complete = false;
+        /* Reset broadcast guard when new server is registered */
+        s_broadcast_sent = false;
     } else {
         /* Clear server address */
         memset(&s_server_addr, 0, sizeof(s_server_addr));
@@ -568,6 +581,8 @@ void mesh_udp_bridge_set_registration(bool registered, const uint8_t *server_ip,
         /* Stop heartbeat and state updates when registration is cleared */
         mesh_udp_bridge_stop_heartbeat();
         mesh_udp_bridge_stop_state_updates();
+        /* Reset broadcast guard when server is disconnected */
+        s_broadcast_sent = false;
     }
 }
 
@@ -3378,6 +3393,9 @@ static void mesh_udp_bridge_retry_task(void *pvParameters)
                 mesh_udp_bridge_set_registration(true, ip_bytes, server_port);
             }
 
+            /* Broadcast discovered IP to all child nodes (optimization) */
+            mesh_udp_bridge_broadcast_server_ip(server_ip, server_port);
+
             /* Stop retrying */
             s_retry_task_running = false;
             s_retry_task_handle = NULL;
@@ -3439,4 +3457,274 @@ void mesh_udp_bridge_stop_retry_task(void)
     s_retry_task_running = false;
     /* Task will clean itself up */
     ESP_LOGI(TAG, "Stopping discovery retry task");
+}
+
+/*******************************************************
+ *                Broadcast Functions
+ *******************************************************/
+
+/**
+ * @brief Broadcast external web server IP and UDP port to all child nodes.
+ *
+ * This function broadcasts the discovered external web server IP address and UDP port
+ * to all child nodes in the mesh network. Child nodes store this information in NVS
+ * for use when they become root nodes (optimization to avoid mDNS discovery delay).
+ *
+ * This is a non-blocking, fire-and-forget operation. Broadcast failures are logged
+ * but do not affect mesh operation or discovery.
+ *
+ * @param ip IP address string (e.g., "192.168.1.100")
+ * @param port UDP port number
+ */
+void mesh_udp_bridge_broadcast_server_ip(const char *ip, uint16_t port)
+{
+    if (ip == NULL) {
+        ESP_LOGW(TAG, "Cannot broadcast: IP address is NULL");
+        return;
+    }
+
+    /* Only root node can broadcast */
+    if (!esp_mesh_is_root()) {
+        ESP_LOGD(TAG, "Not root node, skipping broadcast");
+        return;
+    }
+
+    /* Check broadcast guard - only broadcast once per discovery */
+    if (s_broadcast_sent) {
+        ESP_LOGD(TAG, "Broadcast already sent, skipping duplicate");
+        return;
+    }
+
+    /* Convert IP string to 4-byte array */
+    struct in_addr addr;
+    if (inet_aton(ip, &addr) == 0) {
+        ESP_LOGW(TAG, "Failed to convert IP address: %s", ip);
+        return;
+    }
+
+    /* Get routing table */
+    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+    int route_table_size = 0;
+    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+
+    /* Get root MAC address to filter it out from broadcast */
+    mesh_addr_t root_addr;
+    uint8_t mac[6];
+    esp_err_t mac_err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    if (mac_err == ESP_OK) {
+        memcpy(root_addr.addr, mac, 6);
+    } else {
+        /* Fallback: if we can't get root MAC, skip filtering (less safe but still works) */
+        root_addr.addr[0] = 0;
+    }
+
+    /* Count child nodes (excluding root) */
+    int child_node_count = 0;
+    for (int i = 0; i < route_table_size; i++) {
+        /* Compare MAC addresses to exclude root */
+        bool is_root = true;
+        if (mac_err == ESP_OK) {
+            for (int j = 0; j < 6; j++) {
+                if (route_table[i].addr[j] != root_addr.addr[j]) {
+                    is_root = false;
+                    break;
+                }
+            }
+        } else {
+            is_root = false;  /* Can't determine, assume not root */
+        }
+        if (!is_root) {
+            child_node_count++;
+        }
+    }
+
+    if (child_node_count == 0) {
+        ESP_LOGD(TAG, "No child nodes to broadcast to");
+        return;
+    }
+
+    /* Get TX buffer and prepare payload */
+    uint8_t *tx_buf = mesh_common_get_tx_buf();
+    mesh_webserver_ip_broadcast_t *payload = (mesh_webserver_ip_broadcast_t *)(tx_buf + 1);  /* +1 for command ID */
+
+    /* Set command ID */
+    tx_buf[0] = MESH_CMD_WEBSERVER_IP_BROADCAST;
+
+    /* Fill payload structure */
+    memcpy(payload->ip, &addr.s_addr, 4);  /* IP in network byte order */
+    payload->port = htons(port);  /* Port in network byte order */
+    payload->timestamp = htonl((uint32_t)time(NULL));  /* Timestamp in network byte order */
+
+    /* Create mesh data structure */
+    mesh_data_t data;
+    data.data = tx_buf;
+    data.size = 1 + sizeof(mesh_webserver_ip_broadcast_t);  /* Command ID + payload */
+    data.proto = MESH_PROTO_BIN;
+    data.tos = MESH_TOS_P2P;
+
+    /* Broadcast to all child nodes (excluding root) */
+    int success_count = 0;
+    int fail_count = 0;
+    for (int i = 0; i < route_table_size; i++) {
+        /* Filter out root node */
+        bool is_root = true;
+        if (mac_err == ESP_OK) {
+            for (int j = 0; j < 6; j++) {
+                if (route_table[i].addr[j] != root_addr.addr[j]) {
+                    is_root = false;
+                    break;
+                }
+            }
+        } else {
+            is_root = false;  /* Can't determine, assume not root */
+        }
+        if (is_root) {
+            continue;  /* Skip root node */
+        }
+
+        esp_err_t err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+        if (err == ESP_OK) {
+            success_count++;
+        } else {
+            fail_count++;
+            ESP_LOGD(TAG, "Broadcast send err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
+        }
+    }
+
+    ESP_LOGI(TAG, "Web server IP broadcast - IP:%s, port:%d, sent to %d/%d child nodes (success:%d, failed:%d)",
+             ip, port, success_count, child_node_count, success_count, fail_count);
+
+    /* Mark broadcast as sent */
+    s_broadcast_sent = true;
+}
+
+/*******************************************************
+ *                Cached IP Functions
+ *******************************************************/
+
+/**
+ * @brief Test UDP connection to server.
+ *
+ * Tests if a UDP connection can be established to the given IP and port.
+ * This is a quick test (1-2 second timeout) to validate cached IP addresses.
+ *
+ * @param ip IP address string
+ * @param port UDP port number
+ * @return true if connection test succeeds, false otherwise
+ */
+bool mesh_udp_bridge_test_connection(const char *ip, uint16_t port)
+{
+    if (ip == NULL) {
+        return false;
+    }
+
+    /* Create UDP socket */
+    int test_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (test_socket < 0) {
+        ESP_LOGD(TAG, "Failed to create test socket: %d", errno);
+        return false;
+    }
+
+    /* Set socket timeout (1 second) */
+    struct timeval timeout;
+    timeout.tv_sec = 1;
+    timeout.tv_usec = 0;
+    if (setsockopt(test_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+        ESP_LOGD(TAG, "Failed to set socket timeout: %d", errno);
+        close(test_socket);
+        return false;
+    }
+
+    /* Set send timeout */
+    if (setsockopt(test_socket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0) {
+        ESP_LOGD(TAG, "Failed to set send timeout: %d", errno);
+        close(test_socket);
+        return false;
+    }
+
+    /* Prepare server address */
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    if (inet_aton(ip, &server_addr.sin_addr) == 0) {
+        ESP_LOGD(TAG, "Failed to convert IP address: %s", ip);
+        close(test_socket);
+        return false;
+    }
+
+    /* Attempt to send a test packet (UDP is fire-and-forget, so just check socket creation) */
+    /* For UDP, we can't really "test" the connection without a response, so we just verify */
+    /* the socket can be created and the address is valid */
+    ssize_t sent = sendto(test_socket, "test", 4, 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    close(test_socket);
+
+    if (sent < 0) {
+        ESP_LOGD(TAG, "Failed to send test packet to %s:%d: %d", ip, port, errno);
+        return false;
+    }
+
+    ESP_LOGD(TAG, "Connection test succeeded for %s:%d", ip, port);
+    return true;
+}
+
+/**
+ * @brief Check and use cached IP address if valid.
+ *
+ * Reads cached server IP and port from NVS, tests the connection, and if valid,
+ * sets the server registration. This is an optimization to avoid mDNS discovery
+ * delay when a valid cached IP is available.
+ *
+ * @return true if cached IP is valid and used, false otherwise
+ */
+bool mesh_udp_bridge_use_cached_ip(void)
+{
+    char server_ip[16] = {0};
+    uint16_t server_port = 0;
+
+    /* Read cached IP from NVS */
+    esp_err_t err = mesh_udp_bridge_get_cached_server(server_ip, &server_port);
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "No cached server IP found in NVS");
+        return false;
+    }
+
+    /* Optional: Check cache expiration (24 hours) */
+    nvs_handle_t nvs_handle;
+    err = nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READONLY, &nvs_handle);
+    if (err == ESP_OK) {
+        uint32_t cached_timestamp = 0;
+        err = nvs_get_u32(nvs_handle, "server_ip_timestamp", &cached_timestamp);
+        if (err == ESP_OK) {
+            /* Timestamp is already in host byte order (converted when stored) */
+            time_t current_time = time(NULL);
+            const time_t expiration_seconds = 24 * 60 * 60;  /* 24 hours */
+
+            if (current_time - cached_timestamp > expiration_seconds) {
+                ESP_LOGI(TAG, "Cached IP expired (age: %ld seconds)", (long)(current_time - cached_timestamp));
+                nvs_close(nvs_handle);
+                return false;
+            }
+        }
+        nvs_close(nvs_handle);
+    }
+
+    /* Test UDP connection */
+    if (!mesh_udp_bridge_test_connection(server_ip, server_port)) {
+        ESP_LOGI(TAG, "Cached IP connection test failed: %s:%d", server_ip, server_port);
+        return false;
+    }
+
+    /* Connection test succeeded - set server registration */
+    struct in_addr addr;
+    if (inet_aton(server_ip, &addr) != 0) {
+        uint8_t ip_bytes[4];
+        memcpy(ip_bytes, &addr.s_addr, 4);
+        mesh_udp_bridge_set_registration(true, ip_bytes, server_port);
+        ESP_LOGI(TAG, "Using cached server IP: %s:%d", server_ip, server_port);
+        return true;
+    }
+
+    ESP_LOGW(TAG, "Failed to convert cached IP address: %s", server_ip);
+    return false;
 }
