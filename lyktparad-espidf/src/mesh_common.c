@@ -72,6 +72,9 @@
 #include "light_neopixel.h"
 #include "light_common_cathode.h"
 #include "mesh_ota.h"
+#include "mesh_udp_bridge.h"
+#include "root_status_led.h"
+#include "mesh_udp_bridge.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -104,6 +107,16 @@ static void led_restore_red_task(void *arg)
         mesh_light_set_colour(MESH_LIGHT_RED);
     }
     led_restore_task_handle = NULL; /* Clear handle before deleting */
+    vTaskDelete(NULL);
+}
+
+/* Task function for non-blocking registration on role change */
+static void registration_task(void *pvParameters)
+{
+    esp_err_t reg_err = mesh_udp_bridge_register();
+    if (reg_err != ESP_OK && reg_err != ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(MESH_TAG, "[REGISTRATION] Registration failed on role change: %s", esp_err_to_name(reg_err));
+    }
     vTaskDelete(NULL);
 }
 
@@ -258,6 +271,7 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
 {
     mesh_addr_t id = {0,};
     static uint16_t last_layer = 0;
+    static bool was_root_before = false; /* Track previous root status for heartbeat management */
     bool is_root = esp_mesh_is_root();
 
     switch (event_id) {
@@ -268,6 +282,8 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         mesh_layer = esp_mesh_get_layer();
         ESP_LOGI(MESH_TAG, "[STARTUP] Mesh network started - Node Status: %s",
                  is_root ? "ROOT NODE" : "NON-ROOT NODE");
+        /* Initialize previous root status tracking */
+        was_root_before = is_root;
 
         /* Log mesh AP status for root node */
         if (is_root) {
@@ -303,34 +319,21 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             }
         }
 
-        /* Ensure LED shows unconnected state - check router connection for root */
-        if (is_root) {
-            /* Root node: LED base color indicates router connection status */
-            if (is_router_connected) {
-                mesh_light_set_colour(MESH_LIGHT_GREEN);
-            } else {
-                mesh_light_set_colour(MESH_LIGHT_ORANGE);
-            }
-        } else {
-            mesh_light_set_colour(MESH_LIGHT_RED);
-        }
+        /* Ensure LED shows unconnected state */
+        mesh_light_set_colour(MESH_LIGHT_RED);
+
+        /* Update status LED based on current mesh role (mesh role is now known) */
+        root_status_led_update();
     }
     break;
     case MESH_EVENT_STOPPED: {
         ESP_LOGI(MESH_TAG, "<MESH_EVENT_STOPPED>");
         is_mesh_connected = false;
         mesh_layer = esp_mesh_get_layer();
-        /* Turn LED back to unconnected state - check router connection for root */
-        if (is_root) {
-            /* Root node: LED base color indicates router connection status */
-            if (is_router_connected) {
-                mesh_light_set_colour(MESH_LIGHT_GREEN);
-            } else {
-                mesh_light_set_colour(MESH_LIGHT_ORANGE);
-            }
-        } else {
-            mesh_light_set_colour(MESH_LIGHT_RED);
-        }
+        /* Turn LED back to unconnected state */
+        mesh_light_set_colour(MESH_LIGHT_RED);
+        /* Update status LED - mesh stopped, node is no longer root */
+        root_status_led_update();
     }
     break;
     case MESH_EVENT_CHILD_CONNECTED: {
@@ -467,14 +470,8 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             scan_fail_toggle_timer = NULL;
         }
         /* Set LED state when connected - heartbeat will take over from here */
-        if (is_root) {
-            /* Root node: LED base color is controlled by router connection status (IP events)
-             * Don't change LED here - router connection status (GREEN/ORANGE) is the base color
-             * Heartbeat will add white blink when mesh nodes are present */
-        } else {
-            /* Non-root node: turn off LED (heartbeat will control it) */
-            mesh_light_set_colour(0);
-        }
+        /* Turn off LED (heartbeat will control it for all nodes) */
+        mesh_light_set_colour(0);
         if (is_root && root_event_callback) {
             root_event_callback(arg, event_base, event_id, event_data);
         }
@@ -501,16 +498,8 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             esp_timer_delete(scan_fail_toggle_timer);
             scan_fail_toggle_timer = NULL;
         }
-        /* Turn LED back to unconnected state - check router connection for root */
-        if (is_root) {
-            if (is_router_connected) {
-                mesh_light_set_colour(MESH_LIGHT_GREEN);
-            } else {
-                mesh_light_set_colour(MESH_LIGHT_ORANGE);
-            }
-        } else {
-            mesh_light_set_colour(MESH_LIGHT_RED);
-        }
+        /* Turn LED back to unconnected state */
+        mesh_light_set_colour(MESH_LIGHT_RED);
     }
     break;
     case MESH_EVENT_LAYER_CHANGE: {
@@ -524,6 +513,39 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "[STATUS CHANGE] Layer: %d -> %d | Node Type: %s",
                  last_layer, mesh_layer, is_root_now ? "ROOT NODE" : "NON-ROOT NODE");
 
+        /* Handle heartbeat, state updates, broadcast listener, and API listener on role change */
+        if (was_root_before && !is_root_now) {
+            /* Node lost root status - stop heartbeat, state updates, broadcast listener, and API listener */
+            mesh_udp_bridge_stop_heartbeat();
+            mesh_udp_bridge_stop_state_updates();
+            mesh_udp_bridge_broadcast_listener_stop();
+            mesh_udp_bridge_api_listener_stop();
+            /* Update status LED to OFF */
+            root_status_led_set_root(false);
+        } else if (!was_root_before && is_root_now) {
+            /* Node became root - register with external server if discovered */
+            if (mesh_udp_bridge_is_server_discovered()) {
+                /* Create task for non-blocking registration */
+                BaseType_t task_err = xTaskCreate(registration_task, "reg_role_chg", 4096, NULL, 1, NULL);
+                if (task_err != pdPASS) {
+                    ESP_LOGW(MESH_TAG, "[REGISTRATION] Failed to create registration task on role change");
+                }
+            }
+            /* Node became root - start heartbeat and state updates if registered */
+            if (mesh_udp_bridge_is_registered()) {
+                mesh_udp_bridge_start_heartbeat();
+                mesh_udp_bridge_start_state_updates();
+            }
+            /* Broadcast listener will be started in mesh_root_ip_callback when IP is obtained */
+            /* Update status LED to ON */
+            root_status_led_set_root(true);
+        } else {
+            /* Update status LED based on current role */
+            root_status_led_update();
+        }
+
+        /* Update previous root status */
+        was_root_before = is_root_now;
         last_layer = mesh_layer;
         if (is_root_now && root_event_callback) {
             root_event_callback(arg, event_base, event_id, event_data);
@@ -565,6 +587,39 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "[STATUS CHANGE] Root switch acknowledged - Node Type: %s",
                  is_root_now ? "ROOT NODE" : "NON-ROOT NODE");
 
+        /* Handle heartbeat, state updates, broadcast listener, and API listener on root switch */
+        if (!is_root_now) {
+            /* Node is no longer root - stop heartbeat, state updates, broadcast listener, and API listener */
+            mesh_udp_bridge_stop_heartbeat();
+            mesh_udp_bridge_stop_state_updates();
+            mesh_udp_bridge_broadcast_listener_stop();
+            mesh_udp_bridge_api_listener_stop();
+            /* Update status LED to OFF */
+            root_status_led_set_root(false);
+        } else if (is_root_now) {
+            /* Node is root - register with external server if discovered */
+            if (mesh_udp_bridge_is_server_discovered()) {
+                /* Create task for non-blocking registration */
+                BaseType_t task_err = xTaskCreate(registration_task, "reg_switch", 4096, NULL, 1, NULL);
+                if (task_err != pdPASS) {
+                    ESP_LOGW(MESH_TAG, "[REGISTRATION] Failed to create registration task on root switch");
+                }
+            }
+            /* Node is root and registered - start heartbeat and state updates */
+            if (mesh_udp_bridge_is_registered()) {
+                mesh_udp_bridge_start_heartbeat();
+                mesh_udp_bridge_start_state_updates();
+            }
+            /* Update status LED to ON */
+            root_status_led_set_root(true);
+        } else {
+            /* Update status LED based on current role */
+            root_status_led_update();
+        }
+        /* Broadcast listener will be started in mesh_root_ip_callback when IP is obtained */
+
+        /* Update previous root status */
+        was_root_before = is_root_now;
         if (is_root_now && root_event_callback) {
             root_event_callback(arg, event_base, event_id, event_data);
         }
@@ -695,9 +750,12 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
                  is_root ? "ROOT NODE" : "NON-ROOT NODE");
 
         if (is_root) {
-            /* Root node: router connected - set GREEN base color */
+            /* Root node: router connected */
+            /* Root node: router connected */
             is_router_connected = true;
-            mesh_light_set_colour(MESH_LIGHT_GREEN);
+
+            /* Update status LED to ON (root node got IP) */
+            root_status_led_set_root(true);
 
             if (root_ip_callback) {
                 root_ip_callback(arg, event_base, event_id, event_data);
@@ -707,9 +765,12 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "<IP_EVENT_STA_LOST_IP>");
 
         if (is_root) {
-            /* Root node: router disconnected - set ORANGE */
+            /* Root node: router disconnected */
+            /* Root node: router disconnected */
             is_router_connected = false;
-            mesh_light_set_colour(MESH_LIGHT_ORANGE);
+
+            /* Update status LED based on current role (node may still be root even if router disconnected) */
+            root_status_led_update();
         }
     }
 }
@@ -778,6 +839,11 @@ esp_err_t mesh_common_init(void)
     ESP_ERROR_CHECK(esp_mesh_set_max_layer(CONFIG_MESH_MAX_LAYER));
     ESP_ERROR_CHECK(esp_mesh_set_vote_percentage(1));
     ESP_ERROR_CHECK(esp_mesh_set_xon_qsize(128));
+    /* Initialize root status LED */
+    esp_err_t status_led_err = root_status_led_init();
+    if (status_led_err != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "Failed to initialize root status LED: %s", esp_err_to_name(status_led_err));
+    }
 #ifdef CONFIG_MESH_ENABLE_PS
     /* Enable mesh PS function */
     ESP_ERROR_CHECK(esp_mesh_enable_ps());
@@ -853,4 +919,70 @@ esp_err_t mesh_common_init(void)
     ESP_LOGI(MESH_TAG, "========================================");
 
     return ESP_OK;
+}
+
+/*******************************************************
+ *                Mesh Send Bridge Wrapper
+ *******************************************************/
+
+/**
+ * @brief Wrapper function to send mesh data and optionally forward to UDP bridge.
+ *
+ * This function wraps esp_mesh_send() and adds optional forwarding of mesh commands
+ * to the external web server via UDP. The forwarding is completely optional and non-blocking.
+ * If the external server is not registered or forwarding fails, mesh operations continue normally.
+ *
+ * Execution order:
+ * 1. Call original esp_mesh_send() first (mesh operation)
+ * 2. Check if external server registered
+ * 3. If registered, forward command via UDP (non-blocking)
+ * 4. Return mesh send result (ignore UDP forward result)
+ *
+ * @param to Destination mesh address (NULL for broadcast)
+ * @param data Mesh data to send
+ * @param flag Mesh data flag (e.g., MESH_DATA_P2P)
+ * @param opt Optional mesh options (can be NULL)
+ * @param opt_count Number of optional mesh options
+ * @return Result from esp_mesh_send() call
+ */
+esp_err_t mesh_send_with_bridge(const mesh_addr_t *to, const mesh_data_t *data,
+                                 int flag, const mesh_opt_t opt[], int opt_count)
+{
+    /* Call original esp_mesh_send() first (mesh operation) */
+    esp_err_t mesh_result = esp_mesh_send(to, data, flag, opt, opt_count);
+
+    /* Only forward if this is the root node (plan requirement: root node forwards commands) */
+    if (!esp_mesh_is_root()) {
+        /* Not root node - don't forward, but return mesh result */
+        return mesh_result;
+    }
+
+    /* Check if we should forward to external server */
+    if (data == NULL || data->data == NULL) {
+        /* Invalid data - don't forward, but return mesh result */
+        ESP_LOGW(MESH_TAG, "mesh_send_with_bridge: NULL data pointer, skipping forward");
+        return mesh_result;
+    }
+    if (data->size == 0) {
+        /* Empty data - don't forward, but return mesh result */
+        ESP_LOGW(MESH_TAG, "mesh_send_with_bridge: empty data (size=0), skipping forward");
+        return mesh_result;
+    }
+
+    /* Extract command ID from mesh data (first byte) */
+    uint8_t mesh_cmd = data->data[0];
+
+    /* Extract payload from mesh data (data after command ID) */
+    const void *mesh_payload = NULL;
+    size_t mesh_payload_len = 0;
+    if (data->size > 1) {
+        mesh_payload = &data->data[1];
+        mesh_payload_len = data->size - 1;
+    }
+
+    /* Forward command via UDP (non-blocking, fire-and-forget) */
+    mesh_udp_bridge_forward_mesh_command_async(mesh_cmd, mesh_payload, mesh_payload_len);
+
+    /* Return mesh send result (ignore UDP forward result) */
+    return mesh_result;
 }

@@ -1,0 +1,21 @@
+{
+  "name": "lyktparad-server",
+  "version": "1.0.0",
+  "description": "Optional external web server for lyktparad mesh network control interface",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "lyktparad",
+    "mesh",
+    "webserver"
+  ],
+  "author": "the_louie",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "bonjour": "^3.5.0"
+  }
+}

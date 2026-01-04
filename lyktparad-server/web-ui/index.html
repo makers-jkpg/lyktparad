@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lyktparad Mesh Control</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lyktparad Mesh Control</h1>
+            <div id="connection-status-indicator" class="connection-status">
+                <span class="connection-status-icon" id="connection-status-icon">●</span>
+                <span class="connection-status-text" id="connection-status-text">Checking connection...</span>
+                <span class="connection-status-details" id="connection-status-details"></span>
+            </div>
+        </header>
+
+        <main>
+            <!-- Mesh Control Section -->
+            <section id="mesh-control-section" class="section">
+                <h2>Mesh Control</h2>
+                <div class="node-count">
+                    <div class="node-count-label">Node Count</div>
+                    <div class="node-count-value" id="nodeCount">0</div>
+                </div>
+                <div class="row-count-control">
+                    <label for="rowCountSelect">Rows:</label>
+                    <select id="rowCountSelect">
+                        <option value="1">1 row</option>
+                        <option value="2">2 rows</option>
+                        <option value="3">3 rows</option>
+                        <option value="4" selected>4 rows</option>
+                        <option value="5">5 rows</option>
+                        <option value="6">6 rows</option>
+                        <option value="7">7 rows</option>
+                        <option value="8">8 rows</option>
+                        <option value="9">9 rows</option>
+                        <option value="10">10 rows</option>
+                        <option value="11">11 rows</option>
+                        <option value="12">12 rows</option>
+                        <option value="13">13 rows</option>
+                        <option value="14">14 rows</option>
+                        <option value="15">15 rows</option>
+                        <option value="16">16 rows</option>
+                    </select>
+                </div>
+                <div class="grid-section">
+                    <div class="grid-container" id="gridContainer">
+                        <div class="grid-label grid-label-z" data-action="all">Z</div>
+                        <div class="grid-label grid-label-col" data-col="0">0</div>
+                        <div class="grid-label grid-label-col" data-col="1">1</div>
+                        <div class="grid-label grid-label-col" data-col="2">2</div>
+                        <div class="grid-label grid-label-col" data-col="3">3</div>
+                        <div class="grid-label grid-label-col" data-col="4">4</div>
+                        <div class="grid-label grid-label-col" data-col="5">5</div>
+                        <div class="grid-label grid-label-col" data-col="6">6</div>
+                        <div class="grid-label grid-label-col" data-col="7">7</div>
+                        <div class="grid-label grid-label-col" data-col="8">8</div>
+                        <div class="grid-label grid-label-col" data-col="9">9</div>
+                        <div class="grid-label grid-label-col" data-col="10">A</div>
+                        <div class="grid-label grid-label-col" data-col="11">B</div>
+                        <div class="grid-label grid-label-col" data-col="12">C</div>
+                        <div class="grid-label grid-label-col" data-col="13">D</div>
+                        <div class="grid-label grid-label-col" data-col="14">E</div>
+                        <div class="grid-label grid-label-col" data-col="15">F</div>
+                        <div class="grid-label grid-label-row" data-row="0">0</div>
+                        <div class="grid-square" data-row="0" data-col="0"></div>
+                        <div class="grid-square" data-row="0" data-col="1"></div>
+                        <div class="grid-square" data-row="0" data-col="2"></div>
+                        <div class="grid-square" data-row="0" data-col="3"></div>
+                        <div class="grid-square" data-row="0" data-col="4"></div>
+                        <div class="grid-square" data-row="0" data-col="5"></div>
+                        <div class="grid-square" data-row="0" data-col="6"></div>
+                        <div class="grid-square" data-row="0" data-col="7"></div>
+                        <div class="grid-square" data-row="0" data-col="8"></div>
+                        <div class="grid-square" data-row="0" data-col="9"></div>
+                        <div class="grid-square" data-row="0" data-col="10"></div>
+                        <div class="grid-square" data-row="0" data-col="11"></div>
+                        <div class="grid-square" data-row="0" data-col="12"></div>
+                        <div class="grid-square" data-row="0" data-col="13"></div>
+                        <div class="grid-square" data-row="0" data-col="14"></div>
+                        <div class="grid-square" data-row="0" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="1">1</div>
+                        <div class="grid-square" data-row="1" data-col="0"></div>
+                        <div class="grid-square" data-row="1" data-col="1"></div>
+                        <div class="grid-square" data-row="1" data-col="2"></div>
+                        <div class="grid-square" data-row="1" data-col="3"></div>
+                        <div class="grid-square" data-row="1" data-col="4"></div>
+                        <div class="grid-square" data-row="1" data-col="5"></div>
+                        <div class="grid-square" data-row="1" data-col="6"></div>
+                        <div class="grid-square" data-row="1" data-col="7"></div>
+                        <div class="grid-square" data-row="1" data-col="8"></div>
+                        <div class="grid-square" data-row="1" data-col="9"></div>
+                        <div class="grid-square" data-row="1" data-col="10"></div>
+                        <div class="grid-square" data-row="1" data-col="11"></div>
+                        <div class="grid-square" data-row="1" data-col="12"></div>
+                        <div class="grid-square" data-row="1" data-col="13"></div>
+                        <div class="grid-square" data-row="1" data-col="14"></div>
+                        <div class="grid-square" data-row="1" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="2">2</div>
+                        <div class="grid-square" data-row="2" data-col="0"></div>
+                        <div class="grid-square" data-row="2" data-col="1"></div>
+                        <div class="grid-square" data-row="2" data-col="2"></div>
+                        <div class="grid-square" data-row="2" data-col="3"></div>
+                        <div class="grid-square" data-row="2" data-col="4"></div>
+                        <div class="grid-square" data-row="2" data-col="5"></div>
+                        <div class="grid-square" data-row="2" data-col="6"></div>
+                        <div class="grid-square" data-row="2" data-col="7"></div>
+                        <div class="grid-square" data-row="2" data-col="8"></div>
+                        <div class="grid-square" data-row="2" data-col="9"></div>
+                        <div class="grid-square" data-row="2" data-col="10"></div>
+                        <div class="grid-square" data-row="2" data-col="11"></div>
+                        <div class="grid-square" data-row="2" data-col="12"></div>
+                        <div class="grid-square" data-row="2" data-col="13"></div>
+                        <div class="grid-square" data-row="2" data-col="14"></div>
+                        <div class="grid-square" data-row="2" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="3">3</div>
+                        <div class="grid-square" data-row="3" data-col="0"></div>
+                        <div class="grid-square" data-row="3" data-col="1"></div>
+                        <div class="grid-square" data-row="3" data-col="2"></div>
+                        <div class="grid-square" data-row="3" data-col="3"></div>
+                        <div class="grid-square" data-row="3" data-col="4"></div>
+                        <div class="grid-square" data-row="3" data-col="5"></div>
+                        <div class="grid-square" data-row="3" data-col="6"></div>
+                        <div class="grid-square" data-row="3" data-col="7"></div>
+                        <div class="grid-square" data-row="3" data-col="8"></div>
+                        <div class="grid-square" data-row="3" data-col="9"></div>
+                        <div class="grid-square" data-row="3" data-col="10"></div>
+                        <div class="grid-square" data-row="3" data-col="11"></div>
+                        <div class="grid-square" data-row="3" data-col="12"></div>
+                        <div class="grid-square" data-row="3" data-col="13"></div>
+                        <div class="grid-square" data-row="3" data-col="14"></div>
+                        <div class="grid-square" data-row="3" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="4">4</div>
+                        <div class="grid-square" data-row="4" data-col="0"></div>
+                        <div class="grid-square" data-row="4" data-col="1"></div>
+                        <div class="grid-square" data-row="4" data-col="2"></div>
+                        <div class="grid-square" data-row="4" data-col="3"></div>
+                        <div class="grid-square" data-row="4" data-col="4"></div>
+                        <div class="grid-square" data-row="4" data-col="5"></div>
+                        <div class="grid-square" data-row="4" data-col="6"></div>
+                        <div class="grid-square" data-row="4" data-col="7"></div>
+                        <div class="grid-square" data-row="4" data-col="8"></div>
+                        <div class="grid-square" data-row="4" data-col="9"></div>
+                        <div class="grid-square" data-row="4" data-col="10"></div>
+                        <div class="grid-square" data-row="4" data-col="11"></div>
+                        <div class="grid-square" data-row="4" data-col="12"></div>
+                        <div class="grid-square" data-row="4" data-col="13"></div>
+                        <div class="grid-square" data-row="4" data-col="14"></div>
+                        <div class="grid-square" data-row="4" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="5">5</div>
+                        <div class="grid-square" data-row="5" data-col="0"></div>
+                        <div class="grid-square" data-row="5" data-col="1"></div>
+                        <div class="grid-square" data-row="5" data-col="2"></div>
+                        <div class="grid-square" data-row="5" data-col="3"></div>
+                        <div class="grid-square" data-row="5" data-col="4"></div>
+                        <div class="grid-square" data-row="5" data-col="5"></div>
+                        <div class="grid-square" data-row="5" data-col="6"></div>
+                        <div class="grid-square" data-row="5" data-col="7"></div>
+                        <div class="grid-square" data-row="5" data-col="8"></div>
+                        <div class="grid-square" data-row="5" data-col="9"></div>
+                        <div class="grid-square" data-row="5" data-col="10"></div>
+                        <div class="grid-square" data-row="5" data-col="11"></div>
+                        <div class="grid-square" data-row="5" data-col="12"></div>
+                        <div class="grid-square" data-row="5" data-col="13"></div>
+                        <div class="grid-square" data-row="5" data-col="14"></div>
+                        <div class="grid-square" data-row="5" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="6">6</div>
+                        <div class="grid-square" data-row="6" data-col="0"></div>
+                        <div class="grid-square" data-row="6" data-col="1"></div>
+                        <div class="grid-square" data-row="6" data-col="2"></div>
+                        <div class="grid-square" data-row="6" data-col="3"></div>
+                        <div class="grid-square" data-row="6" data-col="4"></div>
+                        <div class="grid-square" data-row="6" data-col="5"></div>
+                        <div class="grid-square" data-row="6" data-col="6"></div>
+                        <div class="grid-square" data-row="6" data-col="7"></div>
+                        <div class="grid-square" data-row="6" data-col="8"></div>
+                        <div class="grid-square" data-row="6" data-col="9"></div>
+                        <div class="grid-square" data-row="6" data-col="10"></div>
+                        <div class="grid-square" data-row="6" data-col="11"></div>
+                        <div class="grid-square" data-row="6" data-col="12"></div>
+                        <div class="grid-square" data-row="6" data-col="13"></div>
+                        <div class="grid-square" data-row="6" data-col="14"></div>
+                        <div class="grid-square" data-row="6" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="7">7</div>
+                        <div class="grid-square" data-row="7" data-col="0"></div>
+                        <div class="grid-square" data-row="7" data-col="1"></div>
+                        <div class="grid-square" data-row="7" data-col="2"></div>
+                        <div class="grid-square" data-row="7" data-col="3"></div>
+                        <div class="grid-square" data-row="7" data-col="4"></div>
+                        <div class="grid-square" data-row="7" data-col="5"></div>
+                        <div class="grid-square" data-row="7" data-col="6"></div>
+                        <div class="grid-square" data-row="7" data-col="7"></div>
+                        <div class="grid-square" data-row="7" data-col="8"></div>
+                        <div class="grid-square" data-row="7" data-col="9"></div>
+                        <div class="grid-square" data-row="7" data-col="10"></div>
+                        <div class="grid-square" data-row="7" data-col="11"></div>
+                        <div class="grid-square" data-row="7" data-col="12"></div>
+                        <div class="grid-square" data-row="7" data-col="13"></div>
+                        <div class="grid-square" data-row="7" data-col="14"></div>
+                        <div class="grid-square" data-row="7" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="8">8</div>
+                        <div class="grid-square" data-row="8" data-col="0"></div>
+                        <div class="grid-square" data-row="8" data-col="1"></div>
+                        <div class="grid-square" data-row="8" data-col="2"></div>
+                        <div class="grid-square" data-row="8" data-col="3"></div>
+                        <div class="grid-square" data-row="8" data-col="4"></div>
+                        <div class="grid-square" data-row="8" data-col="5"></div>
+                        <div class="grid-square" data-row="8" data-col="6"></div>
+                        <div class="grid-square" data-row="8" data-col="7"></div>
+                        <div class="grid-square" data-row="8" data-col="8"></div>
+                        <div class="grid-square" data-row="8" data-col="9"></div>
+                        <div class="grid-square" data-row="8" data-col="10"></div>
+                        <div class="grid-square" data-row="8" data-col="11"></div>
+                        <div class="grid-square" data-row="8" data-col="12"></div>
+                        <div class="grid-square" data-row="8" data-col="13"></div>
+                        <div class="grid-square" data-row="8" data-col="14"></div>
+                        <div class="grid-square" data-row="8" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="9">9</div>
+                        <div class="grid-square" data-row="9" data-col="0"></div>
+                        <div class="grid-square" data-row="9" data-col="1"></div>
+                        <div class="grid-square" data-row="9" data-col="2"></div>
+                        <div class="grid-square" data-row="9" data-col="3"></div>
+                        <div class="grid-square" data-row="9" data-col="4"></div>
+                        <div class="grid-square" data-row="9" data-col="5"></div>
+                        <div class="grid-square" data-row="9" data-col="6"></div>
+                        <div class="grid-square" data-row="9" data-col="7"></div>
+                        <div class="grid-square" data-row="9" data-col="8"></div>
+                        <div class="grid-square" data-row="9" data-col="9"></div>
+                        <div class="grid-square" data-row="9" data-col="10"></div>
+                        <div class="grid-square" data-row="9" data-col="11"></div>
+                        <div class="grid-square" data-row="9" data-col="12"></div>
+                        <div class="grid-square" data-row="9" data-col="13"></div>
+                        <div class="grid-square" data-row="9" data-col="14"></div>
+                        <div class="grid-square" data-row="9" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="10">A</div>
+                        <div class="grid-square" data-row="10" data-col="0"></div>
+                        <div class="grid-square" data-row="10" data-col="1"></div>
+                        <div class="grid-square" data-row="10" data-col="2"></div>
+                        <div class="grid-square" data-row="10" data-col="3"></div>
+                        <div class="grid-square" data-row="10" data-col="4"></div>
+                        <div class="grid-square" data-row="10" data-col="5"></div>
+                        <div class="grid-square" data-row="10" data-col="6"></div>
+                        <div class="grid-square" data-row="10" data-col="7"></div>
+                        <div class="grid-square" data-row="10" data-col="8"></div>
+                        <div class="grid-square" data-row="10" data-col="9"></div>
+                        <div class="grid-square" data-row="10" data-col="10"></div>
+                        <div class="grid-square" data-row="10" data-col="11"></div>
+                        <div class="grid-square" data-row="10" data-col="12"></div>
+                        <div class="grid-square" data-row="10" data-col="13"></div>
+                        <div class="grid-square" data-row="10" data-col="14"></div>
+                        <div class="grid-square" data-row="10" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="11">B</div>
+                        <div class="grid-square" data-row="11" data-col="0"></div>
+                        <div class="grid-square" data-row="11" data-col="1"></div>
+                        <div class="grid-square" data-row="11" data-col="2"></div>
+                        <div class="grid-square" data-row="11" data-col="3"></div>
+                        <div class="grid-square" data-row="11" data-col="4"></div>
+                        <div class="grid-square" data-row="11" data-col="5"></div>
+                        <div class="grid-square" data-row="11" data-col="6"></div>
+                        <div class="grid-square" data-row="11" data-col="7"></div>
+                        <div class="grid-square" data-row="11" data-col="8"></div>
+                        <div class="grid-square" data-row="11" data-col="9"></div>
+                        <div class="grid-square" data-row="11" data-col="10"></div>
+                        <div class="grid-square" data-row="11" data-col="11"></div>
+                        <div class="grid-square" data-row="11" data-col="12"></div>
+                        <div class="grid-square" data-row="11" data-col="13"></div>
+                        <div class="grid-square" data-row="11" data-col="14"></div>
+                        <div class="grid-square" data-row="11" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="12">C</div>
+                        <div class="grid-square" data-row="12" data-col="0"></div>
+                        <div class="grid-square" data-row="12" data-col="1"></div>
+                        <div class="grid-square" data-row="12" data-col="2"></div>
+                        <div class="grid-square" data-row="12" data-col="3"></div>
+                        <div class="grid-square" data-row="12" data-col="4"></div>
+                        <div class="grid-square" data-row="12" data-col="5"></div>
+                        <div class="grid-square" data-row="12" data-col="6"></div>
+                        <div class="grid-square" data-row="12" data-col="7"></div>
+                        <div class="grid-square" data-row="12" data-col="8"></div>
+                        <div class="grid-square" data-row="12" data-col="9"></div>
+                        <div class="grid-square" data-row="12" data-col="10"></div>
+                        <div class="grid-square" data-row="12" data-col="11"></div>
+                        <div class="grid-square" data-row="12" data-col="12"></div>
+                        <div class="grid-square" data-row="12" data-col="13"></div>
+                        <div class="grid-square" data-row="12" data-col="14"></div>
+                        <div class="grid-square" data-row="12" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="13">D</div>
+                        <div class="grid-square" data-row="13" data-col="0"></div>
+                        <div class="grid-square" data-row="13" data-col="1"></div>
+                        <div class="grid-square" data-row="13" data-col="2"></div>
+                        <div class="grid-square" data-row="13" data-col="3"></div>
+                        <div class="grid-square" data-row="13" data-col="4"></div>
+                        <div class="grid-square" data-row="13" data-col="5"></div>
+                        <div class="grid-square" data-row="13" data-col="6"></div>
+                        <div class="grid-square" data-row="13" data-col="7"></div>
+                        <div class="grid-square" data-row="13" data-col="8"></div>
+                        <div class="grid-square" data-row="13" data-col="9"></div>
+                        <div class="grid-square" data-row="13" data-col="10"></div>
+                        <div class="grid-square" data-row="13" data-col="11"></div>
+                        <div class="grid-square" data-row="13" data-col="12"></div>
+                        <div class="grid-square" data-row="13" data-col="13"></div>
+                        <div class="grid-square" data-row="13" data-col="14"></div>
+                        <div class="grid-square" data-row="13" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="14">E</div>
+                        <div class="grid-square" data-row="14" data-col="0"></div>
+                        <div class="grid-square" data-row="14" data-col="1"></div>
+                        <div class="grid-square" data-row="14" data-col="2"></div>
+                        <div class="grid-square" data-row="14" data-col="3"></div>
+                        <div class="grid-square" data-row="14" data-col="4"></div>
+                        <div class="grid-square" data-row="14" data-col="5"></div>
+                        <div class="grid-square" data-row="14" data-col="6"></div>
+                        <div class="grid-square" data-row="14" data-col="7"></div>
+                        <div class="grid-square" data-row="14" data-col="8"></div>
+                        <div class="grid-square" data-row="14" data-col="9"></div>
+                        <div class="grid-square" data-row="14" data-col="10"></div>
+                        <div class="grid-square" data-row="14" data-col="11"></div>
+                        <div class="grid-square" data-row="14" data-col="12"></div>
+                        <div class="grid-square" data-row="14" data-col="13"></div>
+                        <div class="grid-square" data-row="14" data-col="14"></div>
+                        <div class="grid-square" data-row="14" data-col="15"></div>
+                        <div class="grid-label grid-label-row" data-row="15">F</div>
+                        <div class="grid-square" data-row="15" data-col="0"></div>
+                        <div class="grid-square" data-row="15" data-col="1"></div>
+                        <div class="grid-square" data-row="15" data-col="2"></div>
+                        <div class="grid-square" data-row="15" data-col="3"></div>
+                        <div class="grid-square" data-row="15" data-col="4"></div>
+                        <div class="grid-square" data-row="15" data-col="5"></div>
+                        <div class="grid-square" data-row="15" data-col="6"></div>
+                        <div class="grid-square" data-row="15" data-col="7"></div>
+                        <div class="grid-square" data-row="15" data-col="8"></div>
+                        <div class="grid-square" data-row="15" data-col="9"></div>
+                        <div class="grid-square" data-row="15" data-col="10"></div>
+                        <div class="grid-square" data-row="15" data-col="11"></div>
+                        <div class="grid-square" data-row="15" data-col="12"></div>
+                        <div class="grid-square" data-row="15" data-col="13"></div>
+                        <div class="grid-square" data-row="15" data-col="14"></div>
+                        <div class="grid-square" data-row="15" data-col="15"></div>
+                    </div>
+                    <div class="rhythm-control">
+                        <div class="rhythm-label">Tempo (ms)</div>
+                        <div class="rhythm-input-container">
+                            <button id="tempoDecrease" aria-label="Decrease tempo">-</button>
+                            <div id="rhythmDisplay">250ms</div>
+                            <button id="tempoIncrease" aria-label="Increase tempo">+</button>
+                        </div>
+                    </div>
+                    <div class="sync-button-container">
+                        <button id="syncButton">Sync</button>
+                        <div id="syncFeedback"></div>
+                    </div>
+                    <div class="sequence-control-container">
+                        <button id="startButton">Start</button>
+                        <button id="stopButton">Stop</button>
+                        <button id="resetButton">Reset</button>
+                    </div>
+                    <div id="sequenceControlFeedback"></div>
+                    <div class="export-import-container">
+                        <button id="exportButton">Export Sequence</button>
+                        <button id="importButton">Import Sequence</button>
+                    </div>
+                    <div id="exportContainer" style="display: none;">
+                        <textarea id="exportTextarea" readonly rows="5" cols="80"></textarea>
+                        <div class="export-import-actions">
+                            <button id="copyExportButton">Copy</button>
+                        </div>
+                        <div id="exportFeedback"></div>
+                    </div>
+                    <div id="importContainer" style="display: none;">
+                        <textarea id="importTextarea" rows="8" cols="80" placeholder="Paste CSV data here (format: index;RED;GREEN;BLUE)..."></textarea>
+                        <div class="export-import-actions">
+                            <button id="confirmImportButton">Import</button>
+                            <button id="cancelImportButton">Cancel</button>
+                        </div>
+                        <div id="importFeedback"></div>
+                    </div>
+                    <input type="color" id="colorPicker">
+                </div>
+            </section>
+
+            <!-- Firmware Update Section -->
+            <section id="firmware-update-section" class="section">
+                <h2>Firmware Update</h2>
+
+                <div class="ota-info">
+                    <div class="ota-version-display">
+                        <label for="ota-current-version">Current Firmware Version:</label>
+                        <span id="ota-current-version" class="version-value">Loading...</span>
+                    </div>
+                    <div id="ota-stage-indicator" class="stage-indicator" style="display: none;">
+                        <span class="stage-label">Status:</span>
+                        <span id="ota-stage-text" class="stage-text">Idle</span>
+                    </div>
+                </div>
+
+                <div class="ota-form">
+                    <div class="form-group">
+                        <label for="ota-firmware-url">Firmware URL:</label>
+                        <input type="url" id="ota-firmware-url" class="url-input"
+                               placeholder="https://example.com/firmware.bin"
+                               aria-label="Firmware URL">
+                        <span id="ota-url-validation" class="validation-message" aria-live="polite"></span>
+                    </div>
+
+                    <div class="ota-actions">
+                        <button id="ota-check-button" class="btn btn-secondary" aria-label="Check for updates">
+                            Check for Updates
+                        </button>
+                        <button id="ota-start-button" class="btn btn-primary" aria-label="Start firmware update">
+                            Start Update
+                        </button>
+                        <button id="ota-cancel-button" class="btn btn-danger" aria-label="Cancel update" style="display: none;">
+                            Cancel Update
+                        </button>
+                    </div>
+                </div>
+
+                <div class="ota-progress">
+                    <div id="ota-download-section" class="progress-section" style="display: none;">
+                        <label>Download Progress:</label>
+                        <div class="progress-bar-container">
+                            <div id="ota-download-progress" class="progress-bar" role="progressbar"
+                                 aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Download progress">
+                                <div class="progress-fill"></div>
+                            </div>
+                            <span id="ota-download-percentage" class="progress-text">0%</span>
+                        </div>
+                        <div id="ota-download-status" class="progress-status"></div>
+                    </div>
+
+                    <div id="ota-distribution-section" class="progress-section" style="display: none;">
+                        <label>Distribution Progress:</label>
+                        <div class="progress-bar-container">
+                            <div id="ota-distribution-progress" class="progress-bar" role="progressbar"
+                                 aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Distribution progress">
+                                <div class="progress-fill"></div>
+                            </div>
+                            <span id="ota-distribution-percentage" class="progress-text">0%</span>
+                        </div>
+                        <div id="ota-distribution-status" class="progress-status"></div>
+                        <div id="ota-distribution-nodes" class="nodes-info"></div>
+                    </div>
+                </div>
+
+                <div id="ota-status-messages" class="status-messages" aria-live="polite" aria-atomic="true"></div>
+
+                <div id="ota-node-list" class="node-list" style="display: none;">
+                    <h3>Node Update Status</h3>
+                    <div id="ota-node-list-content" class="node-list-content"></div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="js/app.js"></script>
+    <script src="js/ota-api.js"></script>
+    <script src="js/ota-ui.js"></script>
+</body>
+</html>

@@ -106,4 +106,20 @@
 #define RGB_GPIO_B               2
 #endif /* RGB_ENABLE */
 
+/*******************************************************
+ *                Root Status LED Configuration
+ *******************************************************/
+
+/* Root Status LED GPIO Pin - The GPIO pin connected to the root status LED
+ * This is a single-color LED (non-RGB) that indicates root node status:
+ * - ON when the node is the root node
+ * - OFF when the node is a non-root node
+ * Default: GPIO 3
+ * Valid range: Most GPIO pins (check ESP32 datasheet for restrictions)
+ * Change this if your root status LED is connected to a different pin
+ * Note: Some GPIOs may have restrictions (e.g., GPIO 6-11 are typically flash/PSRAM)
+ * Note: This LED is separate from the RGB LEDs used for mesh communication
+ */
+#define ROOT_STATUS_LED_GPIO      3
+
 #endif /* __MESH_DEVICE_CONFIG_H__ */

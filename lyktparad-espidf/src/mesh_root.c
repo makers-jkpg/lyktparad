@@ -28,8 +28,14 @@
 #include "light_common_cathode.h"
 #include "config/mesh_config.h"
 #include "mesh_ota.h"
+#include "mesh_udp_bridge.h"
+#include "root_status_led.h"
+#include "node_sequence.h"
+#include "mesh_udp_bridge.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "lwip/inet.h"
+#include "lwip/ip4_addr.h"
 
 #ifndef CONFIG_MESH_ROUTE_TABLE_SIZE
 #define CONFIG_MESH_ROUTE_TABLE_SIZE 50
@@ -143,7 +149,7 @@ static void heartbeat_timer_cb(void *arg)
     // #endregion
 
     for (i = 0; i < route_table_size; i++) {
-        err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+        err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
         if (err) {
             ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
         }
@@ -165,31 +171,32 @@ static void heartbeat_timer_cb(void *arg)
     }
     // #endregion
 
-    /* Root node LED behavior:
-     * - Base color indicates router connection: ORANGE (not connected) or GREEN (connected)
-     * - When router is connected AND mesh nodes are present: blink WHITE for 100ms on heartbeat
-     * - Base color (GREEN) is maintained to always show router connection status
+    /* Unified LED behavior for all nodes (root and child):
+     * - Even heartbeat: LED OFF
+     * - Odd heartbeat: LED ON (BLUE default or custom RGB)
+     * - Skip LED changes if sequence mode is active (sequence controls LED)
      */
-    bool router_connected = mesh_common_is_router_connected();
-
-    if (!router_connected) {
-        /* Router not connected: maintain ORANGE base */
-        mesh_light_set_colour(MESH_LIGHT_ORANGE);
-        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - LED ORANGE (router not connected)", (unsigned long)cnt);
-    } else if (child_node_count == 0) {
-        /* Router connected, no mesh nodes: steady GREEN */
-        mesh_light_set_colour(MESH_LIGHT_GREEN);
-        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - LED GREEN (router connected, no mesh nodes)", (unsigned long)cnt);
+    if (mode_sequence_root_is_active()) {
+        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - skipping LED change (sequence active)", (unsigned long)cnt);
+    } else if (!(cnt % 2)) {
+        /* even heartbeat: turn off light */
+        mesh_light_set_colour(0);
+        set_rgb_led(0, 0, 0);
+        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu (even) - LED OFF", (unsigned long)cnt);
     } else {
-        /* Router connected with mesh nodes: GREEN base with WHITE blink on heartbeat */
-        /* Ensure GREEN base is set first */
-        mesh_light_set_colour(MESH_LIGHT_GREEN);
-        /* Blink white for 100ms to indicate heartbeat activity */
-        mesh_light_set_colour(MESH_LIGHT_WHITE);
-        vTaskDelay(pdMS_TO_TICKS(100)); /* 100ms delay */
-        /* Return to GREEN base to maintain router connection indication */
-        mesh_light_set_colour(MESH_LIGHT_GREEN);
-        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - LED GREEN with WHITE blink (router connected, %d mesh nodes)", (unsigned long)cnt, child_node_count);
+        /* odd heartbeat: turn on light using last RGB color or default to MESH_LIGHT_BLUE */
+        if (root_rgb_has_been_set) {
+            /* Use the color from the latest MESH_CMD_SET_RGB command */
+            mesh_light_set_rgb(root_rgb_r, root_rgb_g, root_rgb_b);
+            set_rgb_led(root_rgb_r, root_rgb_g, root_rgb_b);
+            ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu (odd) - LED RGB(%d,%d,%d)",
+                     (unsigned long)cnt, root_rgb_r, root_rgb_g, root_rgb_b);
+        } else {
+            /* Default to MESH_LIGHT_BLUE if no RGB command has been received */
+            mesh_light_set_colour(MESH_LIGHT_BLUE);
+            set_rgb_led(0, 0, 155);  /* Match MESH_LIGHT_BLUE RGB values */
+            ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu (odd) - LED BLUE (default)", (unsigned long)cnt);
+        }
     }
 }
 
@@ -338,7 +345,7 @@ esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
         return ESP_OK;
     }
     for (i = 0; i < route_table_size; i++) {
-        err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+        err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
         if (err) {
             ESP_LOGD(MESH_TAG, "RGB send err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
         }
@@ -376,6 +383,42 @@ int mesh_get_node_count(void)
     int total_size = esp_mesh_get_routing_table_size();
     /* Subtract 1 to exclude root node from count - routing table size includes root node */
     return (total_size > 0) ? (total_size - 1) : 0;
+}
+
+/**
+ * @brief Handle RGB command received via mesh network (for unified behavior)
+ *
+ * This function allows the root node to receive RGB commands via the mesh network,
+ * enabling unified behavior where the root node can respond to color commands
+ * just like child nodes.
+ *
+ * @param r Red component (0-255)
+ * @param g Green component (0-255)
+ * @param b Blue component (0-255)
+ */
+void mesh_root_handle_rgb_command(uint8_t r, uint8_t g, uint8_t b)
+{
+    if (!esp_mesh_is_root()) {
+        return;
+    }
+
+    /* Store RGB values for use in heartbeat handler */
+    root_rgb_r = r;
+    root_rgb_g = g;
+    root_rgb_b = b;
+    root_rgb_has_been_set = true;
+
+    /* Update root node's LED immediately */
+    esp_err_t err = mesh_light_set_rgb(r, g, b);
+    if (err != ESP_OK) {
+        ESP_LOGE(mesh_common_get_tag(), "[RGB] failed to set root node LED: 0x%x", err);
+    }
+    set_rgb_led(r, g, b);
+
+    /* Stop sequence playback if active */
+    mode_sequence_root_stop();
+
+    ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] RGB command received via mesh: R:%d G:%d B:%d", r, g, b);
 }
 
 /*******************************************************
@@ -502,6 +545,121 @@ static void mesh_root_event_callback(void *arg, esp_event_base_t event_base,
  *                Root IP Event Handler Callback
  *******************************************************/
 
+/**
+ * @brief Discovery task function for non-blocking mDNS discovery.
+ *
+ * This task performs mDNS discovery after the web server has started.
+ * mDNS is the primary discovery method and is required at build time.
+ * UDP broadcast listener runs in background as a runtime fallback.
+ * Discovery does not affect web server operation (embedded server always works).
+ */
+static void discovery_task(void *pvParameters)
+{
+    char server_ip[16] = {0};
+    uint16_t server_port = 0;
+
+    /* First, try to use cached IP if available (optimization) */
+    if (mesh_udp_bridge_use_cached_ip()) {
+        ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Using cached server IP (skipping mDNS)");
+        /* Register with external server after discovery (non-blocking - already in task) */
+        if (mesh_udp_bridge_is_server_discovered() && esp_mesh_is_root()) {
+            esp_err_t reg_err = mesh_udp_bridge_register();
+            if (reg_err != ESP_OK && reg_err != ESP_ERR_NOT_FOUND) {
+                ESP_LOGW(mesh_common_get_tag(), "[REGISTRATION] Registration failed: %s", esp_err_to_name(reg_err));
+            }
+        }
+        vTaskDelete(NULL);
+        return;
+    }
+
+    /* Initialize mDNS if not already initialized */
+    esp_err_t err = mesh_udp_bridge_mdns_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] mDNS initialization failed, trying cached address");
+        /* Try to use cached address */
+        err = mesh_udp_bridge_get_cached_server(server_ip, &server_port);
+        if (err == ESP_OK) {
+            ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Using cached server address: %s:%d", server_ip, server_port);
+            /* Convert IP string to network byte order for registration */
+            struct in_addr addr;
+            if (inet_aton(server_ip, &addr) != 0) {
+                uint8_t ip_bytes[4];
+                memcpy(ip_bytes, &addr.s_addr, 4);
+                mesh_udp_bridge_set_registration(true, ip_bytes, server_port);
+                /* Register with external server after discovery (non-blocking - already in task) */
+                if (esp_mesh_is_root()) {
+                    esp_err_t reg_err = mesh_udp_bridge_register();
+                    if (reg_err != ESP_OK && reg_err != ESP_ERR_NOT_FOUND) {
+                        ESP_LOGW(mesh_common_get_tag(), "[REGISTRATION] Registration failed: %s", esp_err_to_name(reg_err));
+                    }
+                }
+            }
+        }
+        vTaskDelete(NULL);
+        return;
+    }
+
+    /* Perform discovery with 20 second timeout */
+    err = mesh_udp_bridge_discover_server(20000, server_ip, &server_port);
+    if (err == ESP_OK) {
+        /* Discovery succeeded - cache the address */
+        ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] External web server discovered: %s:%d", server_ip, server_port);
+        mesh_udp_bridge_cache_server(server_ip, server_port);
+
+        /* Stop retry task if it's running (discovery succeeded) */
+        mesh_udp_bridge_stop_retry_task();
+
+        /* Convert IP string to network byte order for registration */
+        struct in_addr addr;
+        if (inet_aton(server_ip, &addr) != 0) {
+            uint8_t ip_bytes[4];
+            memcpy(ip_bytes, &addr.s_addr, 4);
+            mesh_udp_bridge_set_registration(true, ip_bytes, server_port);
+            /* Stop UDP broadcast listener since mDNS discovery succeeded (optional optimization) */
+            mesh_udp_bridge_broadcast_listener_stop();
+            /* Register with external server after discovery (non-blocking - already in task) */
+            if (esp_mesh_is_root()) {
+                esp_err_t reg_err = mesh_udp_bridge_register();
+                if (reg_err != ESP_OK && reg_err != ESP_ERR_NOT_FOUND) {
+                    ESP_LOGW(mesh_common_get_tag(), "[REGISTRATION] Registration failed: %s", esp_err_to_name(reg_err));
+                }
+            }
+        } else {
+            ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] Failed to convert IP address: %s", server_ip);
+        }
+
+        /* Broadcast discovered IP to all child nodes (optimization) */
+        mesh_udp_bridge_broadcast_server_ip(server_ip, server_port);
+    } else {
+        /* Discovery failed - try to use cached address */
+        ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Discovery failed, trying cached address");
+        err = mesh_udp_bridge_get_cached_server(server_ip, &server_port);
+        if (err == ESP_OK) {
+            ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Using cached server address: %s:%d", server_ip, server_port);
+            /* Convert IP string to network byte order for registration */
+            struct in_addr addr;
+            if (inet_aton(server_ip, &addr) != 0) {
+                uint8_t ip_bytes[4];
+                memcpy(ip_bytes, &addr.s_addr, 4);
+                mesh_udp_bridge_set_registration(true, ip_bytes, server_port);
+                /* Register with external server after discovery (non-blocking - already in task) */
+                if (esp_mesh_is_root()) {
+                    esp_err_t reg_err = mesh_udp_bridge_register();
+                    if (reg_err != ESP_OK && reg_err != ESP_ERR_NOT_FOUND) {
+                        ESP_LOGW(mesh_common_get_tag(), "[REGISTRATION] Registration failed: %s", esp_err_to_name(reg_err));
+                    }
+                }
+            }
+        } else {
+            ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] No cached address available, starting retry task");
+            /* Start background retry task if no cached address available */
+            mesh_udp_bridge_start_retry_task();
+        }
+    }
+
+    vTaskDelete(NULL);
+}
+
 static void mesh_root_ip_callback(void *arg, esp_event_base_t event_base,
                                    int32_t event_id, void *event_data)
 {
@@ -511,6 +669,25 @@ static void mesh_root_ip_callback(void *arg, esp_event_base_t event_base,
         ESP_LOGE(mesh_common_get_tag(), "Failed to start web server: 0x%x", err);
     } else {
         ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Web server started successfully");
+
+        /* Start UDP broadcast listener (runtime fallback discovery mechanism) */
+        /* mDNS discovery is the primary method and is tried first via discovery_task. */
+        /* UDP broadcast listener runs in the background and is used as a runtime fallback */
+        /* when mDNS discovery fails (server not found), not when mDNS component is unavailable. */
+        mesh_udp_bridge_broadcast_listener_start();
+
+        /* Start UDP API command listener (for external server API proxy) */
+        mesh_udp_bridge_api_listener_start();
+
+        /* Start discovery task AFTER web server has started (non-blocking) */
+        /* mDNS discovery is the primary method and is required at build time */
+        /* Discovery does not affect embedded web server operation (embedded server always works) */
+        BaseType_t task_err = xTaskCreate(discovery_task, "discovery", 4096, NULL, 1, NULL);
+        if (task_err != pdPASS) {
+            ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] Failed to create discovery task");
+        } else {
+            ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Discovery task started");
+        }
     }
 }
 
@@ -560,7 +737,7 @@ void esp_mesh_p2p_tx_main(void *arg)
         }
 
         for (i = 0; i < route_table_size; i++) {
-            err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+            err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
             if (err) {
                 mesh_addr_t parent_addr;
                 mesh_common_get_parent_addr(&parent_addr);
