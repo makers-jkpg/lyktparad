@@ -159,7 +159,7 @@ Discovery happens BEFORE registration and is covered in detail in the [External 
 - Discovery is non-blocking and runs in background tasks
 - Embedded web server starts regardless of discovery status
 - Discovery failures do not affect mesh operation
-- First successful discovery method wins (parallel execution)
+- mDNS discovery is primary method, UDP broadcast is runtime fallback
 
 ### Phase 2: IP Broadcast to Mesh Network
 
@@ -169,7 +169,7 @@ After successful discovery, the root node broadcasts the external server IP and 
 
 **When**: Immediately after successful discovery (mDNS or UDP broadcast).
 
-**How**: Broadcast mesh command `MESH_CMD_WEBSERVER_IP_BROADCAST` (0x09) to all child nodes.
+**How**: Broadcast mesh command `MESH_CMD_WEBSERVER_IP_BROADCAST` (0xF7) to all child nodes.
 
 **Storage**: Child nodes store received IP and port in NVS namespace "udp_bridge" with keys "server_ip" and "server_port".
 
@@ -238,7 +238,7 @@ Disconnection detection runs on the server side to detect when root nodes go off
 
 IP broadcast is an optimization that allows child nodes to cache the external web server address, enabling faster root node transitions. When a child node becomes root, it can immediately use the cached address instead of waiting for discovery.
 
-**Command ID**: `MESH_CMD_WEBSERVER_IP_BROADCAST` (0x09)
+**Command ID**: `MESH_CMD_WEBSERVER_IP_BROADCAST` (0xF7)
 
 **Direction**: Root node → All child nodes
 

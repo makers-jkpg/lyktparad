@@ -21,23 +21,21 @@
 
 ### Purpose
 
-The External Web Server Discovery system enables automatic zero-configuration discovery of optional external web servers by ESP32 mesh root nodes. The system implements two discovery methods: **mDNS (multicast DNS)** as the primary discovery mechanism, and **UDP broadcast** as a fallback when mDNS is unavailable. This discovery is completely optional - ESP32 root nodes always run their embedded web server and discover external servers if available, but function perfectly without them.
+The External Web Server Discovery system enables automatic zero-configuration discovery of optional external web servers by ESP32 mesh root nodes. The system implements two discovery methods: **mDNS (multicast DNS)** as the primary discovery mechanism (required at build time), and **UDP broadcast** as a runtime fallback when mDNS discovery fails (server not found). This discovery is completely optional - ESP32 root nodes always run their embedded web server and discover external servers if available, but function perfectly without them.
 
 ### Design Decisions
 
 **Optional Infrastructure**: The external web server is completely optional. ESP32 devices must continue operating normally even if no external server is discovered or if discovery fails completely. The embedded web server (`mesh_web_server_start()`) MUST ALWAYS run regardless of discovery status.
 
-**Primary mDNS, Fallback UDP**: mDNS is the preferred discovery method because it's a standard zero-configuration networking protocol with broad platform support. UDP broadcast serves as a fallback mechanism when mDNS is unavailable or when network configurations prevent mDNS from working (e.g., firewalls blocking mDNS).
+**Primary mDNS, Fallback UDP**: mDNS is the primary discovery method and is required at build time. The mDNS component must be enabled in sdkconfig and is required as a component dependency. UDP broadcast serves as a runtime fallback mechanism when mDNS discovery fails (server not found), not when the mDNS component is unavailable. This ensures mDNS is always the primary discovery mechanism.
 
-**Parallel Discovery**: Both mDNS and UDP broadcast discovery run in parallel on the ESP32 side. The first method to succeed is used, and the other method can be stopped as an optimization (optional).
-
-**First Success Wins**: When both discovery methods are active, whichever method discovers a server first is used. This minimizes discovery time while providing redundancy.
+**Discovery Priority**: mDNS discovery is actively attempted first via the discovery task. UDP broadcast listener runs in the background and acts as a runtime fallback when mDNS discovery fails. When mDNS discovery succeeds, the UDP broadcast listener is stopped as an optimization. This ensures mDNS is the primary method while providing UDP broadcast as a fallback mechanism.
 
 **Non-Blocking**: All discovery operations are non-blocking and run in background tasks. Discovery must not delay or interfere with embedded web server startup or normal mesh operation.
 
 **Caching**: Discovered server addresses are cached in NVS (Non-Volatile Storage) to allow immediate use on subsequent boots without waiting for discovery. Cached addresses are also used as a fallback if both discovery methods fail.
 
-**Graceful Degradation**: If mDNS initialization fails, if UDP broadcast is blocked, or if discovery timeouts occur, the system continues without external server discovery. Errors are logged but do not affect embedded web server or mesh operation.
+**Graceful Degradation**: If mDNS discovery fails (server not found), the system falls back to UDP broadcast. If both discovery methods fail, the system continues without external server discovery. Errors are logged but do not affect embedded web server or mesh operation. Note that mDNS is required at build time - the build will fail if the mDNS component is unavailable.
 
 **Discovery Timing**: Discovery happens AFTER the embedded web server starts. This ensures that the root node is fully functional before attempting to discover optional external services.
 
@@ -68,7 +66,8 @@ The External Web Server Discovery system enables automatic zero-configuration di
 │  │  - Timeout: 20 seconds    │  │  - Parse JSON payload    │   │
 │  └──────────┬───────────────┘  └──────────┬───────────────┘   │
 │             │                              │                    │
-│             │ Parallel Discovery           │                    │
+│             │ mDNS Discovery (Primary)     │                    │
+│             │ UDP Broadcast (Fallback)     │                    │
 │             │ (First Success Wins)         │                    │
 │             ▼                              ▼                    │
 │  ┌──────────────────────────────────────────────────────────┐  │
@@ -302,7 +301,7 @@ The implementation verifies TXT record size and truncates if necessary (typicall
 
 ### mDNS Initialization
 
-The ESP32 root node initializes the ESP-IDF mDNS component and sets a hostname for itself. The initialization is optional - if the mDNS component is not available (not included in build), discovery gracefully degrades to UDP broadcast only.
+The ESP32 root node initializes the ESP-IDF mDNS component and sets a hostname for itself. **mDNS is required at build time and is the primary discovery method**. The mDNS component must be enabled in the sdkconfig file and is required as a component dependency. UDP broadcast is only used as a runtime fallback when mDNS discovery fails (server not found), not when the mDNS component is unavailable.
 
 **Implementation**:
 ```c
@@ -336,7 +335,7 @@ esp_err_t mesh_udp_bridge_mdns_init(void)
 }
 ```
 
-**Availability Check**: The code checks if the mDNS component is available at compile time by checking for `CONFIG_MDNS_MAX_INTERFACES` or `CONFIG_MDNS_TASK_PRIORITY` configuration options. If neither is defined, mDNS is disabled and stub implementations are provided.
+**Build-Time Requirement**: The mDNS component is required at build time. The build will fail if the mDNS component is unavailable. The code checks if mDNS is available at compile time by checking for `CONFIG_MDNS_MAX_INTERFACES` or `CONFIG_MDNS_TASK_PRIORITY` configuration options. These defines are always present when mDNS is properly configured in sdkconfig. Stub implementations exist for robustness but should never be used in normal operation.
 
 ### Service Discovery
 
@@ -513,7 +512,9 @@ If initial discovery fails and no cached address is available, a background retr
 
 The retry task continues until discovery succeeds or is explicitly stopped.
 
-## UDP Broadcast Fallback
+## UDP Broadcast Fallback (Runtime)
+
+**Note**: UDP broadcast is only used as a runtime fallback when mDNS discovery fails (server not found). mDNS is required at build time and is always the primary discovery method.
 
 ### Server-Side Implementation
 
@@ -682,11 +683,11 @@ static void handle_broadcast_packet(const uint8_t *buffer, size_t len, const str
 
 ### Parallel Execution
 
-Both mDNS discovery and UDP broadcast listener start in parallel when discovery is initiated. This maximizes the chance of quickly discovering the external server while providing redundancy.
+mDNS discovery is actively attempted first via the discovery task. UDP broadcast listener starts in the background when the root node gets an IP address and acts as a runtime fallback when mDNS discovery fails. When mDNS discovery succeeds, the UDP broadcast listener is stopped as an optimization. This ensures mDNS is the primary method while providing UDP broadcast as a fallback mechanism.
 
-### First Success Wins
+### Discovery Result Handling
 
-When either discovery method succeeds:
+When mDNS discovery succeeds:
 1. The discovered address is cached in NVS
 2. The address is stored for registration
 3. Registration with the external server is initiated

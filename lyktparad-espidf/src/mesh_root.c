@@ -549,7 +549,9 @@ static void mesh_root_event_callback(void *arg, esp_event_base_t event_base,
  * @brief Discovery task function for non-blocking mDNS discovery.
  *
  * This task performs mDNS discovery after the web server has started.
- * Discovery is completely optional and does not affect web server operation.
+ * mDNS is the primary discovery method and is required at build time.
+ * UDP broadcast listener runs in background as a runtime fallback.
+ * Discovery does not affect web server operation (embedded server always works).
  */
 static void discovery_task(void *pvParameters)
 {
@@ -668,16 +670,18 @@ static void mesh_root_ip_callback(void *arg, esp_event_base_t event_base,
     } else {
         ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Web server started successfully");
 
-        /* Start UDP broadcast listener (fallback discovery mechanism) */
-        /* This runs in parallel with mDNS discovery (if available) */
-        /* First success wins - whichever discovery succeeds first is used */
+        /* Start UDP broadcast listener (runtime fallback discovery mechanism) */
+        /* mDNS discovery is the primary method and is tried first via discovery_task. */
+        /* UDP broadcast listener runs in the background and is used as a runtime fallback */
+        /* when mDNS discovery fails (server not found), not when mDNS component is unavailable. */
         mesh_udp_bridge_broadcast_listener_start();
 
         /* Start UDP API command listener (for external server API proxy) */
         mesh_udp_bridge_api_listener_start();
 
         /* Start discovery task AFTER web server has started (non-blocking) */
-        /* Discovery is optional and does not affect web server operation */
+        /* mDNS discovery is the primary method and is required at build time */
+        /* Discovery does not affect embedded web server operation (embedded server always works) */
         BaseType_t task_err = xTaskCreate(discovery_task, "discovery", 4096, NULL, 1, NULL);
         if (task_err != pdPASS) {
             ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] Failed to create discovery task");

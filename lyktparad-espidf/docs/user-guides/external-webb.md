@@ -324,31 +324,30 @@ ESP32 root nodes use two methods to discover the external web server:
 - Network must support mDNS (most home/office networks do)
 - Server must have Bonjour/mDNS support (included with server installation)
 
-#### Method 2: UDP Broadcast (Fallback)
+#### Method 2: UDP Broadcast (Runtime Fallback)
 
-**What it is**: If mDNS is unavailable or fails, the server broadcasts its location via UDP packets on port 5353.
+**What it is**: UDP broadcast is used as a runtime fallback when mDNS discovery fails (server not found). The server broadcasts its location via UDP packets on port 5353.
 
 **How it works**:
 1. External server sends UDP broadcast packets every 30 seconds
-2. Root nodes listen for these broadcasts
+2. Root nodes listen for these broadcasts (UDP broadcast listener runs in background)
 3. When a broadcast is received, root nodes extract server information
 4. Root nodes connect to the discovered server
 
 **Advantages**:
-- Works even if mDNS is blocked or unavailable
+- Works when mDNS discovery fails (server not found)
 - Simple and reliable
 - Works across most network configurations
 
 **When used**:
-- If mDNS discovery fails or times out
-- On networks that block mDNS traffic
-- As a backup method
+- If mDNS discovery fails or times out (server not found)
+- As a runtime fallback mechanism
 
 ### Discovery Priority
 
-Root nodes try both methods in parallel:
-1. **First success wins** - Whichever method finds the server first is used
-2. **Fallback automatic** - If mDNS fails, UDP broadcast is used automatically
+Root nodes use mDNS as the primary discovery method, with UDP broadcast as a runtime fallback:
+1. **mDNS tried first** - mDNS discovery is the primary method and is attempted first via discovery task
+2. **UDP broadcast as fallback** - If mDNS discovery fails (server not found), UDP broadcast listener (running in background) will discover the server
 3. **No configuration needed** - All discovery happens automatically
 
 ### Manual Connection (IP Address)

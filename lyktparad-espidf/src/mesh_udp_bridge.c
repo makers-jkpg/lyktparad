@@ -29,12 +29,14 @@
 #include "lwip/inet.h"
 #include "lwip/netdb.h"
 #include "lwip/ip4_addr.h"
-/* mDNS is optional - try to include if available */
+/* mDNS is required at build time and is the primary discovery method.
+ * UDP broadcast is only used as a runtime fallback when mDNS discovery fails (server not found).
+ * The build will fail if mDNS component is unavailable, so these stubs should never be used in normal operation. */
 #if defined(CONFIG_MDNS_MAX_INTERFACES) || defined(CONFIG_MDNS_TASK_PRIORITY)
     #include "mdns.h"
     #define MDNS_AVAILABLE 1
 #else
-    /* mDNS component not available - provide stubs */
+    /* mDNS component not available - provide stubs (should not happen - mDNS is required) */
     #define MDNS_AVAILABLE 0
     /* Stub type definitions */
     typedef struct {
@@ -635,6 +637,7 @@ void mesh_udp_bridge_set_registration(bool registered, const uint8_t *server_ip,
  * @brief Initialize mDNS component for service discovery.
  *
  * Initializes the ESP-IDF mDNS component and sets the hostname.
+ * mDNS is required at build time and is the primary discovery method for the external web server.
  * This function is idempotent - calling it multiple times is safe.
  *
  * @return ESP_OK on success, error code on failure
@@ -663,7 +666,8 @@ esp_err_t mesh_udp_bridge_mdns_init(void)
     ESP_LOGI(TAG, "mDNS initialized successfully");
     return ESP_OK;
 #else
-    ESP_LOGW(TAG, "mDNS component not available, mDNS functionality disabled");
+    /* ERROR: mDNS component not available - this should never happen since mDNS is required at build time. */
+    ESP_LOGE(TAG, "ERROR: mDNS component not available - build configuration error (mDNS is required)");
     return ESP_ERR_NOT_SUPPORTED;
 #endif
 }
@@ -673,15 +677,17 @@ esp_err_t mesh_udp_bridge_mdns_init(void)
  *******************************************************/
 
 /**
- * @brief Discover external web server via mDNS.
+ * @brief Discover external web server via mDNS (primary discovery method).
  *
  * Queries for _lyktparad-web._tcp service and extracts server IP and UDP port.
  * The UDP port is extracted from TXT records if available, otherwise uses HTTP port.
+ * mDNS is the primary discovery method. UDP broadcast is only used as a runtime fallback
+ * when mDNS discovery fails (server not found), not when the mDNS component is unavailable.
  *
  * @param timeout_ms Query timeout in milliseconds (10000-30000)
  * @param server_ip Output buffer for server IP (must be at least 16 bytes)
  * @param server_port Output pointer for UDP port
- * @return ESP_OK on success, error code on failure
+ * @return ESP_OK on success, error code on failure (ESP_ERR_NOT_FOUND if server not found)
  */
 esp_err_t mesh_udp_bridge_discover_server(uint32_t timeout_ms, char *server_ip, uint16_t *server_port)
 {
@@ -788,7 +794,8 @@ esp_err_t mesh_udp_bridge_discover_server(uint32_t timeout_ms, char *server_ip, 
 
     return ESP_OK;
 #else
-    ESP_LOGW(TAG, "mDNS not available, discovery disabled");
+    /* ERROR: mDNS component not available - this should never happen since mDNS is required at build time. */
+    ESP_LOGE(TAG, "ERROR: mDNS component not available - build configuration error (mDNS is required)");
     return ESP_ERR_NOT_SUPPORTED;
 #endif
 }
@@ -3280,8 +3287,9 @@ static void mesh_udp_bridge_retry_task(void *pvParameters)
             delay_ms = (delay_ms * backoff_multiplier > max_delay_ms) ? max_delay_ms : delay_ms * backoff_multiplier;
         }
 #else
-        /* mDNS not available, stop retry task */
-        ESP_LOGI(TAG, "mDNS not available, stopping retry task");
+        /* ERROR: mDNS component not available - this should never happen since mDNS is required at build time. */
+        /* The build should fail if mDNS is unavailable, so this code path indicates a configuration error. */
+        ESP_LOGE(TAG, "ERROR: mDNS component not available - build configuration error (mDNS is required)");
         s_retry_task_running = false;
         s_retry_task_handle = NULL;
         vTaskDelete(NULL);
