@@ -29,7 +29,9 @@
 #include "config/mesh_config.h"
 #include "mesh_ota.h"
 #include "mesh_udp_bridge.h"
+#ifdef ROOT_STATUS_LED_GPIO
 #include "root_status_led.h"
+#endif
 #include "node_sequence.h"
 #include "mesh_udp_bridge.h"
 #include "freertos/FreeRTOS.h"

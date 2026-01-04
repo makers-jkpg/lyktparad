@@ -1,6 +1,6 @@
 # External Web Server - User Guide
 
-**Last Updated:** 2025-01-15
+**Last Updated:** 2026-01-04
 
 ## Table of Contents
 

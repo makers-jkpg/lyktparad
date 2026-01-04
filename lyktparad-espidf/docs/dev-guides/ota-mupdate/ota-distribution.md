@@ -1,6 +1,6 @@
 # Mesh Firmware Distribution Protocol Implementation
 
-**Last Updated:** 2025-01-15
+**Last Updated:** 2026-01-01
 
 ## Table of Contents
 

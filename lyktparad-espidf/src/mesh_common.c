@@ -73,7 +73,9 @@
 #include "light_common_cathode.h"
 #include "mesh_ota.h"
 #include "mesh_udp_bridge.h"
+#ifdef ROOT_STATUS_LED_GPIO
 #include "root_status_led.h"
+#endif
 #include "mesh_udp_bridge.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
@@ -322,8 +324,10 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         /* Ensure LED shows unconnected state */
         mesh_light_set_colour(MESH_LIGHT_RED);
 
+#ifdef ROOT_STATUS_LED_GPIO
         /* Update status LED based on current mesh role (mesh role is now known) */
         root_status_led_update();
+#endif
     }
     break;
     case MESH_EVENT_STOPPED: {
@@ -332,8 +336,10 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         mesh_layer = esp_mesh_get_layer();
         /* Turn LED back to unconnected state */
         mesh_light_set_colour(MESH_LIGHT_RED);
+#ifdef ROOT_STATUS_LED_GPIO
         /* Update status LED - mesh stopped, node is no longer root */
         root_status_led_update();
+#endif
     }
     break;
     case MESH_EVENT_CHILD_CONNECTED: {
@@ -356,6 +362,12 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
                      is_root_fixed_now ? 1 : 0, self_org_now ? 1 : 0);
         }
         // #endregion
+#ifdef ROOT_STATUS_LED_GPIO
+        /* Update status LED pattern when node count changes */
+        if (is_root) {
+            root_status_led_update_status();
+        }
+#endif
     }
     break;
     case MESH_EVENT_CHILD_DISCONNECTED: {
@@ -376,6 +388,12 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         if (is_root && root_event_callback) {
             root_event_callback(arg, event_base, event_id, event_data);
         }
+#ifdef ROOT_STATUS_LED_GPIO
+        /* Update status LED pattern when node count changes */
+        if (is_root) {
+            root_status_led_update_status();
+        }
+#endif
     }
     break;
     case MESH_EVENT_ROUTING_TABLE_REMOVE: {
@@ -386,6 +404,12 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         if (is_root && root_event_callback) {
             root_event_callback(arg, event_base, event_id, event_data);
         }
+#ifdef ROOT_STATUS_LED_GPIO
+        /* Update status LED pattern when node count changes */
+        if (is_root) {
+            root_status_led_update_status();
+        }
+#endif
     }
     break;
     case MESH_EVENT_NO_PARENT_FOUND: {
@@ -537,11 +561,15 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
                 mesh_udp_bridge_start_state_updates();
             }
             /* Broadcast listener will be started in mesh_root_ip_callback when IP is obtained */
-            /* Update status LED to ON */
-            root_status_led_set_root(true);
+#ifdef ROOT_STATUS_LED_GPIO
+            /* Update status LED pattern (node became root) */
+            root_status_led_update_status();
+#endif
         } else {
+#ifdef ROOT_STATUS_LED_GPIO
             /* Update status LED based on current role */
             root_status_led_update();
+#endif
         }
 
         /* Update previous root status */
@@ -594,8 +622,10 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             mesh_udp_bridge_stop_state_updates();
             mesh_udp_bridge_broadcast_listener_stop();
             mesh_udp_bridge_api_listener_stop();
+#ifdef ROOT_STATUS_LED_GPIO
             /* Update status LED to OFF */
             root_status_led_set_root(false);
+#endif
         } else if (is_root_now) {
             /* Node is root - register with external server if discovered */
             if (mesh_udp_bridge_is_server_discovered()) {
@@ -610,11 +640,15 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
                 mesh_udp_bridge_start_heartbeat();
                 mesh_udp_bridge_start_state_updates();
             }
-            /* Update status LED to ON */
-            root_status_led_set_root(true);
+#ifdef ROOT_STATUS_LED_GPIO
+            /* Update status LED pattern (node is root) */
+            root_status_led_update_status();
+#endif
         } else {
+#ifdef ROOT_STATUS_LED_GPIO
             /* Update status LED based on current role */
             root_status_led_update();
+#endif
         }
         /* Broadcast listener will be started in mesh_root_ip_callback when IP is obtained */
 
@@ -754,8 +788,10 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
             /* Root node: router connected */
             is_router_connected = true;
 
-            /* Update status LED to ON (root node got IP) */
-            root_status_led_set_root(true);
+#ifdef ROOT_STATUS_LED_GPIO
+            /* Update status LED pattern (router connected) */
+            root_status_led_update_status();
+#endif
 
             if (root_ip_callback) {
                 root_ip_callback(arg, event_base, event_id, event_data);
@@ -769,8 +805,10 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
             /* Root node: router disconnected */
             is_router_connected = false;
 
-            /* Update status LED based on current role (node may still be root even if router disconnected) */
-            root_status_led_update();
+#ifdef ROOT_STATUS_LED_GPIO
+            /* Update status LED pattern (router disconnected) */
+            root_status_led_update_status();
+#endif
         }
     }
 }
@@ -839,11 +877,13 @@ esp_err_t mesh_common_init(void)
     ESP_ERROR_CHECK(esp_mesh_set_max_layer(CONFIG_MESH_MAX_LAYER));
     ESP_ERROR_CHECK(esp_mesh_set_vote_percentage(1));
     ESP_ERROR_CHECK(esp_mesh_set_xon_qsize(128));
+#ifdef ROOT_STATUS_LED_GPIO
     /* Initialize root status LED */
     esp_err_t status_led_err = root_status_led_init();
     if (status_led_err != ESP_OK) {
         ESP_LOGW(MESH_TAG, "Failed to initialize root status LED: %s", esp_err_to_name(status_led_err));
     }
+#endif
 #ifdef CONFIG_MESH_ENABLE_PS
     /* Enable mesh PS function */
     ESP_ERROR_CHECK(esp_mesh_enable_ps());
