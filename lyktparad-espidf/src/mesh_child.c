@@ -116,7 +116,7 @@ void esp_mesh_p2p_rx_main(void *arg)
             ESP_LOGI(MESH_TAG, "[NODE ACTION] EFFECT command received from "MACSTR", effect_id:%d param1:%d param2:%d",
                      MAC2STR(from.addr), effect_params->effect_id);
             /* For simplicity, we only handle strobe effect here */
-            if (effect_id == EFFECT_STROBE) {
+            if (effect_id == EFFECT_STROBE || effect_id == EFFECT_FADE) {
                 play_effect(effect_params);
             } else {
                 ESP_LOGE(MESH_TAG, "[NODE ACTION] Unsupported effect_id:%d", effect_id);

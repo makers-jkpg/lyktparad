@@ -95,7 +95,8 @@ static void heartbeat_timer_cb(void *arg)
     }
 
     /* Send strobe effect command to all child nodes - this call will be moved to wherever it belongs in the future */
-    mesh_send_effect();
+//    mesh_send_strobe_effect();
+    mesh_send_fade_effect();
 
     mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
     int route_table_size = 0;
@@ -196,7 +197,54 @@ static void heartbeat_timer_cb(void *arg)
  *                Root-Specific Functions
  *******************************************************/
 
-esp_err_t mesh_send_effect()
+esp_err_t mesh_send_fade_effect()
+{
+    /* only root should send the heartbeat */
+    if (!esp_mesh_is_root()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+    int route_table_size = 0;
+    int i;
+
+    esp_err_t err;
+    mesh_data_t data;
+    uint8_t *tx_buf = mesh_common_get_tx_buf();
+
+    struct effect_params_fade_t *fade_params = (struct effect_params_fade_t *)tx_buf;
+    fade_params->base.command = MESH_CMD_EFFECT;
+    fade_params->base.effect_id = EFFECT_FADE;
+    fade_params->base.start_delay_ms = 0;  /* will be set per-node below */
+    fade_params->r_on = 0;
+    fade_params->g_on = 0;
+    fade_params->b_on = 0;
+    fade_params->r_off = 255;
+    fade_params->g_off = 0;
+    fade_params->b_off = 0;
+    fade_params->fade_in_ms = 100;
+    fade_params->fade_out_ms = 100;
+    fade_params->duration_ms = 100;
+    fade_params->repeat_count = 1;
+
+    data.data = tx_buf;
+    data.size = sizeof(struct effect_params_fade_t);
+    data.proto = MESH_PROTO_BIN;
+    data.tos = MESH_TOS_P2P;
+
+    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+
+    for (i = 0; i < route_table_size; i++) {
+        fade_params->base.start_delay_ms = i * 100;  /* stagger start delay by 50ms per node */
+        err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+        if (err) {
+            ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
+        }
+    }
+    ESP_LOGI(mesh_common_get_tag(), "Fade effect sent");
+    return ESP_OK;
+}
+esp_err_t mesh_send_strobe_effect()
 {
     /* only root should send the heartbeat */
     if (!esp_mesh_is_root()) {

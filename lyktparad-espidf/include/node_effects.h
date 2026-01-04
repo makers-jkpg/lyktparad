@@ -34,10 +34,13 @@ struct effect_params_strobe_t {
     uint8_t repeat_count;
 };
 
+// It's a coincidence that the fade params are similar to strobe, but they are separate effects
 struct effect_params_fade_t {
     struct effect_params_t base;
-    uint8_t brightness;
-    uint16_t duration;
+    uint8_t r_on, g_on, b_on;
+    uint8_t r_off, g_off, b_off;
+    uint16_t fade_in_ms, fade_out_ms;
+    uint16_t duration_ms;
     uint8_t repeat_count;
 };
 
