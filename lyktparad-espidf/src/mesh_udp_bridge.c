@@ -7,6 +7,11 @@
  * Copyright (c) 2025 the_louie
  */
 
+/* Ensure CONFIG_MESH_ROUTE_TABLE_SIZE is defined before any includes */
+#ifndef CONFIG_MESH_ROUTE_TABLE_SIZE
+#define CONFIG_MESH_ROUTE_TABLE_SIZE 50
+#endif
+
 #include "mesh_udp_bridge.h"
 #include "mesh_commands.h"
 #include "mesh_common.h"
@@ -24,7 +29,41 @@
 #include "lwip/inet.h"
 #include "lwip/netdb.h"
 #include "lwip/ip4_addr.h"
-#include "mdns.h"
+/* mDNS is optional - try to include if available */
+#if defined(CONFIG_MDNS_MAX_INTERFACES) || defined(CONFIG_MDNS_TASK_PRIORITY)
+    #include "mdns.h"
+    #define MDNS_AVAILABLE 1
+#else
+    /* mDNS component not available - provide stubs */
+    #define MDNS_AVAILABLE 0
+    /* Stub type definitions */
+    typedef struct {
+        int count;
+        struct {
+            char *key;
+            char *value;
+        } *items;
+    } mdns_txt_t;
+    typedef struct {
+        struct {
+            struct {
+                int type;
+                union {
+                    struct {
+                        uint32_t addr;
+                    } ip4;
+                } u_addr;
+            } addr;
+        } *addr;
+        uint16_t port;
+        mdns_txt_t *txt;
+    } mdns_result_t;
+    /* Stub function implementations */
+    static inline esp_err_t mdns_init(void) { return ESP_ERR_NOT_SUPPORTED; }
+    static inline esp_err_t mdns_hostname_set(const char *hostname) { (void)hostname; return ESP_ERR_NOT_SUPPORTED; }
+    static inline esp_err_t mdns_query_ptr(const char *service, const char *proto, uint32_t timeout, int max_results, mdns_result_t **results) { (void)service; (void)proto; (void)timeout; (void)max_results; if (results) *results = NULL; return ESP_ERR_NOT_SUPPORTED; }
+    static inline void mdns_query_results_free(mdns_result_t *results) { (void)results; }
+#endif
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
@@ -59,7 +98,9 @@ static bool s_registration_complete = false;
 #define NVS_KEY_SERVER_PORT "server_port"
 
 /* mDNS initialization state */
+#if MDNS_AVAILABLE
 static bool s_mdns_initialized = false;
+#endif
 
 /* Retry task state */
 static TaskHandle_t s_retry_task_handle = NULL;
@@ -264,7 +305,7 @@ static esp_err_t mesh_udp_bridge_build_registration_payload(mesh_registration_pa
     }
 
     /* Get mesh ID */
-    err = mesh_udp_bridge_get_mesh_id(payload->mesh_id);
+ mesh_udp_bridge_get_mesh_id(payload->mesh_id);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to get mesh ID: %s", esp_err_to_name(err));
         return err;
@@ -449,7 +490,7 @@ esp_err_t mesh_udp_bridge_register(void)
 
     /* Build registration payload */
     mesh_registration_payload_t payload;
-    err = mesh_udp_bridge_build_registration_payload(&payload);
+ mesh_udp_bridge_build_registration_payload(&payload);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to build registration payload: %s", esp_err_to_name(err));
         return err;
@@ -515,7 +556,7 @@ esp_err_t mesh_udp_bridge_register(void)
 
         /* Wait for ACK with 5 second timeout */
         bool ack_success = false;
-        err = mesh_udp_bridge_wait_for_registration_ack(5000, &ack_success);
+ mesh_udp_bridge_wait_for_registration_ack(5000, &ack_success);
         if (err == ESP_OK && ack_success) {
             registration_success = true;
             s_registration_complete = true;
@@ -600,6 +641,7 @@ void mesh_udp_bridge_set_registration(bool registered, const uint8_t *server_ip,
  */
 esp_err_t mesh_udp_bridge_mdns_init(void)
 {
+#if MDNS_AVAILABLE
     if (s_mdns_initialized) {
         return ESP_OK;  /* Already initialized */
     }
@@ -620,6 +662,10 @@ esp_err_t mesh_udp_bridge_mdns_init(void)
     s_mdns_initialized = true;
     ESP_LOGI(TAG, "mDNS initialized successfully");
     return ESP_OK;
+#else
+    ESP_LOGW(TAG, "mDNS component not available, mDNS functionality disabled");
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }
 
 /*******************************************************
@@ -643,6 +689,7 @@ esp_err_t mesh_udp_bridge_discover_server(uint32_t timeout_ms, char *server_ip, 
         return ESP_ERR_INVALID_ARG;
     }
 
+#if MDNS_AVAILABLE
     /* Ensure mDNS is initialized */
     if (!s_mdns_initialized) {
         esp_err_t err = mesh_udp_bridge_mdns_init();
@@ -740,6 +787,10 @@ esp_err_t mesh_udp_bridge_discover_server(uint32_t timeout_ms, char *server_ip, 
     mdns_query_results_free(results);
 
     return ESP_OK;
+#else
+    ESP_LOGW(TAG, "mDNS not available, discovery disabled");
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }
 
 /*******************************************************
@@ -773,7 +824,7 @@ esp_err_t mesh_udp_bridge_cache_server(const char *server_ip, uint16_t server_po
     }
 
     /* Store server IP address */
-    err = nvs_set_str(nvs_handle, NVS_KEY_SERVER_IP, server_ip);
+ nvs_set_str(nvs_handle, NVS_KEY_SERVER_IP, server_ip);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to store server IP in NVS: %s", esp_err_to_name(err));
         nvs_close(nvs_handle);
@@ -781,7 +832,7 @@ esp_err_t mesh_udp_bridge_cache_server(const char *server_ip, uint16_t server_po
     }
 
     /* Store server port */
-    err = nvs_set_u16(nvs_handle, NVS_KEY_SERVER_PORT, server_port);
+ nvs_set_u16(nvs_handle, NVS_KEY_SERVER_PORT, server_port);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to store server port in NVS: %s", esp_err_to_name(err));
         nvs_close(nvs_handle);
@@ -789,7 +840,7 @@ esp_err_t mesh_udp_bridge_cache_server(const char *server_ip, uint16_t server_po
     }
 
     /* Commit changes */
-    err = nvs_commit(nvs_handle);
+ nvs_commit(nvs_handle);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to commit NVS changes: %s", esp_err_to_name(err));
         nvs_close(nvs_handle);
@@ -825,7 +876,7 @@ esp_err_t mesh_udp_bridge_get_cached_server(char *server_ip, uint16_t *server_po
 
     /* Read server IP address */
     size_t required_size = 16;
-    err = nvs_get_str(nvs_handle, NVS_KEY_SERVER_IP, server_ip, &required_size);
+ nvs_get_str(nvs_handle, NVS_KEY_SERVER_IP, server_ip, &required_size);
     if (err != ESP_OK) {
         if (err == ESP_ERR_NVS_NOT_FOUND) {
             ESP_LOGD(TAG, "No cached server IP found in NVS");
@@ -837,7 +888,7 @@ esp_err_t mesh_udp_bridge_get_cached_server(char *server_ip, uint16_t *server_po
     }
 
     /* Read server port */
-    err = nvs_get_u16(nvs_handle, NVS_KEY_SERVER_PORT, server_port);
+ nvs_get_u16(nvs_handle, NVS_KEY_SERVER_PORT, server_port);
     if (err != ESP_OK) {
         if (err == ESP_ERR_NVS_NOT_FOUND) {
             ESP_LOGD(TAG, "No cached server port found in NVS");
@@ -850,217 +901,6 @@ esp_err_t mesh_udp_bridge_get_cached_server(char *server_ip, uint16_t *server_po
 
     nvs_close(nvs_handle);
     ESP_LOGI(TAG, "Retrieved cached server address: %s:%d", server_ip, *server_port);
-    return ESP_OK;
-}
-
-/*******************************************************
- *                mDNS Initialization
- *******************************************************/
-
-/**
- * @brief Initialize mDNS component for service discovery.
- *
- * Initializes the ESP-IDF mDNS component and sets the hostname.
- * This function is idempotent - calling it multiple times is safe.
- *
- * @return ESP_OK on success, error code on failure
- */
-esp_err_t mesh_udp_bridge_mdns_init(void)
-{
-    if (s_mdns_initialized) {
-        return ESP_OK;  /* Already initialized */
-    }
-
-    esp_err_t err = mdns_init();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to initialize mDNS: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    /* Set hostname for mDNS */
-    err = mdns_hostname_set("lyktparad-root");
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to set mDNS hostname: %s", esp_err_to_name(err));
-        /* Continue even if hostname set fails - discovery can still work */
-    }
-
-    s_mdns_initialized = true;
-    ESP_LOGI(TAG, "mDNS initialized successfully");
-    return ESP_OK;
-}
-
-/*******************************************************
- *                Service Discovery
- *******************************************************/
-
-/**
- * @brief Discover external web server via mDNS.
- *
- * Queries for _lyktparad-web._tcp service and extracts server IP and UDP port.
- * The UDP port is extracted from TXT records if available, otherwise uses HTTP port.
- *
- * @param timeout_ms Query timeout in milliseconds (10000-30000)
- * @param server_ip Output buffer for server IP (must be at least 16 bytes)
- * @param server_port Output pointer for UDP port
- * @return ESP_OK on success, error code on failure
- */
-esp_err_t mesh_udp_bridge_discover_server(uint32_t timeout_ms, char *server_ip, uint16_t *server_port)
-{
-    if (server_ip == NULL || server_port == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    /* Ensure mDNS is initialized */
-    if (!s_mdns_initialized) {
-        esp_err_t err = mesh_udp_bridge_mdns_init();
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to initialize mDNS for discovery");
-            return err;
-        }
-    }
-
-    /* Query for _lyktparad-web._tcp service */
-    mdns_result_t *results = NULL;
-    esp_err_t err = mdns_query_ptr("_lyktparad-web", "_tcp", timeout_ms, 20, &results);
-    if (err != ESP_OK) {
-        ESP_LOGD(TAG, "mDNS query failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    if (results == NULL) {
-        ESP_LOGI(TAG, "No external web server found via mDNS");
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    /* Use first result (if multiple services found, use first) */
-    mdns_result_t *result = results;
-
-    /* Extract IP address */
-    if (result->addr == NULL) {
-        ESP_LOGE(TAG, "mDNS result has no IP address");
-        mdns_query_results_free(results);
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-
-    /* Convert IP address to string */
-    if (result->addr->addr.type == IPADDR_TYPE_V4) {
-        /* IPv4 address */
-        struct in_addr addr;
-        addr.s_addr = result->addr->addr.u_addr.ip4.addr;
-        const char *ip_str = inet_ntoa(addr);
-        if (ip_str == NULL) {
-            ESP_LOGE(TAG, "Failed to convert IP address to string");
-            mdns_query_results_free(results);
-            return ESP_ERR_INVALID_RESPONSE;
-        }
-        strncpy(server_ip, ip_str, 15);
-        server_ip[15] = '\0';
-    } else {
-        ESP_LOGE(TAG, "Unsupported IP address type (only IPv4 supported)");
-        mdns_query_results_free(results);
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-
-    /* Extract port - start with HTTP port from service record */
-    uint16_t discovered_port = result->port;
-
-    /* Parse TXT records for protocol and UDP port */
-    bool protocol_valid = false;
-    if (result->txt != NULL) {
-        for (int i = 0; i < result->txt->count; i++) {
-            mdns_txt_item_t *item = &result->txt->items[i];
-            if (item->key != NULL && item->value != NULL) {
-                /* Check for protocol key (should be "udp") */
-                if (strcmp(item->key, "protocol") == 0) {
-                    if (strcmp(item->value, "udp") == 0) {
-                        protocol_valid = true;
-                        ESP_LOGI(TAG, "Found protocol in TXT record: %s", item->value);
-                    } else {
-                        ESP_LOGW(TAG, "Unexpected protocol in TXT record: %s (expected 'udp')", item->value);
-                    }
-                }
-                /* Check for UDP port in TXT records */
-                else if (strcmp(item->key, "udp_port") == 0) {
-                    /* Found UDP port in TXT record */
-                    int udp_port = atoi(item->value);
-                    if (udp_port > 0 && udp_port <= 65535) {
-                        discovered_port = (uint16_t)udp_port;
-                        ESP_LOGI(TAG, "Found UDP port in TXT record: %d", discovered_port);
-                    } else {
-                        ESP_LOGW(TAG, "Invalid UDP port in TXT record: %s", item->value);
-                    }
-                }
-            }
-        }
-    }
-
-    /* Log warning if protocol not found or invalid (but continue anyway) */
-    if (!protocol_valid && result->txt != NULL) {
-        ESP_LOGW(TAG, "Protocol 'udp' not found in TXT records (service type already validated)");
-    }
-
-    *server_port = discovered_port;
-
-    ESP_LOGI(TAG, "Discovered external web server: %s:%d", server_ip, *server_port);
-
-    /* Free query results */
-    mdns_query_results_free(results);
-
-    return ESP_OK;
-}
-
-/*******************************************************
- *                NVS Cache Management
- *******************************************************/
-
-/**
- * @brief Cache discovered server address in NVS.
- *
- * Stores the server IP address and UDP port in NVS for use on subsequent boots.
- *
- * @param server_ip Server IP address string (e.g., "192.168.1.100")
- * @param server_port Server UDP port
- * @return ESP_OK on success, error code on failure
- */
-esp_err_t mesh_udp_bridge_cache_server(const char *server_ip, uint16_t server_port)
-{
-    if (server_ip == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    nvs_handle_t nvs_handle;
-    esp_err_t err = nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READWRITE, &nvs_handle);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to open NVS namespace '%s': %s", NVS_NAMESPACE_UDP_BRIDGE, esp_err_to_name(err));
-        return err;
-    }
-
-    /* Store server IP address */
-    err = nvs_set_str(nvs_handle, NVS_KEY_SERVER_IP, server_ip);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to store server IP in NVS: %s", esp_err_to_name(err));
-        nvs_close(nvs_handle);
-        return err;
-    }
-
-    /* Store server port */
-    err = nvs_set_u16(nvs_handle, NVS_KEY_SERVER_PORT, server_port);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to store server port in NVS: %s", esp_err_to_name(err));
-        nvs_close(nvs_handle);
-        return err;
-    }
-
-    /* Commit changes */
-    err = nvs_commit(nvs_handle);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to commit NVS changes: %s", esp_err_to_name(err));
-        nvs_close(nvs_handle);
-        return err;
-    }
-
-    nvs_close(nvs_handle);
-    ESP_LOGI(TAG, "Cached server address: %s:%d", server_ip, server_port);
     return ESP_OK;
 }
 
@@ -1131,7 +971,7 @@ esp_err_t mesh_udp_bridge_send_heartbeat(void)
     }
 
     /* Initialize UDP socket if needed */
-    err = init_udp_socket();
+ init_udp_socket();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize UDP socket: %s", esp_err_to_name(err));
         return err;
@@ -1411,7 +1251,7 @@ esp_err_t mesh_udp_bridge_collect_state(mesh_state_data_t *state)
     }
 
     /* Get mesh ID */
-    err = mesh_udp_bridge_get_mesh_id(state->mesh_id);
+ mesh_udp_bridge_get_mesh_id(state->mesh_id);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to get mesh ID: %s", esp_err_to_name(err));
         return err;
@@ -1574,15 +1414,15 @@ esp_err_t mesh_udp_bridge_collect_state(mesh_state_data_t *state)
     if (state->sequence_active) {
         state->sequence_position = htons(mode_sequence_root_get_pointer());
         /* Note: sequence_total is not directly available, we'll set it to 0 for now */
-        state->sequence_total = 0;
+        state->sequence_total = htons(0);
     } else {
-        state->sequence_position = 0;
-        state->sequence_total = 0;
+        state->sequence_position = htons(0);
+        state->sequence_total = htons(0);
     }
 
     /* Get OTA state */
     mesh_ota_distribution_status_t ota_status;
-    err = mesh_ota_get_distribution_status(&ota_status);
+ mesh_ota_get_distribution_status(&ota_status);
     if (err == ESP_OK && ota_status.distributing) {
         state->ota_in_progress = 1;
         float progress = mesh_ota_get_distribution_progress();
@@ -1792,7 +1632,7 @@ static void mesh_udp_bridge_state_update_task(void *pvParameters)
             continue;
         }
 
-        err = mesh_udp_bridge_build_state_payload(&state, payload_buffer, buffer_size, &payload_size);
+ mesh_udp_bridge_build_state_payload(&state, payload_buffer, buffer_size, &payload_size);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "Failed to build state payload: %s (continuing)", esp_err_to_name(err));
             free(payload_buffer);
@@ -1805,7 +1645,7 @@ static void mesh_udp_bridge_state_update_task(void *pvParameters)
         }
 
         /* Send state update */
-        err = mesh_udp_bridge_send_state_update(payload_buffer, payload_size);
+ mesh_udp_bridge_send_state_update(payload_buffer, payload_size);
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
             ESP_LOGD(TAG, "State update send error: %s (continuing)", esp_err_to_name(err));
         }
@@ -2000,7 +1840,7 @@ static void handle_broadcast_packet(const uint8_t *buffer, size_t len,
     }
 
     /* Validate UDP port (required for registration) */
-    if (udp_port == 0 || udp_port > 65535) {
+    if (udp_port == 0) {
         ESP_LOGD(TAG, "Invalid UDP port in broadcast: %d, ignoring", udp_port);
         return;
     }
@@ -2011,7 +1851,7 @@ static void handle_broadcast_packet(const uint8_t *buffer, size_t len,
 
     /* Cache discovered address in NVS */
     nvs_handle_t nvs_handle;
-    err = nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READWRITE, &nvs_handle);
+ nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READWRITE, &nvs_handle);
     if (err == ESP_OK) {
         char ip_str[16];
         snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d",
@@ -2029,6 +1869,8 @@ static void handle_broadcast_packet(const uint8_t *buffer, size_t len,
         /* Update registration state (if not already registered) */
         if (!s_server_registered) {
             mesh_udp_bridge_set_registration(true, server_ip, udp_port);
+            /* Stop mDNS discovery retry task since UDP broadcast discovery succeeded (optional optimization) */
+            mesh_udp_bridge_stop_retry_task();
         }
     } else {
         ESP_LOGW(TAG, "Failed to cache discovered server address: %s", esp_err_to_name(err));
@@ -2728,7 +2570,7 @@ static esp_err_t handle_api_ota_download(const uint8_t *payload, size_t payload_
 
     /* Request format: [url_len:1][url:N bytes] */
     uint8_t url_len = payload[0];
-    if (url_len == 0 || url_len > (payload_size - 1) || url_len > 255) {
+    if (url_len == 0 || url_len > (payload_size - 1)) {
         if (max_response_size < 1) {
             return ESP_ERR_INVALID_SIZE;
         }
@@ -2739,7 +2581,7 @@ static esp_err_t handle_api_ota_download(const uint8_t *payload, size_t payload_
 
     /* Extract URL string */
     char url[256];
-    if (url_len >= sizeof(url)) {
+    if (url_len >= (sizeof(url) - 1)) {
         url_len = sizeof(url) - 1;
     }
     memcpy(url, &payload[1], url_len);
@@ -3060,80 +2902,79 @@ static esp_err_t process_api_command(uint8_t commandId, uint16_t seqNum,
     /* Response buffer */
     uint8_t response_payload[512];
     size_t response_payload_size = 0;
-    esp_err_t err = ESP_OK;
 
     /* Route command to appropriate handler */
     switch (commandId) {
         case UDP_CMD_API_NODES:
-            err = handle_api_nodes(response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_nodes(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_COLOR_GET:
-            err = handle_api_color_get(response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_color_get(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_COLOR_POST:
-            err = handle_api_color_post(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_color_post(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_SEQUENCE_POST:
-            err = handle_api_sequence_post(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_sequence_post(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_SEQUENCE_POINTER:
-            err = handle_api_sequence_pointer(response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_sequence_pointer(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_SEQUENCE_START:
-            err = handle_api_sequence_start(response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_sequence_start(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_SEQUENCE_STOP:
-            err = handle_api_sequence_stop(response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_sequence_stop(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_SEQUENCE_RESET:
-            err = handle_api_sequence_reset(response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_sequence_reset(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_SEQUENCE_STATUS:
-            err = handle_api_sequence_status(response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_sequence_status(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_OTA_DOWNLOAD:
-            err = handle_api_ota_download(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_ota_download(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_OTA_STATUS:
-            err = handle_api_ota_status(response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_ota_status(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_OTA_VERSION:
-            err = handle_api_ota_version(response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_ota_version(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_OTA_CANCEL:
-            err = handle_api_ota_cancel(response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_ota_cancel(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_OTA_DISTRIBUTE:
-            err = handle_api_ota_distribute(response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_ota_distribute(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_OTA_DISTRIBUTION_STATUS:
-            err = handle_api_ota_distribution_status(response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_ota_distribution_status(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_OTA_DISTRIBUTION_PROGRESS:
-            err = handle_api_ota_distribution_progress(response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_ota_distribution_progress(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_OTA_DISTRIBUTION_CANCEL:
-            err = handle_api_ota_distribution_cancel(response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_ota_distribution_cancel(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         case UDP_CMD_API_OTA_REBOOT:
-            err = handle_api_ota_reboot(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
+            handle_api_ota_reboot(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         default:
@@ -3145,7 +2986,6 @@ static esp_err_t process_api_command(uint8_t commandId, uint16_t seqNum,
             } else {
                 return ESP_ERR_INVALID_ARG;
             }
-            err = ESP_ERR_NOT_SUPPORTED;
             break;
     }
 
@@ -3207,33 +3047,10 @@ static void mesh_udp_bridge_api_listener_task(void *pvParameters)
         fcntl(s_api_listener_socket, F_SETFL, flags | O_NONBLOCK);
     }
 
-    /* Bind to INADDR_ANY to receive from any source */
-    /* Use the same port as registration (UDP_PORT from server, but we need to bind to a port) */
-    /* For now, we'll bind to port 0 (ephemeral) and use the same socket for sending/receiving */
-    /* Actually, we should bind to a specific port. Let's use a configurable port or the same as registration */
-    /* Since registration uses the server's UDP_PORT, we need to bind to receive on that port */
-    /* But we don't know the server's UDP_PORT. Let's bind to INADDR_ANY:0 (ephemeral) for now */
-    /* Actually, the server sends to the root node's IP on UDP_PORT. We need to receive on that port. */
-    /* But we don't have a fixed port. Let's use a well-known port or make it configurable. */
-    /* For simplicity, let's bind to port 0 (ephemeral) and the server will need to discover it */
-    /* Wait, the server already knows the root node's IP from registration. But it doesn't know the UDP port. */
-    /* Actually, looking at the server code, it sends to rootNode.udp_port which comes from registration. */
-    /* But registration doesn't include the root's UDP port. Let's check... */
-    /* Actually, the server sends API commands to rootNode.root_ip:rootNode.udp_port where udp_port is the SERVER's UDP port */
-    /* No wait, that doesn't make sense. Let me re-read the server code... */
-    /* Looking at routes/proxy.js, it uses rootNode.root_ip and rootNode.udp_port */
-    /* rootNode.udp_port comes from registration, but registration doesn't send the root's UDP port */
-    /* This is a problem. The server needs to know what port to send to. */
-    /* Options: */
-    /* 1. Include root UDP port in registration (requires registration protocol change) */
-    /* 2. Use a well-known port for API commands */
-    /* 3. Server sends to same port it receives registration on (but that's the server's port) */
-    /* Actually, I think the server should send API commands to the root's IP on a well-known port */
-    /* Or, we can use the same socket that's used for registration (s_udp_socket) */
-    /* But that socket is not bound. Let's bind s_udp_socket to receive, or create a separate bound socket */
-    /* For now, let's bind to a well-known port. Let's use 8082 (next after 8081) or make it configurable */
-    /* Actually, let's bind to the same port we use for sending (but we don't bind for sending) */
-    /* Let's use a separate port for API commands. Let's use 8082. */
+    /* Bind to INADDR_ANY on well-known port 8082 for API commands.
+     * The external server sends API commands to rootNode.root_ip:8082.
+     * This is separate from the registration port (8081) which is the server's listening port.
+     */
     struct sockaddr_in listen_addr = {0};
     listen_addr.sin_family = AF_INET;
     listen_addr.sin_addr.s_addr = INADDR_ANY;
@@ -3332,6 +3149,60 @@ static void mesh_udp_bridge_api_listener_task(void *pvParameters)
     ESP_LOGI(TAG, "UDP API listener task stopped");
 }
 
+/**
+ * @brief Start the UDP API command listener task.
+ *
+ * Starts a FreeRTOS task that listens for UDP API commands (0xE7-0xF8) from the external server.
+ * The listener processes API commands and sends responses back to the server.
+ * Only starts if the node is root. The listener is completely optional and does not affect
+ * embedded web server operation.
+ */
+void mesh_udp_bridge_api_listener_start(void)
+{
+    /* Check if task already running */
+    if (s_api_listener_running && s_api_listener_task_handle != NULL) {
+        ESP_LOGD(TAG, "API listener task already running");
+        return;
+    }
+
+    /* Check if root node */
+    if (!esp_mesh_is_root()) {
+        ESP_LOGD(TAG, "Not root node, skipping API listener start");
+        return;
+    }
+
+    /* Create FreeRTOS task */
+    s_api_listener_running = true;
+    BaseType_t task_err = xTaskCreate(mesh_udp_bridge_api_listener_task, "udp_api_listener",
+                                      4096, NULL, 1, &s_api_listener_task_handle);
+    if (task_err != pdPASS) {
+        ESP_LOGW(TAG, "Failed to create API listener task");
+        s_api_listener_task_handle = NULL;
+        s_api_listener_running = false;
+    } else {
+        ESP_LOGI(TAG, "API listener task started");
+    }
+}
+
+/**
+ * @brief Stop the UDP API command listener task.
+ *
+ * Stops the API command listener task and cleans up resources.
+ * This function is safe to call even if the task is not running.
+ */
+void mesh_udp_bridge_api_listener_stop(void)
+{
+    if (!s_api_listener_running || s_api_listener_task_handle == NULL) {
+        /* Task not running, nothing to stop */
+        return;
+    }
+
+    /* Stop task */
+    s_api_listener_running = false;
+    /* Task will clean itself up */
+    ESP_LOGI(TAG, "Stopping API listener task");
+}
+
 /*******************************************************
  *                Retry Logic
  *******************************************************/
@@ -3349,11 +3220,12 @@ static void mesh_udp_bridge_api_listener_task(void *pvParameters)
 static void mesh_udp_bridge_retry_task(void *pvParameters)
 {
     uint32_t delay_ms = 5000;  /* Initial delay: 5 seconds */
+#if MDNS_AVAILABLE
     const uint32_t max_delay_ms = 60000;  /* Maximum delay: 60 seconds */
     const uint32_t backoff_multiplier = 2;  /* Backoff multiplier: 2x */
-
     char server_ip[16] = {0};
     uint16_t server_port = 0;
+#endif
 
     ESP_LOGI(TAG, "Discovery retry task started");
 
@@ -3366,6 +3238,7 @@ static void mesh_udp_bridge_retry_task(void *pvParameters)
             break;
         }
 
+#if MDNS_AVAILABLE
         /* Ensure mDNS is initialized */
         if (!s_mdns_initialized) {
             esp_err_t err = mesh_udp_bridge_mdns_init();
@@ -3406,6 +3279,14 @@ static void mesh_udp_bridge_retry_task(void *pvParameters)
             ESP_LOGI(TAG, "Discovery retry failed, will retry in %lu ms", (unsigned long)(delay_ms * backoff_multiplier));
             delay_ms = (delay_ms * backoff_multiplier > max_delay_ms) ? max_delay_ms : delay_ms * backoff_multiplier;
         }
+#else
+        /* mDNS not available, stop retry task */
+        ESP_LOGI(TAG, "mDNS not available, stopping retry task");
+        s_retry_task_running = false;
+        s_retry_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
+#endif
     }
 
     /* Task cleanup */
@@ -3551,7 +3432,14 @@ void mesh_udp_bridge_broadcast_server_ip(const char *ip, uint16_t port)
     tx_buf[0] = MESH_CMD_WEBSERVER_IP_BROADCAST;
 
     /* Fill payload structure */
-    memcpy(payload->ip, &addr.s_addr, 4);  /* IP in network byte order */
+    /* Extract IP bytes in network byte order (big-endian) */
+    /* addr.s_addr is already in network byte order, but on little-endian systems,
+     * memcpy would copy bytes in wrong order, so we extract correctly */
+    uint32_t ip_net = addr.s_addr;  /* Already in network byte order */
+    payload->ip[0] = (ip_net >> 24) & 0xFF;  /* Most significant byte first (network byte order) */
+    payload->ip[1] = (ip_net >> 16) & 0xFF;
+    payload->ip[2] = (ip_net >> 8) & 0xFF;
+    payload->ip[3] = ip_net & 0xFF;  /* Least significant byte last */
     payload->port = htons(port);  /* Port in network byte order */
     payload->timestamp = htonl((uint32_t)time(NULL));  /* Timestamp in network byte order */
 
@@ -3691,10 +3579,10 @@ bool mesh_udp_bridge_use_cached_ip(void)
 
     /* Optional: Check cache expiration (24 hours) */
     nvs_handle_t nvs_handle;
-    err = nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READONLY, &nvs_handle);
+ nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READONLY, &nvs_handle);
     if (err == ESP_OK) {
         uint32_t cached_timestamp = 0;
-        err = nvs_get_u32(nvs_handle, "server_ip_timestamp", &cached_timestamp);
+ nvs_get_u32(nvs_handle, "server_ip_timestamp", &cached_timestamp);
         if (err == ESP_OK) {
             /* Timestamp is already in host byte order (converted when stored) */
             time_t current_time = time(NULL);

@@ -31,6 +31,46 @@ header {
 
 header h1 {
     font-size: 2em;
+    margin-bottom: 10px;
+}
+
+.connection-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9em;
+    margin-top: 10px;
+}
+
+.connection-status-icon {
+    font-size: 1.2em;
+    font-weight: bold;
+}
+
+.connection-status-icon.connected {
+    color: #2ecc71; /* Green */
+}
+
+.connection-status-icon.offline {
+    color: #e74c3c; /* Red */
+}
+
+.connection-status-icon.unknown {
+    color: #f39c12; /* Orange */
+}
+
+.connection-status-icon.stale {
+    color: #f39c12; /* Orange */
+}
+
+.connection-status-text {
+    font-weight: 500;
+}
+
+.connection-status-details {
+    font-size: 0.85em;
+    opacity: 0.8;
+    margin-left: auto;
 }
 
 .section {

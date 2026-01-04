@@ -155,8 +155,41 @@ function getService() {
     return service;
 }
 
+/**
+ * Cleanup mDNS resources (destroy bonjour instance).
+ * This should be called during server shutdown to properly clean up resources.
+ *
+ * @returns {boolean} True if cleanup succeeded, false otherwise
+ */
+function cleanup() {
+    try {
+        // Unregister service if still registered
+        if (service) {
+            try {
+                service.stop();
+                service = null;
+            } catch (err) {
+                // Ignore errors when stopping service
+            }
+        }
+
+        // Destroy bonjour instance to clean up resources
+        if (bonjourInstance) {
+            bonjourInstance.destroy();
+            bonjourInstance = null;
+            console.log('mDNS: Resources cleaned up');
+        }
+
+        return true;
+    } catch (err) {
+        console.warn('mDNS: Failed to cleanup resources:', err.message);
+        return false;
+    }
+}
+
 module.exports = {
     registerService,
     unregisterService,
-    getService
+    getService,
+    cleanup
 };

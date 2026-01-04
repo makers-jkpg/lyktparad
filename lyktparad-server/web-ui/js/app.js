@@ -14,6 +14,65 @@ let maxSquares = 64;
 let sequenceSynced = false;
 let buttonStatePollInterval = null;
 
+// Error handling helper function
+function handleApiError(error, feedbackElement, retryCallback) {
+  if (!feedbackElement) {
+    console.error('API error:', error);
+    return;
+  }
+
+  // Check if error is a root node disconnection error (503)
+  const isDisconnectionError = error.message && (
+    error.message.includes('503') ||
+    error.message.includes('offline') ||
+    error.message.includes('unreachable') ||
+    error.message.includes('Root node unavailable')
+  );
+
+  if (isDisconnectionError) {
+    // Get connection status to find root node IP for direct access suggestion
+    fetch('/api/connection/status')
+      .then(response => response.json())
+      .then(status => {
+        let errorMsg = 'Root node is offline or unreachable.';
+        if (status.root_node_ip) {
+          errorMsg += ` You can access it directly at http://${status.root_node_ip}`;
+        }
+        feedbackElement.textContent = errorMsg;
+        feedbackElement.className = 'sequence-control-feedback-error';
+
+        // Add retry button if retry callback provided
+        if (retryCallback && typeof retryCallback === 'function') {
+          // Remove existing retry button if any
+          const existingRetry = feedbackElement.parentElement.querySelector('.retry-btn');
+          if (existingRetry) {
+            existingRetry.remove();
+          }
+
+          const retryBtn = document.createElement('button');
+          retryBtn.className = 'btn btn-secondary retry-btn';
+          retryBtn.textContent = 'Retry';
+          retryBtn.style.marginLeft = '10px';
+          retryBtn.onclick = () => {
+            feedbackElement.textContent = 'Retrying...';
+            retryCallback();
+          };
+          feedbackElement.parentElement.appendChild(retryBtn);
+        }
+      })
+      .catch(() => {
+        feedbackElement.textContent = 'Root node is offline or unreachable.';
+        feedbackElement.className = 'sequence-control-feedback-error';
+      });
+  } else {
+    // Regular error
+    feedbackElement.textContent = 'Error: ' + (error.message || 'Unknown error');
+    feedbackElement.className = 'sequence-control-feedback-error';
+  }
+
+  console.error('API error:', error);
+}
+
 // API functions
 function updateNodeCount() {
   fetch('/api/nodes')
@@ -504,11 +563,24 @@ function handleSequenceStart() {
       updateSequenceButtonStates();
     }
   })
-  .catch(err => {
-    feedback.textContent = 'Network error: ' + err.message;
-    feedback.className = 'sequence-control-feedback-error';
+  .catch(async err => {
+    // Handle 503 errors (root node unavailable)
+    if (err.message && err.message.includes('HTTP error: 503')) {
+      try {
+        const errorResponse = await fetch('/api/sequence/start', { method: 'POST' }).catch(() => null);
+        if (errorResponse && errorResponse.status === 503) {
+          const errorData = await errorResponse.json().catch(() => ({}));
+          handleApiError(new Error(errorData.message || 'Root node unavailable'), feedback, handleSequenceStart);
+        } else {
+          handleApiError(err, feedback, handleSequenceStart);
+        }
+      } catch {
+        handleApiError(err, feedback, handleSequenceStart);
+      }
+    } else {
+      handleApiError(err, feedback, handleSequenceStart);
+    }
     updateSequenceButtonStates();
-    console.error('Start error:', err);
   });
 }
 
@@ -539,11 +611,23 @@ function handleSequenceStop() {
       updateSequenceButtonStates();
     }
   })
-  .catch(err => {
-    feedback.textContent = 'Network error: ' + err.message;
-    feedback.className = 'sequence-control-feedback-error';
+  .catch(async err => {
+    if (err.message && err.message.includes('HTTP error: 503')) {
+      try {
+        const errorResponse = await fetch('/api/sequence/stop', { method: 'POST' }).catch(() => null);
+        if (errorResponse && errorResponse.status === 503) {
+          const errorData = await errorResponse.json().catch(() => ({}));
+          handleApiError(new Error(errorData.message || 'Root node unavailable'), feedback, handleSequenceStop);
+        } else {
+          handleApiError(err, feedback, handleSequenceStop);
+        }
+      } catch {
+        handleApiError(err, feedback, handleSequenceStop);
+      }
+    } else {
+      handleApiError(err, feedback, handleSequenceStop);
+    }
     updateSequenceButtonStates();
-    console.error('Stop error:', err);
   });
 }
 
@@ -581,11 +665,23 @@ function handleSequenceReset() {
       updateSequenceButtonStates();
     }
   })
-  .catch(err => {
-    feedback.textContent = 'Network error: ' + err.message;
-    feedback.className = 'sequence-control-feedback-error';
+  .catch(async err => {
+    if (err.message && err.message.includes('HTTP error: 503')) {
+      try {
+        const errorResponse = await fetch('/api/sequence/reset', { method: 'POST' }).catch(() => null);
+        if (errorResponse && errorResponse.status === 503) {
+          const errorData = await errorResponse.json().catch(() => ({}));
+          handleApiError(new Error(errorData.message || 'Root node unavailable'), feedback, handleSequenceReset);
+        } else {
+          handleApiError(err, feedback, handleSequenceReset);
+        }
+      } catch {
+        handleApiError(err, feedback, handleSequenceReset);
+      }
+    } else {
+      handleApiError(err, feedback, handleSequenceReset);
+    }
     updateSequenceButtonStates();
-    console.error('Reset error:', err);
   });
 }
 
@@ -633,13 +729,32 @@ function syncGridData() {
       syncButton.textContent = 'Sync';
     })
     .catch(err => {
-      syncFeedback.textContent = 'Network error: ' + err.message;
-      syncFeedback.className = 'sync-feedback-error';
+      // Handle 503 errors (root node unavailable)
+      if (err.message && err.message.includes('HTTP error: 503')) {
+        // Re-fetch to get error details - we need the payload from outer scope
+        const syncPayload = payload; // Use payload from outer scope
+        fetch('/api/sequence', { method: 'POST', body: syncPayload })
+          .then(async errorResponse => {
+            if (errorResponse.status === 503) {
+              const errorData = await errorResponse.json().catch(() => ({}));
+              handleApiError(new Error(errorData.message || 'Root node unavailable'), syncFeedback, () => {
+                // Retry callback for sync
+                syncSequence();
+              });
+            } else {
+              handleApiError(err, syncFeedback);
+            }
+          })
+          .catch(() => {
+            handleApiError(err, syncFeedback);
+          });
+      } else {
+        handleApiError(err, syncFeedback);
+      }
       sequenceSynced = false;
       updateSequenceButtonStates();
       syncButton.disabled = false;
       syncButton.textContent = 'Sync';
-      console.error('Sync error:', err);
     });
   } catch (err) {
     syncFeedback.textContent = 'Error: ' + err.message;
@@ -652,6 +767,86 @@ function syncGridData() {
   }
 }
 
+// Connection status polling
+let connectionStatusInterval = null;
+
+function updateConnectionStatus() {
+  fetch('/api/connection/status')
+    .then(response => response.json())
+    .then(data => {
+      const icon = document.getElementById('connection-status-icon');
+      const text = document.getElementById('connection-status-text');
+      const details = document.getElementById('connection-status-details');
+
+      if (!icon || !text || !details) {
+        return; // Elements not found
+      }
+
+      // Update icon and text based on status
+      icon.className = 'connection-status-icon';
+      if (data.connected) {
+        icon.classList.add('connected');
+        text.textContent = 'Connected';
+      } else if (data.status === 'not_registered') {
+        icon.classList.add('unknown');
+        text.textContent = 'Not Registered';
+      } else if (data.status === 'offline') {
+        icon.classList.add('offline');
+        text.textContent = 'Offline';
+      } else {
+        icon.classList.add('unknown');
+        text.textContent = 'Unknown';
+      }
+
+      // Update details
+      let detailsText = '';
+      if (data.root_node_ip) {
+        detailsText = `IP: ${data.root_node_ip}`;
+      }
+      if (data.last_seen) {
+        const lastSeen = new Date(data.last_seen);
+        const ago = Math.floor((Date.now() - lastSeen.getTime()) / 1000);
+        let agoText = '';
+        if (ago < 60) {
+          agoText = `${ago}s ago`;
+        } else if (ago < 3600) {
+          agoText = `${Math.floor(ago / 60)}m ago`;
+        } else {
+          agoText = `${Math.floor(ago / 3600)}h ago`;
+        }
+        if (detailsText) {
+          detailsText += ` • Last seen: ${agoText}`;
+        } else {
+          detailsText = `Last seen: ${agoText}`;
+        }
+      }
+      details.textContent = detailsText;
+    })
+    .catch(err => {
+      console.error('Connection status update error:', err);
+      const icon = document.getElementById('connection-status-icon');
+      const text = document.getElementById('connection-status-text');
+      if (icon && text) {
+        icon.className = 'connection-status-icon unknown';
+        text.textContent = 'Status Unknown';
+      }
+    });
+}
+
+function startConnectionStatusPolling() {
+  // Update immediately
+  updateConnectionStatus();
+  // Poll every 8 seconds (within 5-10 second range)
+  connectionStatusInterval = setInterval(updateConnectionStatus, 8000);
+}
+
+function stopConnectionStatusPolling() {
+  if (connectionStatusInterval) {
+    clearInterval(connectionStatusInterval);
+    connectionStatusInterval = null;
+  }
+}
+
 // Event handlers and initialization
 document.addEventListener('DOMContentLoaded', function() {
   initializeDefaultPattern();
@@ -659,6 +854,7 @@ document.addEventListener('DOMContentLoaded', function() {
   updateNodeCount();
   updateRhythmDisplay();
   updateGridRows();
+  startConnectionStatusPolling();
   updateInterval = setInterval(function() {
     updateNodeCount();
   }, 5000);

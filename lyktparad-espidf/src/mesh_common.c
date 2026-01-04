@@ -110,6 +110,16 @@ static void led_restore_red_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* Task function for non-blocking registration on role change */
+static void registration_task(void *pvParameters)
+{
+    esp_err_t reg_err = mesh_udp_bridge_register();
+    if (reg_err != ESP_OK && reg_err != ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(MESH_TAG, "[REGISTRATION] Registration failed on role change: %s", esp_err_to_name(reg_err));
+    }
+    vTaskDelete(NULL);
+}
+
 /* Timer callback to toggle LED on each failed connection attempt during scanning */
 static void scan_fail_toggle_timer_cb(void *arg)
 {
@@ -513,6 +523,14 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             /* Update status LED to OFF */
             root_status_led_set_root(false);
         } else if (!was_root_before && is_root_now) {
+            /* Node became root - register with external server if discovered */
+            if (mesh_udp_bridge_is_server_discovered()) {
+                /* Create task for non-blocking registration */
+                BaseType_t task_err = xTaskCreate(registration_task, "reg_role_chg", 4096, NULL, 1, NULL);
+                if (task_err != pdPASS) {
+                    ESP_LOGW(MESH_TAG, "[REGISTRATION] Failed to create registration task on role change");
+                }
+            }
             /* Node became root - start heartbeat and state updates if registered */
             if (mesh_udp_bridge_is_registered()) {
                 mesh_udp_bridge_start_heartbeat();
@@ -578,10 +596,20 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             mesh_udp_bridge_api_listener_stop();
             /* Update status LED to OFF */
             root_status_led_set_root(false);
-        } else if (mesh_udp_bridge_is_registered()) {
+        } else if (is_root_now) {
+            /* Node is root - register with external server if discovered */
+            if (mesh_udp_bridge_is_server_discovered()) {
+                /* Create task for non-blocking registration */
+                BaseType_t task_err = xTaskCreate(registration_task, "reg_switch", 4096, NULL, 1, NULL);
+                if (task_err != pdPASS) {
+                    ESP_LOGW(MESH_TAG, "[REGISTRATION] Failed to create registration task on root switch");
+                }
+            }
             /* Node is root and registered - start heartbeat and state updates */
-            mesh_udp_bridge_start_heartbeat();
-            mesh_udp_bridge_start_state_updates();
+            if (mesh_udp_bridge_is_registered()) {
+                mesh_udp_bridge_start_heartbeat();
+                mesh_udp_bridge_start_state_updates();
+            }
             /* Update status LED to ON */
             root_status_led_set_root(true);
         } else {
@@ -726,6 +754,9 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
             /* Root node: router connected */
             is_router_connected = true;
 
+            /* Update status LED to ON (root node got IP) */
+            root_status_led_set_root(true);
+
             if (root_ip_callback) {
                 root_ip_callback(arg, event_base, event_id, event_data);
             }
@@ -737,6 +768,9 @@ void mesh_common_ip_event_handler(void *arg, esp_event_base_t event_base,
             /* Root node: router disconnected */
             /* Root node: router disconnected */
             is_router_connected = false;
+
+            /* Update status LED based on current role (node may still be root even if router disconnected) */
+            root_status_led_update();
         }
     }
 }
@@ -872,9 +906,6 @@ esp_err_t mesh_common_init(void)
 #endif
 
     init_rgb_led();
-
-    /* Initialize root status LED */
-    root_status_led_init();
 
     bool is_root = esp_mesh_is_root();
     bool is_root_fixed = esp_mesh_is_root_fixed();

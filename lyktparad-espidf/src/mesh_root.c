@@ -559,6 +559,13 @@ static void discovery_task(void *pvParameters)
     /* First, try to use cached IP if available (optimization) */
     if (mesh_udp_bridge_use_cached_ip()) {
         ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Using cached server IP (skipping mDNS)");
+        /* Register with external server after discovery (non-blocking - already in task) */
+        if (mesh_udp_bridge_is_server_discovered() && esp_mesh_is_root()) {
+            esp_err_t reg_err = mesh_udp_bridge_register();
+            if (reg_err != ESP_OK && reg_err != ESP_ERR_NOT_FOUND) {
+                ESP_LOGW(mesh_common_get_tag(), "[REGISTRATION] Registration failed: %s", esp_err_to_name(reg_err));
+            }
+        }
         vTaskDelete(NULL);
         return;
     }
@@ -577,6 +584,13 @@ static void discovery_task(void *pvParameters)
                 uint8_t ip_bytes[4];
                 memcpy(ip_bytes, &addr.s_addr, 4);
                 mesh_udp_bridge_set_registration(true, ip_bytes, server_port);
+                /* Register with external server after discovery (non-blocking - already in task) */
+                if (esp_mesh_is_root()) {
+                    esp_err_t reg_err = mesh_udp_bridge_register();
+                    if (reg_err != ESP_OK && reg_err != ESP_ERR_NOT_FOUND) {
+                        ESP_LOGW(mesh_common_get_tag(), "[REGISTRATION] Registration failed: %s", esp_err_to_name(reg_err));
+                    }
+                }
             }
         }
         vTaskDelete(NULL);
@@ -599,6 +613,15 @@ static void discovery_task(void *pvParameters)
             uint8_t ip_bytes[4];
             memcpy(ip_bytes, &addr.s_addr, 4);
             mesh_udp_bridge_set_registration(true, ip_bytes, server_port);
+            /* Stop UDP broadcast listener since mDNS discovery succeeded (optional optimization) */
+            mesh_udp_bridge_broadcast_listener_stop();
+            /* Register with external server after discovery (non-blocking - already in task) */
+            if (esp_mesh_is_root()) {
+                esp_err_t reg_err = mesh_udp_bridge_register();
+                if (reg_err != ESP_OK && reg_err != ESP_ERR_NOT_FOUND) {
+                    ESP_LOGW(mesh_common_get_tag(), "[REGISTRATION] Registration failed: %s", esp_err_to_name(reg_err));
+                }
+            }
         } else {
             ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] Failed to convert IP address: %s", server_ip);
         }
@@ -617,6 +640,13 @@ static void discovery_task(void *pvParameters)
                 uint8_t ip_bytes[4];
                 memcpy(ip_bytes, &addr.s_addr, 4);
                 mesh_udp_bridge_set_registration(true, ip_bytes, server_port);
+                /* Register with external server after discovery (non-blocking - already in task) */
+                if (esp_mesh_is_root()) {
+                    esp_err_t reg_err = mesh_udp_bridge_register();
+                    if (reg_err != ESP_OK && reg_err != ESP_ERR_NOT_FOUND) {
+                        ESP_LOGW(mesh_common_get_tag(), "[REGISTRATION] Registration failed: %s", esp_err_to_name(reg_err));
+                    }
+                }
             }
         } else {
             ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] No cached address available, starting retry task");

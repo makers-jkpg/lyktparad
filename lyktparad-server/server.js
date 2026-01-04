@@ -538,11 +538,24 @@ function handleHeartbeatPacket(msg, rinfo) {
 
     // Find registration by source IP address
     const sourceIp = rinfo.address;
-    const { getAllRegistrations } = require('./lib/registration');
+    const { getAllRegistrations, updateRegistrationIp } = require('./lib/registration');
     const registrations = getAllRegistrations();
 
     // Find registration matching source IP
-    const registration = registrations.find(reg => reg.root_ip === sourceIp);
+    let registration = registrations.find(reg => reg.root_ip === sourceIp);
+
+    // If not found by IP, try to find by all registrations (for IP change detection)
+    // Note: Heartbeat packets don't contain mesh_id, so we can only detect IP changes
+    // if we have a single registration. State updates handle IP changes more reliably.
+    if (!registration && registrations.length === 1) {
+        registration = registrations[0];
+        // Update IP address if it changed
+        const newIpBytes = sourceIp.split('.').map(Number);
+        const newIpBuffer = Buffer.from(newIpBytes);
+        console.log(`Root node IP changed (detected in heartbeat): ${registration.root_ip} -> ${sourceIp}, mesh_id: ${registration.mesh_id}`);
+        updateRegistrationIp(registration.mesh_id, newIpBuffer, null);
+        registration.root_ip = sourceIp; // Update local reference
+    }
 
     if (registration) {
         // Update last heartbeat timestamp
@@ -642,12 +655,14 @@ function gracefulShutdown() {
     // Stop UDP broadcast
     stopBroadcast();
 
-    // Unregister mDNS service
+    // Unregister mDNS service and cleanup resources
     if (mdns) {
         const service = mdns.getService();
         if (service) {
             mdns.unregisterService(service);
         }
+        // Cleanup bonjour instance resources
+        mdns.cleanup();
     }
 
     // Close UDP socket
