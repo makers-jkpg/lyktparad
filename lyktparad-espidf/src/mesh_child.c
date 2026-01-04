@@ -27,6 +27,7 @@
 #include "light_common_cathode.h"
 #include "config/mesh_config.h"
 #include "mesh_ota.h"
+#include "plugin_system.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
@@ -70,7 +71,7 @@ void esp_mesh_p2p_rx_main(void *arg)
             continue;
         }
         if (esp_mesh_is_root()) {
-            /* Root node handles OTA messages and RGB commands for unified behavior */
+            /* Root node handles OTA messages, RGB commands, and plugin commands for unified behavior */
             if (data.proto == MESH_PROTO_BIN && data.size >= 1) {
                 uint8_t cmd = data.data[0];
                 if (cmd == MESH_CMD_OTA_REQUEST || cmd == MESH_CMD_OTA_ACK || cmd == MESH_CMD_OTA_STATUS) {
@@ -84,6 +85,22 @@ void esp_mesh_p2p_rx_main(void *arg)
                     ESP_LOGI(MESH_TAG, "[ROOT ACTION] RGB command received from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
                     mesh_root_handle_rgb_command(r, g, b);
                     continue;
+                } else if (cmd >= 0x10 && cmd <= 0xEF) {
+                    /* Route plugin commands (0x10-0xEF) to plugin system */
+                    err = plugin_system_handle_command(cmd, data.data, data.size);
+                    if (err == ESP_OK) {
+                        /* Command handled by plugin, continue */
+                        ESP_LOGD(mesh_common_get_tag(), "[PLUGIN] Command 0x%02X routed to plugin", cmd);
+                        continue;
+                    } else if (err == ESP_ERR_NOT_FOUND) {
+                        /* Not a plugin command, fall through to continue (no core handlers for root) */
+                        ESP_LOGD(mesh_common_get_tag(), "[PLUGIN] Command 0x%02X not registered, ignoring", cmd);
+                        continue;
+                    } else {
+                        /* Plugin error, log and continue */
+                        ESP_LOGE(mesh_common_get_tag(), "[PLUGIN] Command 0x%02X routing error: 0x%x", cmd, err);
+                        continue;
+                    }
                 }
             }
             continue;
@@ -92,6 +109,22 @@ void esp_mesh_p2p_rx_main(void *arg)
         ESP_LOGI(mesh_common_get_tag(), "[RCVD NOT ROOT]");
 
         recv_count++;
+        /* Route plugin commands (0x10-0xEF) to plugin system */
+        if (data.proto == MESH_PROTO_BIN && data.size >= 1 && data.data[0] >= 0x10 && data.data[0] <= 0xEF) {
+            err = plugin_system_handle_command(data.data[0], data.data, data.size);
+            if (err == ESP_OK) {
+                /* Command handled by plugin, continue */
+                ESP_LOGD(mesh_common_get_tag(), "[PLUGIN] Command 0x%02X routed to plugin", data.data[0]);
+                continue;
+            } else if (err == ESP_ERR_NOT_FOUND) {
+                /* Not a plugin command, fall through to core handlers */
+                ESP_LOGD(mesh_common_get_tag(), "[PLUGIN] Command 0x%02X not registered, falling through to core handlers", data.data[0]);
+            } else {
+                /* Plugin error, log and continue */
+                ESP_LOGE(mesh_common_get_tag(), "[PLUGIN] Command 0x%02X routing error: 0x%x", data.data[0], err);
+                continue;
+            }
+        }
         /* detect heartbeat: command prefix (0x01) + 4-byte big-endian counter */
         if (data.proto == MESH_PROTO_BIN && data.size == 5 && data.data[0] == MESH_CMD_HEARTBEAT) {
             uint32_t hb = ((uint32_t)(uint8_t)data.data[1] << 24) |
@@ -119,7 +152,7 @@ void esp_mesh_p2p_rx_main(void *arg)
                     ESP_LOGI(mesh_common_get_tag(), "[NODE ACTION] Heartbeat #%lu (odd) - LED BLUE (default)", (unsigned long)hb);
                 }
             }
-            
+
         } else if (data.proto == MESH_PROTO_BIN && data.data[0] == MESH_CMD_EFFECT) {
 
             /* Prepare effect parameters structure */
