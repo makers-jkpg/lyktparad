@@ -51,10 +51,13 @@ static bool sequence_active = false;  /* Playback state */
 static void sequence_timer_cb(void *arg);
 static void sequence_timer_stop(void);
 static esp_err_t sequence_timer_start(uint8_t rhythm);
-static esp_err_t sequence_timer_reset(void);
 static void extract_square_rgb(uint8_t *packed_data, uint16_t square_index, uint8_t *r, uint8_t *g, uint8_t *b);
 static esp_err_t sequence_handle_command_internal(uint8_t cmd, uint8_t *data, uint16_t len);
 static esp_err_t sequence_broadcast_control(uint8_t cmd);
+static esp_err_t sequence_handle_start(uint8_t *data, uint16_t len);
+static esp_err_t sequence_handle_stop(uint8_t *data, uint16_t len);
+static esp_err_t sequence_handle_reset(uint8_t *data, uint16_t len);
+static esp_err_t sequence_handle_beat(uint8_t *data, uint16_t len);
 
 /*******************************************************
  *                Helper Functions
@@ -126,41 +129,11 @@ static esp_err_t sequence_timer_start(uint8_t rhythm)
         ESP_LOGE(TAG, "Failed to start sequence timer: 0x%x", err);
         esp_timer_delete(sequence_timer);
         sequence_timer = NULL;
+        sequence_active = false;  /* Ensure state is consistent on failure */
         return err;
     }
 
     sequence_active = true;
-    return ESP_OK;
-}
-
-static esp_err_t sequence_timer_reset(void)
-{
-    if (!sequence_active) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    if (sequence_rhythm == 0) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    esp_err_t err = esp_timer_stop(sequence_timer);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "Failed to stop timer for reset: 0x%x", err);
-    }
-
-    err = esp_timer_delete(sequence_timer);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to delete timer for reset: 0x%x", err);
-    }
-    sequence_timer = NULL;
-
-    err = sequence_timer_start(sequence_rhythm);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to restart timer: 0x%x", err);
-        sequence_active = false;
-        return err;
-    }
-
     return ESP_OK;
 }
 
@@ -170,6 +143,13 @@ static esp_err_t sequence_timer_reset(void)
 
 static void sequence_timer_cb(void *arg)
 {
+    /* Defensive check: timer should never run with invalid sequence data */
+    if (sequence_length == 0 || sequence_rhythm == 0) {
+        ESP_LOGE(TAG, "Timer callback called with invalid sequence data (length=%d, rhythm=%d), stopping timer", sequence_length, sequence_rhythm);
+        sequence_timer_stop();
+        return;
+    }
+
     uint8_t r_4bit, g_4bit, b_4bit;
     uint8_t r_scaled, g_scaled, b_scaled;
 
@@ -197,15 +177,44 @@ static void sequence_timer_cb(void *arg)
  *                Plugin Command Handler
  *******************************************************/
 
+/**
+ * @brief Sequence plugin command handler
+ *
+ * Handles sequence commands including:
+ * - MESH_CMD_SEQUENCE (0x04): Store and start sequence data
+ * - MESH_CMD_SEQUENCE_START (0x05): Start sequence playback
+ * - MESH_CMD_SEQUENCE_STOP (0x06): Stop sequence playback
+ * - MESH_CMD_SEQUENCE_RESET (0x07): Reset sequence pointer to 0
+ * - MESH_CMD_SEQUENCE_BEAT (0x08): Update pointer from BEAT data (child nodes only)
+ *
+ * @param cmd Command ID (MESH_CMD_SEQUENCE, MESH_CMD_SEQUENCE_START, etc.)
+ * @param data Command data (includes command byte at data[0])
+ * @param len Data length
+ * @return ESP_OK on success, error code on failure
+ */
 static esp_err_t sequence_command_handler(uint8_t cmd, uint8_t *data, uint16_t len)
 {
-    /* Validate command */
-    if (cmd != MESH_CMD_SEQUENCE) {
-        ESP_LOGE(TAG, "Invalid command ID: 0x%02X (expected MESH_CMD_SEQUENCE)", cmd);
-        return ESP_ERR_INVALID_ARG;
-    }
+    /* Route command to appropriate handler */
+    switch (cmd) {
+        case MESH_CMD_SEQUENCE:
+            return sequence_handle_command_internal(cmd, data, len);
 
-    return sequence_handle_command_internal(cmd, data, len);
+        case MESH_CMD_SEQUENCE_START:
+            return sequence_handle_start(data, len);
+
+        case MESH_CMD_SEQUENCE_STOP:
+            return sequence_handle_stop(data, len);
+
+        case MESH_CMD_SEQUENCE_RESET:
+            return sequence_handle_reset(data, len);
+
+        case MESH_CMD_SEQUENCE_BEAT:
+            return sequence_handle_beat(data, len);
+
+        default:
+            ESP_LOGE(TAG, "Invalid command ID: 0x%02X (expected MESH_CMD_SEQUENCE or control command)", cmd);
+            return ESP_ERR_INVALID_ARG;
+    }
 }
 
 static esp_err_t sequence_handle_command_internal(uint8_t cmd, uint8_t *data, uint16_t len)
@@ -256,6 +265,164 @@ static esp_err_t sequence_handle_command_internal(uint8_t cmd, uint8_t *data, ui
 
     ESP_LOGI(TAG, "Sequence command received and timer started - rhythm: %d (%.1f ms), length: %d rows",
              rhythm, (float)rhythm * 10.0f, num_rows);
+
+    return ESP_OK;
+}
+
+/*******************************************************
+ *                Control Command Handlers
+ *******************************************************/
+
+/**
+ * @brief Handle START command
+ *
+ * Starts sequence playback. On root node, calls sequence_plugin_root_start().
+ * On child node, starts timer if sequence data exists.
+ *
+ * @param data Command data (data[0] = MESH_CMD_SEQUENCE_START)
+ * @param len Data length (must be 1)
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t sequence_handle_start(uint8_t *data, uint16_t len)
+{
+    if (data == NULL || len != 1 || data[0] != MESH_CMD_SEQUENCE_START) {
+        ESP_LOGE(TAG, "Invalid START command data: data=%p, len=%d", data, len);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (esp_mesh_is_root()) {
+        /* Root node: use root function */
+        return sequence_plugin_root_start();
+    } else {
+        /* Child node: start timer if sequence data exists */
+        if (sequence_rhythm == 0 || sequence_length == 0) {
+            ESP_LOGE(TAG, "No sequence data available for START (rhythm=%d, length=%d)", sequence_rhythm, sequence_length);
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        sequence_timer_stop();
+        sequence_pointer = 0;
+
+        esp_err_t err = sequence_timer_start(sequence_rhythm);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to start sequence timer: 0x%x", err);
+            return err;
+        }
+
+        ESP_LOGI(TAG, "Sequence playback started (child node)");
+        return ESP_OK;
+    }
+}
+
+/**
+ * @brief Handle STOP command
+ *
+ * Stops sequence playback. On root node, calls sequence_plugin_root_stop().
+ * On child node, stops timer.
+ *
+ * @param data Command data (data[0] = MESH_CMD_SEQUENCE_STOP)
+ * @param len Data length (must be 1)
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t sequence_handle_stop(uint8_t *data, uint16_t len)
+{
+    if (data == NULL || len != 1 || data[0] != MESH_CMD_SEQUENCE_STOP) {
+        ESP_LOGE(TAG, "Invalid STOP command data: data=%p, len=%d", data, len);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (esp_mesh_is_root()) {
+        /* Root node: use root function */
+        return sequence_plugin_root_stop();
+    } else {
+        /* Child node: stop timer */
+        sequence_timer_stop();
+        ESP_LOGI(TAG, "Sequence playback stopped (child node)");
+        return ESP_OK;
+    }
+}
+
+/**
+ * @brief Handle RESET command
+ *
+ * Resets sequence pointer to 0. On root node, calls sequence_plugin_root_reset().
+ * On child node, resets pointer and restarts timer if active.
+ *
+ * @param data Command data (data[0] = MESH_CMD_SEQUENCE_RESET)
+ * @param len Data length (must be 1)
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t sequence_handle_reset(uint8_t *data, uint16_t len)
+{
+    if (data == NULL || len != 1 || data[0] != MESH_CMD_SEQUENCE_RESET) {
+        ESP_LOGE(TAG, "Invalid RESET command data: data=%p, len=%d", data, len);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (esp_mesh_is_root()) {
+        /* Root node: use root function */
+        return sequence_plugin_root_reset();
+    } else {
+        /* Child node: reset pointer and restart timer if active */
+        sequence_pointer = 0;
+
+        if (sequence_active) {
+            if (sequence_rhythm == 0 || sequence_length == 0) {
+                ESP_LOGE(TAG, "Cannot restart timer: invalid sequence data (rhythm=%d, length=%d)", sequence_rhythm, sequence_length);
+                sequence_timer_stop();  /* Stop timer but don't restart */
+                return ESP_ERR_INVALID_STATE;
+            }
+            sequence_timer_stop();
+            esp_err_t err = sequence_timer_start(sequence_rhythm);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to restart sequence timer: 0x%x", err);
+                return err;
+            }
+        }
+
+        ESP_LOGI(TAG, "Sequence pointer reset to 0 (child node)");
+        return ESP_OK;
+    }
+}
+
+/**
+ * @brief Handle BEAT command
+ *
+ * Updates sequence pointer from BEAT data. Only valid for child nodes.
+ * Root nodes don't receive BEAT commands (they broadcast them).
+ *
+ * @param data Command data (data[0] = MESH_CMD_SEQUENCE_BEAT, data[1] = pointer)
+ * @param len Data length (must be 2)
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t sequence_handle_beat(uint8_t *data, uint16_t len)
+{
+    if (data == NULL || len != 2 || data[0] != MESH_CMD_SEQUENCE_BEAT) {
+        ESP_LOGE(TAG, "Invalid BEAT command data: data=%p, len=%d", data, len);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (esp_mesh_is_root()) {
+        ESP_LOGW(TAG, "Root node received BEAT command (should not happen)");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Child node: update pointer from BEAT data */
+    if (sequence_length == 0) {
+        ESP_LOGE(TAG, "No sequence data available for BEAT (length=0)");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint8_t new_pointer = data[1];
+    uint16_t max_squares = sequence_length * 16;
+
+    if (new_pointer >= max_squares) {
+        ESP_LOGE(TAG, "Invalid BEAT pointer: %d (max: %d)", new_pointer, max_squares - 1);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    sequence_pointer = new_pointer;
+    ESP_LOGD(TAG, "BEAT received - pointer updated to %d", sequence_pointer);
 
     return ESP_OK;
 }

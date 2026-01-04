@@ -17,7 +17,7 @@
 #include "light_neopixel.h"
 #include "mesh_version.h"
 #include "mesh_ota.h"
-#include "plugins.h"
+#include "plugins/plugins.h"
 
 void app_main(void)
 {

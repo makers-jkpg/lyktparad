@@ -24,7 +24,7 @@
 #include "mesh_web.h"
 #include "mesh_commands.h"
 #include "light_neopixel.h"
-#include "node_effects.h"
+#include "plugins/effects/effects_plugin.h"
 #include "light_common_cathode.h"
 #include "config/mesh_config.h"
 #include "mesh_ota.h"
@@ -32,7 +32,7 @@
 #ifdef ROOT_STATUS_LED_GPIO
 #include "root_status_led.h"
 #endif
-#include "node_sequence.h"
+#include "plugins/sequence/sequence_plugin.h"
 #include "mesh_udp_bridge.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -178,7 +178,7 @@ static void heartbeat_timer_cb(void *arg)
      * - Odd heartbeat: LED ON (BLUE default or custom RGB)
      * - Skip LED changes if sequence mode is active (sequence controls LED)
      */
-    if (mode_sequence_root_is_active()) {
+    if (sequence_plugin_root_is_active()) {
         ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - skipping LED change (sequence active)", (unsigned long)cnt);
     } else if (!(cnt % 2)) {
         /* even heartbeat: turn off light */
@@ -418,7 +418,7 @@ void mesh_root_handle_rgb_command(uint8_t r, uint8_t g, uint8_t b)
     set_rgb_led(r, g, b);
 
     /* Stop sequence playback if active */
-    mode_sequence_root_stop();
+    sequence_plugin_root_stop();
 
     ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] RGB command received via mesh: R:%d G:%d B:%d", r, g, b);
 }

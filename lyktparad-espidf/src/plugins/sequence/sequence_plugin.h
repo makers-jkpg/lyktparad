@@ -88,6 +88,11 @@ uint16_t sequence_plugin_root_get_pointer(void);
  */
 bool sequence_plugin_root_is_active(void);
 
+/**
+ * @brief Broadcast BEAT command to all child nodes (root node only)
+ */
+esp_err_t sequence_plugin_root_broadcast_beat(void);
+
 /*******************************************************
  *                Child Node Functions (for mesh_child.c)
  *******************************************************/

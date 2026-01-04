@@ -22,9 +22,9 @@
 #include "mesh_commands.h"
 #include "mesh_udp_bridge.h"
 #include "light_neopixel.h"
-#include "node_sequence.h"
-#include "node_effects.h"
 #include "light_common_cathode.h"
+#include "plugins/effects/effects_plugin.h"
+#include "plugins/sequence/sequence_plugin.h"
 #include "config/mesh_config.h"
 #include "mesh_ota.h"
 #include "plugin_system.h"
@@ -133,7 +133,8 @@ void esp_mesh_p2p_rx_main(void *arg)
                           ((uint32_t)(uint8_t)data.data[4] << 0);
             ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat received from "MACSTR", count:%" PRIu32, MAC2STR(from.addr), hb);
             /* Skip heartbeat LED changes if sequence mode is active (sequence controls LED) */
-            if (mode_sequence_node_is_active()) {
+            const plugin_info_t *sequence_plugin = plugin_get_by_name("sequence");
+            if (sequence_plugin != NULL && sequence_plugin->callbacks.is_active != NULL && sequence_plugin->callbacks.is_active()) {
                 ESP_LOGD(mesh_common_get_tag(), "[NODE ACTION] Heartbeat #%lu - skipping LED change (sequence active)", (unsigned long)hb);
             } else if (!(hb%2)) {
                 /* even heartbeat: turn off light */
@@ -154,18 +155,15 @@ void esp_mesh_p2p_rx_main(void *arg)
             }
 
         } else if (data.proto == MESH_PROTO_BIN && data.data[0] == MESH_CMD_EFFECT) {
-
-            /* Prepare effect parameters structure */
-            struct effect_params_t *effect_params = (struct effect_params_t *)data.data;
-
-            uint8_t effect_id = data.data[1];
-            ESP_LOGI(MESH_TAG, "[NODE ACTION] EFFECT command received from "MACSTR", effect_id:%d param1:%d param2:%d",
-                     MAC2STR(from.addr), effect_params->effect_id);
-            /* For simplicity, we only handle strobe effect here */
-            if (effect_id == EFFECT_STROBE || effect_id == EFFECT_FADE) {
-                play_effect(effect_params);
+            /* Route MESH_CMD_EFFECT to effects plugin (backward compatibility) */
+            const plugin_info_t *effects_plugin = plugin_get_by_name("effects");
+            if (effects_plugin != NULL && effects_plugin->callbacks.command_handler != NULL) {
+                esp_err_t plugin_err = effects_plugin->callbacks.command_handler(MESH_CMD_EFFECT, data.data, data.size);
+                if (plugin_err != ESP_OK) {
+                    ESP_LOGE(MESH_TAG, "[NODE ACTION] Effects plugin command handler returned error: %s", esp_err_to_name(plugin_err));
+                }
             } else {
-                ESP_LOGE(MESH_TAG, "[NODE ACTION] Unsupported effect_id:%d", effect_id);
+                ESP_LOGE(MESH_TAG, "[NODE ACTION] Effects plugin not found or has no command handler");
             }
 
         } else if (data.proto == MESH_PROTO_BIN && data.size == 4 && data.data[0] == MESH_CMD_SET_RGB) {
@@ -175,7 +173,7 @@ void esp_mesh_p2p_rx_main(void *arg)
             uint8_t b = data.data[3];
             ESP_LOGI(MESH_TAG, "[NODE ACTION] RGB command received from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
             /* Stop sequence playback if active */
-            mode_sequence_node_stop();
+            sequence_plugin_node_stop();
             /* Store RGB values for use in heartbeat handler */
             last_rgb_r = r;
             last_rgb_g = g;
@@ -186,34 +184,44 @@ void esp_mesh_p2p_rx_main(void *arg)
                 ESP_LOGE(mesh_common_get_tag(), "[RGB] failed to set LED: 0x%x", err);
             }
         } else if (data.proto == MESH_PROTO_BIN && data.size >= 3 && data.data[0] == MESH_CMD_SEQUENCE) {
-            /* detect SEQUENCE command: variable length (cmd + rhythm + length + color data) */
-            /* Extract length to validate size */
-
-            uint8_t num_rows = data.data[2];
-            if (num_rows >= 1 && num_rows <= 16) {
-                uint16_t expected_size = sequence_mesh_cmd_size(num_rows);
-                if (data.size == expected_size) {
-                    err = mode_sequence_node_handle_command(MESH_CMD_SEQUENCE, data.data, data.size);
+            /* Route MESH_CMD_SEQUENCE to sequence plugin (backward compatibility) */
+            const plugin_info_t *sequence_plugin = plugin_get_by_name("sequence");
+            if (sequence_plugin != NULL && sequence_plugin->callbacks.command_handler != NULL) {
+                uint8_t num_rows = data.data[2];
+                if (num_rows >= 1 && num_rows <= 16) {
+                    uint16_t expected_size = sequence_mesh_cmd_size(num_rows);
+                    if (data.size == expected_size) {
+                        err = sequence_plugin->callbacks.command_handler(MESH_CMD_SEQUENCE, data.data, data.size);
+                        if (err != ESP_OK) {
+                            ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] plugin command handler returned error: 0x%x", err);
+                        }
+                    } else {
+                        ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] size mismatch: got %d, expected %d for %d rows", data.size, expected_size, num_rows);
+                        err = ESP_ERR_INVALID_SIZE;
+                    }
                 } else {
-                    ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] size mismatch: got %d, expected %d for %d rows", data.size, expected_size, num_rows);
-                    err = ESP_ERR_INVALID_SIZE;
+                    ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] invalid length: %d (must be 1-16)", num_rows);
+                    err = ESP_ERR_INVALID_ARG;
                 }
             } else {
-                ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] invalid length: %d (must be 1-16)", num_rows);
-                err = ESP_ERR_INVALID_ARG;
-            }
-            if (err != ESP_OK) {
-                ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] failed to handle command: 0x%x", err);
+                ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] sequence plugin not found or has no command handler");
+                err = ESP_ERR_NOT_FOUND;
             }
         } else if (data.proto == MESH_PROTO_BIN &&
                    ((data.size == 1 && (data.data[0] == MESH_CMD_SEQUENCE_START ||
                                         data.data[0] == MESH_CMD_SEQUENCE_STOP ||
                                         data.data[0] == MESH_CMD_SEQUENCE_RESET)) ||
                     (data.size == 2 && data.data[0] == MESH_CMD_SEQUENCE_BEAT))) {
-            /* Control command: START/STOP/RESET are single-byte, BEAT is 2-byte (command + 1-byte pointer) */
-            err = mode_sequence_node_handle_control(data.data[0], data.data, data.size);
-            if (err != ESP_OK) {
-                ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE CONTROL] failed to handle command 0x%02x: 0x%x", data.data[0], err);
+            /* Route sequence control commands to sequence plugin (backward compatibility) */
+            const plugin_info_t *sequence_plugin = plugin_get_by_name("sequence");
+            if (sequence_plugin != NULL && sequence_plugin->callbacks.command_handler != NULL) {
+                err = sequence_plugin->callbacks.command_handler(data.data[0], data.data, data.size);
+                if (err != ESP_OK) {
+                    ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE CONTROL] plugin command handler returned error 0x%02x: 0x%x", data.data[0], err);
+                }
+            } else {
+                ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE CONTROL] sequence plugin not found or has no command handler");
+                err = ESP_ERR_NOT_FOUND;
             }
         } else if (data.proto == MESH_PROTO_BIN && data.size >= 1) {
             uint8_t cmd = data.data[0];
@@ -231,8 +239,8 @@ void esp_mesh_p2p_rx_main(void *arg)
                     /* Extract port from payload (convert from network byte order) */
                     uint16_t server_port = ntohs(payload->port);
 
-                    /* Validate port range */
-                    if (server_port == 0 || server_port > 65535) {
+                    /* Validate port range (port 0 is invalid) */
+                    if (server_port == 0) {
                         ESP_LOGW(MESH_TAG, "[WEBSERVER IP] Invalid port: %d", server_port);
                     } else {
                         /* Extract timestamp if present (optional, 10 bytes total) */
