@@ -1,6 +1,6 @@
 # Sequence Mode User Guide
 
-**Last Updated:** 2025-01-15
+**Last Updated:** 2025-12-30
 
 ## Table of Contents
 
@@ -319,18 +319,18 @@ def rainbow_gradient(num_rows=16):
     """Generate a smooth rainbow gradient."""
     lines = []
     total_squares = num_rows * 16
-    
+
     for i in range(total_squares):
         index = i + 1
         # Map position to hue (0-360 degrees)
         hue = (i / total_squares) * 360
-        
+
         # Convert HSV to RGB (simplified, 4-bit output)
         # Using a simple approximation
         h = hue / 60
         c = 15  # Maximum saturation
         x = int(c * (1 - abs((h % 2) - 1)))
-        
+
         if h < 1:
             r, g, b = c, x, 0
         elif h < 2:
@@ -343,9 +343,9 @@ def rainbow_gradient(num_rows=16):
             r, g, b = x, 0, c
         else:
             r, g, b = c, 0, x
-        
+
         lines.append(f"{index};{r};{g};{b}")
-    
+
     return "\n".join(lines)
 
 # Generate rainbow
@@ -411,7 +411,7 @@ def spiral_pattern(num_rows=8):
     lines = []
     center_row = num_rows / 2
     center_col = 8
-    
+
     for row in range(num_rows):
         for col in range(16):
             index = row * 16 + col + 1
@@ -420,13 +420,13 @@ def spiral_pattern(num_rows=8):
             dy = row - center_row
             distance = math.sqrt(dx*dx + dy*dy)
             angle = math.atan2(dy, dx)
-            
+
             # Create spiral effect
             spiral_value = int((distance + angle * 2) * 2) % 16
             r = spiral_value
             g = (spiral_value + 5) % 16
             b = (spiral_value + 10) % 16
-            
+
             lines.append(f"{index};{r};{g};{b}")
     return "\n".join(lines)
 
@@ -622,5 +622,5 @@ Use the Export function to get CSV data, then share the CSV file. Others can imp
 
 Example patterns are located in `docs/example-patterns/`:
 - `police.csv` - Simple alternating pattern
-- `SOS.csv` - Morse code SOS pattern  
+- `SOS.csv` - Morse code SOS pattern
 - `RGB-rainbow.csv` - Full rainbow gradient

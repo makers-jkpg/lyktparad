@@ -1,6 +1,6 @@
 # OTA Downgrade Prevention Implementation
 
-**Last Updated:** 2025-01-16
+**Last Updated:** 2026-01-02
 
 ## Table of Contents
 
@@ -76,7 +76,7 @@ The version format must match "MAJOR.MINOR.PATCH" format expected by the version
 
 **Timing**: After `esp_ota_end()` (HTTP) or `esp_https_ota_finish()` (HTTPS) succeeds
 
-**Action on Downgrade**: 
+**Action on Downgrade**:
 - HTTP: Abort OTA handle, reset state, return `ESP_ERR_INVALID_VERSION`
 - HTTPS: Return `ESP_ERR_INVALID_VERSION` (partition already finalized, cannot abort)
 
@@ -188,7 +188,7 @@ if (err == ESP_ERR_INVALID_VERSION) {
 
 **Scenario**: `esp_ota_get_partition_description()` fails
 
-**Handling**: 
+**Handling**:
 - Log error with function name
 - Return `ESP_ERR_INVALID_ARG`
 - Fail-safe: reject update (cannot verify version, assume unsafe)

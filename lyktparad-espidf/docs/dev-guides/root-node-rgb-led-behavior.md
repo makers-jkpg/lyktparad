@@ -1,6 +1,6 @@
 # Root Node RGB LED Behavior and Status LED - Development Guide
 
-**Last Updated:** 2025-01-15
+**Last Updated:** 2026-01-04
 
 ## Table of Contents
 
@@ -269,41 +269,77 @@ When a sequence is active, heartbeat-based LED changes are skipped. The sequence
 
 ### Purpose
 
-The root status LED is a separate single-color LED that indicates whether the current node is the root node. This LED is independent of RGB LED behavior and provides clear visual identification of the root node.
+The root status LED is an **optional** separate single-color LED that indicates root node status with different blinking patterns based on router connection status and mesh node count. This LED is independent of RGB LED behavior and provides clear visual identification of the root node's network status.
 
-**Behavior**:
-- **ON**: Node is the root node
-- **OFF**: Node is a non-root node (child node)
-- **Updates Immediately**: LED state updates instantly when mesh role changes
+**Feature Status**: Optional feature, **disabled by default** (no code compiled if `ROOT_STATUS_LED_GPIO` is undefined)
+
+**Behavior** (when enabled):
+- **Blinking Patterns**: Different patterns indicate router connection status and node count
+- **Updates Automatically**: LED pattern updates when router connection or node count changes
+- **Child Nodes**: LED is OFF (no blinking)
+
+### Blinking Patterns
+
+When enabled, the LED blinks in different patterns based on the root node's status:
+
+1. **STARTUP** (250ms ON - 750ms OFF):
+   - Router not connected, no child nodes
+   - Visual: Single blink with long pause
+
+2. **ROUTER_ONLY** (125ms ON - 125ms OFF - 125ms ON - 625ms OFF):
+   - Router connected, no child nodes
+   - Visual: Two short blinks (double blink), then longer pause
+
+3. **NODES_ONLY** (125ms ON - 375ms OFF - 125ms ON - 375ms OFF):
+   - No router connection, but 1+ child nodes connected
+   - Visual: Two blinks with medium pause between (slower double blink)
+
+4. **ROUTER_AND_NODES** (125ms ON - 125ms OFF × 4):
+   - Router connected AND 1+ child nodes connected
+   - Visual: Four rapid blinks (quadruple blink)
+
+5. **OFF** (LED stays OFF):
+   - Child node (not root)
+   - Visual: LED OFF (no blinking)
+
+**Pattern Determination Logic**:
+- Not root → OFF
+- Root, router connected, node_count == 0 → ROUTER_ONLY
+- Root, router not connected, node_count > 0 → NODES_ONLY
+- Root, router connected, node_count > 0 → ROUTER_AND_NODES
+- Root, router not connected, node_count == 0 → STARTUP
+
+**All patterns use 1-second (1000ms) total cycle time**
 
 ### GPIO Configuration
 
-The status LED GPIO pin is configurable via `mesh_device_config.h`:
+The status LED is **optional and disabled by default**. To enable it, define `ROOT_STATUS_LED_GPIO` in `mesh_device_config.h`:
 
 **Configuration File**: `lyktparad-espidf/include/config/mesh_device_config.h.example`
 
 ```c
-#define ROOT_STATUS_LED_GPIO      3
+// #define ROOT_STATUS_LED_GPIO      3  // Optional: GPIO pin for root status LED (disabled by default)
 ```
 
-**Default**: GPIO 3 (if not defined in config)
+**To Enable**:
+1. Copy `mesh_device_config.h.example` to `mesh_device_config.h`
+2. Uncomment and set `ROOT_STATUS_LED_GPIO` to your desired GPIO pin
+3. Rebuild the project
 
-**Implementation**: `lyktparad-espidf/src/root_status_led.c`
+**To Disable** (default):
+- Leave `ROOT_STATUS_LED_GPIO` undefined (commented out)
+- No code is compiled (zero overhead)
 
-```24:27:lyktparad-espidf/src/root_status_led.c
-/* GPIO pin for root status LED - configurable via mesh_device_config.h */
-#ifndef ROOT_STATUS_LED_GPIO
-#define ROOT_STATUS_LED_GPIO 3  /* Default GPIO 3 */
-#endif
-```
+**If Undefined**: Feature is completely disabled, no code compiled
 
 ### Module Structure
 
-The root status LED module provides three main functions:
+The root status LED module provides four main functions (when enabled):
 
-1. **`root_status_led_init()`**: Initialize GPIO and set initial state
-2. **`root_status_led_set_root(bool is_root)`**: Set LED state based on root status
+1. **`root_status_led_init()`**: Initialize GPIO and start blinking with STARTUP pattern if root
+2. **`root_status_led_set_root(bool is_root)`**: Set LED pattern based on root status (calls `root_status_led_update_status()` if root)
 3. **`root_status_led_update()`**: Update LED state based on current mesh role
+4. **`root_status_led_update_status()`**: Update blinking pattern based on router connection and node count
 
 **Header File**: `lyktparad-espidf/include/root_status_led.h`
 

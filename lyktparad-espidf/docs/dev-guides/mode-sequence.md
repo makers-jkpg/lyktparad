@@ -1,6 +1,6 @@
 # Sequence Mode Developer Guide
 
-**Last Updated:** 2025-01-15
+**Last Updated:** 2025-12-30
 
 ## Table of Contents
 
@@ -208,7 +208,7 @@ static inline uint16_t sequence_mesh_cmd_size(uint8_t num_rows) {
 **Steps**:
 
 1. **Validate inputs**: Check pointers are not NULL
-2. **Validate square index**: 
+2. **Validate square index**:
    - Child node: `square_index < (sequence_length * 16)` (correct)
    - Root node: `square_index >= 256` (hardcoded, should use `sequence_length * 16`)
 3. **Calculate pair index**: `pair_index = square_index / 2`
@@ -235,7 +235,7 @@ static inline uint16_t sequence_mesh_cmd_size(uint8_t num_rows) {
 
 **Algorithm**: `8bit_value = 4bit_value * 16`
 
-**Rationale**: 
+**Rationale**:
 - 4-bit range: 0-15 (16 levels)
 - 8-bit range: 0-255 (256 levels)
 - Scaling factor: 255/15 = 17, but using 16 for simplicity
@@ -309,7 +309,7 @@ if ((sequence_pointer % 16) == 0 && sequence_pointer < max_squares) {
 
 **Signature**:
 ```c
-esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_rows, 
+esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_rows,
                                                   uint8_t *color_data, uint16_t color_data_len);
 ```
 
@@ -933,7 +933,7 @@ sequenceDiagram
     Root->>Root: Timer callback (every beat)
     Root->>Root: Increment pointer
     Root->>Root: Check row boundary?
-    
+
     alt At row boundary
         Root->>Mesh: Broadcast BEAT(pointer)
         Mesh->>Child1: BEAT(pointer)
@@ -943,7 +943,7 @@ sequenceDiagram
         Child2->>Child2: Update pointer
         Child2->>Child2: Reset timer
     end
-    
+
     Root->>Root: Extract color, update LED
     Child1->>Child1: Extract color, update LED
     Child2->>Child2: Extract color, update LED

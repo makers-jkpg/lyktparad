@@ -110,16 +110,26 @@
  *                Root Status LED Configuration
  *******************************************************/
 
-/* Root Status LED GPIO Pin - The GPIO pin connected to the root status LED
- * This is a single-color LED (non-RGB) that indicates root node status:
- * - ON when the node is the root node
- * - OFF when the node is a non-root node
- * Default: GPIO 3
+/* Root Status LED GPIO Pin - Optional single-color LED for root node status indication
+ *
+ * This is an OPTIONAL feature that is DISABLED BY DEFAULT (not set in this example).
+ * If undefined, root status LED is disabled (no code compiled - zero overhead).
+ *
+ * When enabled, the LED blinks in different patterns based on router connection status and mesh node count:
+ * - STARTUP (250ms ON - 750ms OFF): Router not connected, no nodes
+ * - ROUTER_ONLY (125ms ON - 125ms OFF - 125ms ON - 625ms OFF): Router connected, no nodes
+ * - NODES_ONLY (125ms ON - 375ms OFF - 125ms ON - 375ms OFF): No router, 1+ nodes connected
+ * - ROUTER_AND_NODES (125ms ON - 125ms OFF × 4): Router connected, 1+ nodes connected
+ * - OFF: Child node (not root)
+ *
+ * To enable this feature, uncomment and set the GPIO pin:
+ * #define ROOT_STATUS_LED_GPIO      3
+ *
  * Valid range: Most GPIO pins (check ESP32 datasheet for restrictions)
- * Change this if your root status LED is connected to a different pin
  * Note: Some GPIOs may have restrictions (e.g., GPIO 6-11 are typically flash/PSRAM)
  * Note: This LED is separate from the RGB LEDs used for mesh communication
+ * Note: All blinking patterns use 1-second (1000ms) total cycle time
  */
-#define ROOT_STATUS_LED_GPIO      3
+// #define ROOT_STATUS_LED_GPIO      3  // Optional: GPIO pin for root status LED (disabled by default)
 
 #endif /* __MESH_DEVICE_CONFIG_H__ */
