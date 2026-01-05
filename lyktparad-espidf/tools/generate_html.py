@@ -120,6 +120,299 @@ def read_file_safe(file_path):
         return None
 
 
+def format_plugin_display_name(plugin_name):
+    """
+    Convert plugin directory name to display name.
+
+    Examples:
+    - "effects" -> "Effects"
+    - "sequence" -> "Sequence"
+    - "my_plugin" -> "My Plugin"
+    """
+    if not plugin_name:
+        return ""
+
+    # Replace underscores with spaces
+    display_name = plugin_name.replace('_', ' ')
+
+    # Capitalize first letter of each word
+    words = display_name.split()
+    display_name = ' '.join(word.capitalize() for word in words)
+
+    return display_name
+
+
+def generate_dropdown_html(plugins):
+    """
+    Generate dropdown HTML for plugin selection.
+
+    Returns HTML string for <select> element with plugin options.
+    """
+    if not plugins:
+        return ""
+
+    options = []
+    options.append('<option value="">Select Plugin...</option>')
+
+    for plugin in plugins:
+        display_name = format_plugin_display_name(plugin['name'])
+        # Escape HTML special characters in plugin name
+        plugin_name_escaped = plugin['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+        display_name_escaped = display_name.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        options.append(f'<option value="{plugin_name_escaped}">{display_name_escaped}</option>')
+
+    # Return just the select element - container div is in template
+    dropdown_html = f'''<select id="plugin-selector" class="plugin-selector" aria-label="Select plugin">
+{chr(10).join(options)}
+</select>'''
+
+    return dropdown_html
+
+
+def generate_layout_css():
+    """
+    Generate CSS for page layout with fixed header and plugin selection.
+
+    Returns CSS string for:
+    - .page-header (fixed, 150px height)
+    - .page-title (title styling)
+    - .plugin-dropdown-container (dropdown positioning)
+    - .plugin-selector (dropdown styling)
+    - .page-content (content area with margin-top)
+    - .plugin-section (hidden by default)
+    - .plugin-section.active (visible)
+    - Responsive design
+    """
+    css = '''
+/* Plugin Selection Dropdown Layout Styles */
+.page-header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 150px;
+    background-color: #2c3e50;
+    color: white;
+    padding: 20px;
+    z-index: 1000;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.page-header > .page-title {
+    font-size: 1.5em;
+    font-weight: bold;
+    margin: 0;
+    margin-bottom: 10px;
+    flex: 0 1 auto;
+}
+
+.page-header > .connection-status {
+    margin-top: 0;
+    margin-left: 20px;
+    flex: 0 0 auto;
+}
+
+.plugin-dropdown-container {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+    flex: 0 0 auto;
+}
+
+.plugin-selector {
+    padding: 8px 12px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-size: 16px;
+    background: white;
+    color: #333;
+    cursor: pointer;
+    min-width: 180px;
+}
+
+.plugin-selector:hover {
+    border-color: #667eea;
+}
+
+.plugin-selector:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.page-content {
+    margin-top: 150px;
+    min-height: calc(100vh - 150px);
+    padding: 20px;
+    overflow-y: auto;
+}
+
+.plugin-section {
+    display: none;
+}
+
+.plugin-section.active {
+    display: block;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .page-header {
+        flex-direction: column;
+        align-items: flex-start;
+        height: auto;
+        min-height: 150px;
+        padding: 15px;
+    }
+
+    .page-header > .page-title {
+        font-size: 1.2em;
+        margin-bottom: 10px;
+        flex: 1 1 100%;
+    }
+
+    .page-header > .connection-status {
+        margin-left: 0;
+        margin-top: 10px;
+        width: 100%;
+    }
+
+    .plugin-dropdown-container {
+        width: 100%;
+        margin-left: 0;
+        margin-top: 10px;
+    }
+
+    .plugin-selector {
+        width: 100%;
+    }
+
+    .page-content {
+        margin-top: 150px;
+        min-height: calc(100vh - 150px);
+    }
+}
+
+@media (max-width: 480px) {
+    .page-header > .page-title {
+        font-size: 1em;
+    }
+
+    .page-header {
+        padding: 10px;
+    }
+}
+'''
+    return css
+
+
+def generate_selection_js(plugins):
+    """
+    Generate JavaScript for plugin selection functionality.
+
+    Returns JavaScript string that:
+    - Initializes plugin selector on DOM ready
+    - Handles dropdown change events
+    - Shows/hides plugin sections
+    - Persists selection in localStorage
+    """
+    if not plugins:
+        return ""
+
+    # Create list of plugin names for JavaScript
+    plugin_names_js = ', '.join(f'"{plugin["name"].replace("\\", "\\\\").replace('"', '\\"')}"' for plugin in plugins)
+
+    js = f'''
+(function() {{
+    'use strict';
+
+    var plugins = [{plugin_names_js}];
+
+    var PluginSelector = {{
+        init: function() {{
+            var selector = document.getElementById('plugin-selector');
+            if (!selector) {{
+                return;
+            }}
+
+            // Load saved selection from localStorage
+            var savedSelection = null;
+            try {{
+                savedSelection = localStorage.getItem('selectedPlugin');
+            }} catch (e) {{
+                // localStorage not available, ignore
+            }}
+
+            // Set initial selection
+            var initialSelection = savedSelection || (plugins.length > 0 ? plugins[0] : '');
+            if (initialSelection && this.isValidPlugin(initialSelection)) {{
+                selector.value = initialSelection;
+                this.selectPlugin(initialSelection);
+            }}
+
+            // Add change event listener
+            selector.addEventListener('change', function(e) {{
+                var pluginName = e.target.value;
+                PluginSelector.selectPlugin(pluginName);
+
+                // Save to localStorage
+                try {{
+                    if (pluginName) {{
+                        localStorage.setItem('selectedPlugin', pluginName);
+                    }} else {{
+                        localStorage.removeItem('selectedPlugin');
+                    }}
+                }} catch (e) {{
+                    // localStorage not available, ignore
+                }}
+            }});
+        }},
+
+        isValidPlugin: function(pluginName) {{
+            return plugins.indexOf(pluginName) !== -1;
+        }},
+
+        selectPlugin: function(pluginName) {{
+            // Hide all plugin sections
+            var sections = document.querySelectorAll('.plugin-section');
+            sections.forEach(function(section) {{
+                section.classList.remove('active');
+                section.style.display = 'none';
+            }});
+
+            // Show selected plugin section
+            // Note: pluginName is unescaped (from select value), but data-plugin-name
+            // attribute may be HTML-escaped. Use getAttribute() which returns unescaped value.
+            if (pluginName) {{
+                for (var i = 0; i < sections.length; i++) {{
+                    var section = sections[i];
+                    var sectionPluginName = section.getAttribute('data-plugin-name');
+                    if (sectionPluginName === pluginName) {{
+                        section.classList.add('active');
+                        section.style.display = 'block';
+                        break;
+                    }}
+                }}
+            }}
+        }}
+    }};
+
+    // Initialize on DOM ready
+    if (document.readyState === 'loading') {{
+        document.addEventListener('DOMContentLoaded', function() {{
+            PluginSelector.init();
+        }});
+    }} else {{
+        PluginSelector.init();
+    }}
+}})();
+'''
+    return js
+
+
 def generate_html_for_embedded(template_file, plugins_dir, output_file):
     """
     Generate HTML for embedded webserver (C string literal format).
@@ -134,6 +427,15 @@ def generate_html_for_embedded(template_file, plugins_dir, output_file):
 
     # Collect plugin files
     plugins = collect_plugin_files(plugins_dir)
+
+    # Generate dropdown HTML
+    dropdown_html = generate_dropdown_html(plugins)
+
+    # Generate layout CSS
+    layout_css = generate_layout_css()
+
+    # Generate selection JavaScript
+    selection_js = generate_selection_js(plugins)
 
     # Collect plugin CSS and JS content
     plugin_css_content = []
@@ -159,11 +461,28 @@ def generate_html_for_embedded(template_file, plugins_dir, output_file):
         if plugin['html_file']:
             html_content = read_file_safe(plugin['html_file'])
             if html_content:
-                # Wrap in section with plugin class
-                plugin_html_sections.append(f'<section class="plugin-section plugin-{plugin["name"]}">{html_content}</section>')
+                # Wrap in section with plugin class and data attribute
+                # Escape HTML special characters for attribute value
+                plugin_name_escaped = plugin['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+                plugin_html_sections.append(f'<section class="plugin-section plugin-{plugin["name"]}" data-plugin-name="{plugin_name_escaped}">{html_content}</section>')
 
     # Replace placeholders in template
     html_content = template_content
+
+    # Replace {{PAGE_TITLE}} placeholder
+    if '{{PAGE_TITLE}}' in html_content:
+        html_content = html_content.replace('{{PAGE_TITLE}}', 'MAKERS JÖNKÖPING LJUSPARAD 2026')
+
+    # Replace {{PLUGIN_DROPDOWN}} placeholder
+    if '{{PLUGIN_DROPDOWN}}' in html_content:
+        html_content = html_content.replace('{{PLUGIN_DROPDOWN}}', dropdown_html)
+
+    # Replace {{PLUGIN_LAYOUT_CSS}} placeholder (insert in <style> tag)
+    if '{{PLUGIN_LAYOUT_CSS}}' in html_content:
+        html_content = html_content.replace('{{PLUGIN_LAYOUT_CSS}}', layout_css)
+    elif layout_css:
+        # If no placeholder, insert before </style>
+        html_content = re.sub(r'(</style>)', layout_css + r'\n\1', html_content, count=1)
 
     # Replace {{PLUGIN_CSS}} placeholder (insert before </style>)
     if '{{PLUGIN_CSS}}' in html_content:
@@ -184,6 +503,13 @@ def generate_html_for_embedded(template_file, plugins_dir, output_file):
         html_insert = '\n'.join(plugin_html_sections)
         # Insert before </body> (safer fallback)
         html_content = re.sub(r'(</body>)', html_insert + r'\n\1', html_content, count=1)
+
+    # Replace {{PLUGIN_SELECTION_JS}} placeholder (insert before </script>)
+    if '{{PLUGIN_SELECTION_JS}}' in html_content:
+        html_content = html_content.replace('{{PLUGIN_SELECTION_JS}}', selection_js)
+    elif selection_js:
+        # If no placeholder, insert before </script>
+        html_content = re.sub(r'(</script>)', selection_js + r'\n\1', html_content, count=1)
 
     # Replace {{PLUGIN_JS}} placeholder (insert before </script>)
     if '{{PLUGIN_JS}}' in html_content:
@@ -250,6 +576,15 @@ def generate_html_for_external(template_file, plugins_dir, output_file):
     # Collect plugin files
     plugins = collect_plugin_files(plugins_dir)
 
+    # Generate dropdown HTML
+    dropdown_html = generate_dropdown_html(plugins)
+
+    # Generate layout CSS
+    layout_css = generate_layout_css()
+
+    # Generate selection JavaScript
+    selection_js = generate_selection_js(plugins)
+
     # Generate plugin CSS links
     plugin_css_links = []
     for plugin in plugins:
@@ -274,10 +609,31 @@ def generate_html_for_external(template_file, plugins_dir, output_file):
         if plugin['html_file']:
             html_content = read_file_safe(plugin['html_file'])
             if html_content:
-                plugin_html_sections.append(f'    <section class="plugin-section plugin-{plugin["name"]}">{html_content}</section>')
+                # Add data-plugin-name attribute
+                # Escape HTML special characters for attribute value
+                plugin_name_escaped = plugin['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+                plugin_html_sections.append(f'    <section class="plugin-section plugin-{plugin["name"]}" data-plugin-name="{plugin_name_escaped}">{html_content}</section>')
 
     # Replace placeholders in template
     html_content = template_content
+
+    # Replace {{PAGE_TITLE}} placeholder
+    if '{{PAGE_TITLE}}' in html_content:
+        html_content = html_content.replace('{{PAGE_TITLE}}', 'MAKERS JÖNKÖPING LJUSPARAD 2026')
+
+    # Replace {{PLUGIN_DROPDOWN}} placeholder
+    if '{{PLUGIN_DROPDOWN}}' in html_content:
+        html_content = html_content.replace('{{PLUGIN_DROPDOWN}}', dropdown_html)
+
+    # Replace {{PLUGIN_LAYOUT_CSS}} placeholder (insert in <head> or <style> tag)
+    if '{{PLUGIN_LAYOUT_CSS}}' in html_content:
+        html_content = html_content.replace('{{PLUGIN_LAYOUT_CSS}}', layout_css)
+    elif layout_css:
+        # If no placeholder, try to insert in <head> as <style> tag
+        if '</head>' in html_content:
+            html_content = re.sub(r'(</head>)', f'    <style>{layout_css}\n    </style>\n\\1', html_content, count=1)
+        elif '</style>' in html_content:
+            html_content = re.sub(r'(</style>)', layout_css + r'\n\1', html_content, count=1)
 
     # Replace {{PLUGIN_CSS}} placeholder (insert in <head> after main CSS)
     if '{{PLUGIN_CSS}}' in html_content:
@@ -296,6 +652,16 @@ def generate_html_for_external(template_file, plugins_dir, output_file):
         # If no placeholder, insert before </body> but after main content
         html_insert = '\n'.join(plugin_html_sections)
         html_content = re.sub(r'(</body>)', html_insert + r'\n\1', html_content, count=1)
+
+    # Replace {{PLUGIN_SELECTION_JS}} placeholder (insert before </body>)
+    if '{{PLUGIN_SELECTION_JS}}' in html_content:
+        html_content = html_content.replace('{{PLUGIN_SELECTION_JS}}', selection_js)
+    elif selection_js:
+        # If no placeholder, insert as <script> tag before </body>
+        if '</body>' in html_content:
+            html_content = re.sub(r'(</body>)', f'    <script>{selection_js}\n    </script>\n\\1', html_content, count=1)
+        elif '</script>' in html_content:
+            html_content = re.sub(r'(</script>)', selection_js + r'\n\1', html_content, count=1)
 
     # Replace {{PLUGIN_JS}} placeholder (insert before </body>)
     if '{{PLUGIN_JS}}' in html_content:

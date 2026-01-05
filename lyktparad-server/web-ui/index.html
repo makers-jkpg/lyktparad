@@ -6,19 +6,26 @@
     <title>Lyktparad Mesh Control</title>
     <link rel="stylesheet" href="css/styles.css">
     {{PLUGIN_CSS}}
+    <style>
+        {{PLUGIN_LAYOUT_CSS}}
+    </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>Lyktparad Mesh Control</h1>
-            <div id="connection-status-indicator" class="connection-status">
-                <span class="connection-status-icon" id="connection-status-icon">●</span>
-                <span class="connection-status-text" id="connection-status-text">Checking connection...</span>
-                <span class="connection-status-details" id="connection-status-details"></span>
-            </div>
-        </header>
+    <div class="page-header">
+        <h1 class="page-title">{{PAGE_TITLE}}</h1>
+        <div class="plugin-dropdown-container">
+            {{PLUGIN_DROPDOWN}}
+        </div>
+        <div id="connection-status-indicator" class="connection-status">
+            <span class="connection-status-icon" id="connection-status-icon">●</span>
+            <span class="connection-status-text" id="connection-status-text">Checking connection...</span>
+            <span class="connection-status-details" id="connection-status-details"></span>
+        </div>
+    </div>
 
-        <main>
+    <div class="page-content">
+        <div class="container">
+            <main>
             <!-- Mesh Control Section -->
             <section id="mesh-control-section" class="section">
                 <h2>Mesh Control</h2>
@@ -453,13 +460,16 @@
             </section>
 
             {{PLUGIN_HTML}}
-        </main>
+            </main>
+        </div>
     </div>
 
     <script src="js/app.js"></script>
     <script src="js/ota-api.js"></script>
     <script src="js/ota-ui.js"></script>
-    {{PLUGIN_HTML}}
+    <script>
+        {{PLUGIN_SELECTION_JS}}
+    </script>
     {{PLUGIN_JS}}
 </body>
 </html>
