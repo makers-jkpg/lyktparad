@@ -17,12 +17,16 @@
 #include "light_neopixel.h"
 #include "mesh_version.h"
 #include "mesh_ota.h"
+#include "plugins/plugins.h"
 
 void app_main(void)
 {
     /* Initialize LED strip first */
     ESP_ERROR_CHECK(mesh_light_init());
     ESP_LOGI(mesh_common_get_tag(), "[STARTUP] LED strip initialized");
+
+    /* Initialize plugins (before mesh starts) */
+    plugins_init();
 
     /* Initialize common mesh functionality (includes NVS initialization) */
     ESP_ERROR_CHECK(mesh_common_init());

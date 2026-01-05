@@ -34,6 +34,30 @@
 #define  MESH_CMD_EFFECT         (0x09)  /* Effect command */
 
 /*******************************************************
+ *                Command ID Allocation
+ *******************************************************/
+
+/* Command ID allocation strategy:
+ *
+ * 0x01-0x0F: Core functionality commands (15 commands)
+ *   - 0x01: MESH_CMD_HEARTBEAT
+ *   - 0x02: MESH_CMD_LIGHT_ON_OFF
+ *   - 0x03: MESH_CMD_SET_RGB
+ *   - 0x04-0x08: Sequence commands (MESH_CMD_SEQUENCE, START, STOP, RESET, BEAT)
+ *   - 0x09: MESH_CMD_EFFECT
+ *   - 0x0A-0x0F: Reserved for future core commands
+ *
+ * 0x10-0xEF: Plugin commands (224 plugins maximum)
+ *   - Command IDs are automatically assigned during plugin registration
+ *   - Plugins register themselves and receive command IDs sequentially starting from 0x10
+ *   - Command IDs are assigned at initialization time, before mesh starts
+ *   - See plugin_system.h for plugin registration API
+ *
+ * 0xF0-0xFF: Internal mesh use (16 commands)
+ *   - Reserved for internal mesh operations (OTA, web server IP broadcast, etc.)
+ */
+
+/*******************************************************
  *                Mesh Command Payload Structures
  *******************************************************/
 

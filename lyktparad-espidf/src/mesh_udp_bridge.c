@@ -17,7 +17,7 @@
 #include "mesh_common.h"
 #include "mesh_version.h"
 #include "config/mesh_config.h"
-#include "node_sequence.h"
+#include "plugins/sequence/sequence_plugin.h"
 #include "mesh_ota.h"
 #include "light_neopixel.h"
 #include "esp_log.h"
@@ -40,12 +40,9 @@
     #define MDNS_AVAILABLE 0
     /* Stub type definitions */
     typedef struct {
-        int count;
-        struct {
-            char *key;
-            char *value;
-        } *items;
-    } mdns_txt_t;
+        const char *key;
+        const char *value;
+    } mdns_txt_item_t;
     typedef struct {
         struct {
             struct {
@@ -58,7 +55,8 @@
             } addr;
         } *addr;
         uint16_t port;
-        mdns_txt_t *txt;
+        mdns_txt_item_t *txt;
+        size_t txt_count;
     } mdns_result_t;
     /* Stub function implementations */
     static inline esp_err_t mdns_init(void) { return ESP_ERR_NOT_SUPPORTED; }
@@ -752,9 +750,9 @@ esp_err_t mesh_udp_bridge_discover_server(uint32_t timeout_ms, char *server_ip, 
 
     /* Parse TXT records for protocol and UDP port */
     bool protocol_valid = false;
-    if (result->txt != NULL) {
-        for (int i = 0; i < result->txt->count; i++) {
-            mdns_txt_item_t *item = &result->txt->items[i];
+    if (result->txt != NULL && result->txt_count > 0) {
+        for (size_t i = 0; i < result->txt_count; i++) {
+            mdns_txt_item_t *item = &result->txt[i];
             if (item->key != NULL && item->value != NULL) {
                 /* Check for protocol key (should be "udp") */
                 if (strcmp(item->key, "protocol") == 0) {
@@ -1417,9 +1415,9 @@ esp_err_t mesh_udp_bridge_collect_state(mesh_state_data_t *state)
     }
 
     /* Get sequence state */
-    state->sequence_active = mode_sequence_root_is_active() ? 1 : 0;
+    state->sequence_active = sequence_plugin_root_is_active() ? 1 : 0;
     if (state->sequence_active) {
-        state->sequence_position = htons(mode_sequence_root_get_pointer());
+        state->sequence_position = htons(sequence_plugin_root_get_pointer());
         /* Note: sequence_total is not directly available, we'll set it to 0 for now */
         state->sequence_total = htons(0);
     } else {
@@ -2354,7 +2352,7 @@ static esp_err_t handle_api_sequence_post(const uint8_t *payload, size_t payload
     uint16_t color_data_len = payload_size - 2;
 
     /* Store and broadcast sequence data */
-    esp_err_t err = mode_sequence_root_store_and_broadcast(rhythm, num_rows, (uint8_t *)color_data, color_data_len);
+    esp_err_t err = sequence_plugin_root_store_and_broadcast(rhythm, num_rows, (uint8_t *)color_data, color_data_len);
 
     /* Response format: [success:1] (0=failure, 1=success) */
     if (max_response_size < 1) {
@@ -2397,7 +2395,7 @@ static esp_err_t handle_api_sequence_pointer(uint8_t *payload_out, size_t *paylo
         return ESP_ERR_INVALID_SIZE;
     }
 
-    uint16_t pointer = mode_sequence_root_get_pointer();
+    uint16_t pointer = sequence_plugin_root_get_pointer();
     uint16_t pointer_net = htons(pointer);
     memcpy(payload_out, &pointer_net, 2);
     *payload_size_out = 2;
@@ -2428,7 +2426,7 @@ static esp_err_t handle_api_sequence_start(uint8_t *response_out, size_t *respon
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = mode_sequence_root_start();
+    esp_err_t err = sequence_plugin_root_start();
 
     /* Response format: [success:1] (0=failure, 1=success) */
     if (max_response_size < 1) {
@@ -2464,7 +2462,7 @@ static esp_err_t handle_api_sequence_stop(uint8_t *response_out, size_t *respons
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = mode_sequence_root_stop();
+    esp_err_t err = sequence_plugin_root_stop();
 
     /* Response format: [success:1] (0=failure, 1=success) */
     if (max_response_size < 1) {
@@ -2500,7 +2498,7 @@ static esp_err_t handle_api_sequence_reset(uint8_t *response_out, size_t *respon
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = mode_sequence_root_reset();
+    esp_err_t err = sequence_plugin_root_reset();
 
     /* Response format: [success:1] (0=failure, 1=success) */
     if (max_response_size < 1) {
@@ -2542,7 +2540,7 @@ static esp_err_t handle_api_sequence_status(uint8_t *payload_out, size_t *payloa
         return ESP_ERR_INVALID_SIZE;
     }
 
-    bool active = mode_sequence_root_is_active();
+    bool active = sequence_plugin_root_is_active();
     payload_out[0] = active ? 1 : 0;
     *payload_size_out = 1;
 

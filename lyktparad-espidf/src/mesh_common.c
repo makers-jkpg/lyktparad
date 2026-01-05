@@ -545,7 +545,9 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             mesh_udp_bridge_broadcast_listener_stop();
             mesh_udp_bridge_api_listener_stop();
             /* Update status LED to OFF */
+#ifdef ROOT_STATUS_LED_GPIO
             root_status_led_set_root(false);
+#endif
         } else if (!was_root_before && is_root_now) {
             /* Node became root - register with external server if discovered */
             if (mesh_udp_bridge_is_server_discovered()) {

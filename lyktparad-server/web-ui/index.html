@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lyktparad Mesh Control</title>
     <link rel="stylesheet" href="css/styles.css">
+    {{PLUGIN_CSS}}
 </head>
 <body>
     <div class="container">
@@ -450,11 +451,15 @@
                     <div id="ota-node-list-content" class="node-list-content"></div>
                 </div>
             </section>
+
+            {{PLUGIN_HTML}}
         </main>
     </div>
 
     <script src="js/app.js"></script>
     <script src="js/ota-api.js"></script>
     <script src="js/ota-ui.js"></script>
+    {{PLUGIN_HTML}}
+    {{PLUGIN_JS}}
 </body>
 </html>

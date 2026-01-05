@@ -172,6 +172,18 @@ app.get('/api/connection/status', (req, res) => {
 app.all('/api/*', proxyHandler);
 
 // Configure static file serving (must be after specific routes)
+// Serve plugin files from web-ui/plugins/ at /plugins/
+app.use('/plugins', express.static(path.join(__dirname, 'web-ui/plugins'), {
+    // Serve plugin files with proper MIME types
+    setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.js')) {
+            res.setHeader('Content-Type', 'application/javascript');
+        } else if (filePath.endsWith('.css')) {
+            res.setHeader('Content-Type', 'text/css');
+        }
+    }
+}));
+
 // Serve web-ui directory as root, so index.html is accessible at /
 app.use(express.static(path.join(__dirname, 'web-ui'), {
     // Ensure index.html is served for root path
