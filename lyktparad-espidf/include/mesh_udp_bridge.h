@@ -58,6 +58,9 @@
 #define UDP_CMD_API_PLUGIN_DEACTIVATE  0xFB
 #define UDP_CMD_API_PLUGIN_ACTIVE       0xFC
 #define UDP_CMD_API_PLUGINS_LIST        0xFD
+#define UDP_CMD_API_PLUGIN_STOP         0xF9
+#define UDP_CMD_API_PLUGIN_PAUSE        0xFE
+#define UDP_CMD_API_PLUGIN_RESET        0xFF
 
 /*******************************************************
  *                State Update Data Structures

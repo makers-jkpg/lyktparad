@@ -1,6 +1,7 @@
 #include "mesh_web.h"
 #include "light_neopixel.h"
 #include "plugin_system.h"
+#include "mesh_commands.h"
 #include "mesh_ota.h"
 #include "mesh_version.h"
 #include "esp_http_server.h"
@@ -37,6 +38,9 @@ static esp_err_t api_ota_reboot_post_handler(httpd_req_t *req);
 static esp_err_t api_plugin_activate_handler(httpd_req_t *req);
 static esp_err_t api_plugin_deactivate_handler(httpd_req_t *req);
 static esp_err_t api_plugin_active_handler(httpd_req_t *req);
+static esp_err_t api_plugin_stop_handler(httpd_req_t *req);
+static esp_err_t api_plugin_pause_handler(httpd_req_t *req);
+static esp_err_t api_plugin_reset_handler(httpd_req_t *req);
 static esp_err_t api_plugins_list_handler(httpd_req_t *req);
 static esp_err_t index_handler(httpd_req_t *req);
 
@@ -941,6 +945,201 @@ static esp_err_t api_plugin_active_handler(httpd_req_t *req)
     return httpd_resp_send(req, response, -1);
 }
 
+/* API: POST /api/plugin/stop - Stop plugin (pause then deactivate) */
+static esp_err_t api_plugin_stop_handler(httpd_req_t *req)
+{
+    char content[256];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+
+    if (ret <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid request\"}", -1);
+        return ESP_FAIL;
+    }
+
+    content[ret] = '\0';
+
+    /* Parse JSON: {"name": "effects"} or {"name": "sequence"} */
+    char plugin_name[64] = {0};
+    if (sscanf(content, "{\"name\":\"%63[^\"]\"}", plugin_name) != 1) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid JSON format\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Check if plugin is active */
+    if (!plugin_is_active(plugin_name)) {
+        /* Plugin is not active, just return success */
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        char response[128];
+        snprintf(response, sizeof(response), "{\"success\":true,\"plugin\":\"%s\",\"message\":\"Plugin was not active\"}", plugin_name);
+        return httpd_resp_send(req, response, -1);
+    }
+
+    /* Get plugin info to check if it has on_pause callback */
+    const plugin_info_t *plugin = plugin_get_by_name(plugin_name);
+    if (plugin != NULL && plugin->callbacks.on_pause != NULL) {
+        /* Call on_pause callback first (graceful stop) */
+        esp_err_t pause_err = plugin->callbacks.on_pause();
+        if (pause_err != ESP_OK) {
+            ESP_LOGW(WEB_TAG, "Plugin '%s' on_pause callback returned error: %s", plugin_name, esp_err_to_name(pause_err));
+            /* Continue with deactivation even if pause fails */
+        }
+    }
+
+    /* Force deactivation (mutual exclusivity enforcement) */
+    esp_err_t err = plugin_deactivate(plugin_name);
+    if (err != ESP_OK) {
+        char error_msg[128];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"%s\"}", esp_err_to_name(err));
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+
+    /* Send success response */
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    char response[128];
+    snprintf(response, sizeof(response), "{\"success\":true,\"plugin\":\"%s\"}", plugin_name);
+    return httpd_resp_send(req, response, -1);
+}
+
+/* API: POST /api/plugin/pause - Pause plugin playback */
+static esp_err_t api_plugin_pause_handler(httpd_req_t *req)
+{
+    char content[256];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+
+    if (ret <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid request\"}", -1);
+        return ESP_FAIL;
+    }
+
+    content[ret] = '\0';
+
+    /* Parse JSON: {"name": "effects"} or {"name": "sequence"} */
+    char plugin_name[64] = {0};
+    if (sscanf(content, "{\"name\":\"%63[^\"]\"}", plugin_name) != 1) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid JSON format\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Get plugin ID by name */
+    uint8_t plugin_id;
+    esp_err_t err = plugin_get_id_by_name(plugin_name, &plugin_id);
+    if (err != ESP_OK) {
+        char error_msg[128];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"Plugin not found\"}");
+        httpd_resp_set_status(req, "404 Not Found");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+
+    /* Construct plugin command: [PLUGIN_ID] [PLUGIN_CMD_PAUSE] */
+    uint8_t cmd_data[2];
+    cmd_data[0] = plugin_id;
+    cmd_data[1] = PLUGIN_CMD_PAUSE;
+
+    /* Send PAUSE command via plugin system */
+    err = plugin_system_handle_plugin_command(cmd_data, sizeof(cmd_data));
+    if (err != ESP_OK) {
+        char error_msg[128];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"%s\"}", esp_err_to_name(err));
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+
+    /* Send success response */
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    char response[128];
+    snprintf(response, sizeof(response), "{\"success\":true,\"plugin\":\"%s\"}", plugin_name);
+    return httpd_resp_send(req, response, -1);
+}
+
+/* API: POST /api/plugin/reset - Reset plugin state */
+static esp_err_t api_plugin_reset_handler(httpd_req_t *req)
+{
+    char content[256];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+
+    if (ret <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid request\"}", -1);
+        return ESP_FAIL;
+    }
+
+    content[ret] = '\0';
+
+    /* Parse JSON: {"name": "effects"} or {"name": "sequence"} */
+    char plugin_name[64] = {0};
+    if (sscanf(content, "{\"name\":\"%63[^\"]\"}", plugin_name) != 1) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid JSON format\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Get plugin ID by name */
+    uint8_t plugin_id;
+    esp_err_t err = plugin_get_id_by_name(plugin_name, &plugin_id);
+    if (err != ESP_OK) {
+        char error_msg[128];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"Plugin not found\"}");
+        httpd_resp_set_status(req, "404 Not Found");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+
+    /* Construct plugin command: [PLUGIN_ID] [PLUGIN_CMD_RESET] */
+    uint8_t cmd_data[2];
+    cmd_data[0] = plugin_id;
+    cmd_data[1] = PLUGIN_CMD_RESET;
+
+    /* Send RESET command via plugin system */
+    err = plugin_system_handle_plugin_command(cmd_data, sizeof(cmd_data));
+    if (err != ESP_OK) {
+        char error_msg[128];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"%s\"}", esp_err_to_name(err));
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+
+    /* Send success response */
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    char response[128];
+    snprintf(response, sizeof(response), "{\"success\":true,\"plugin\":\"%s\"}", plugin_name);
+    return httpd_resp_send(req, response, -1);
+}
+
 /* API: GET /api/plugins - Get list of all registered plugins */
 static esp_err_t api_plugins_list_handler(httpd_req_t *req)
 {
@@ -1296,6 +1495,48 @@ esp_err_t mesh_web_server_start(void)
         reg_err = httpd_register_uri_handler(server_handle, &plugin_active_uri);
         if (reg_err != ESP_OK) {
             ESP_LOGE(WEB_TAG, "Failed to register plugin active URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t plugin_stop_uri = {
+            .uri       = "/api/plugin/stop",
+            .method    = HTTP_POST,
+            .handler   = api_plugin_stop_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &plugin_stop_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register plugin stop URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t plugin_pause_uri = {
+            .uri       = "/api/plugin/pause",
+            .method    = HTTP_POST,
+            .handler   = api_plugin_pause_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &plugin_pause_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register plugin pause URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t plugin_reset_uri = {
+            .uri       = "/api/plugin/reset",
+            .method    = HTTP_POST,
+            .handler   = api_plugin_reset_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &plugin_reset_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register plugin reset URI: 0x%x", reg_err);
             httpd_stop(server_handle);
             server_handle = NULL;
             return ESP_FAIL;

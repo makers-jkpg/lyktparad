@@ -309,6 +309,417 @@ def generate_layout_css():
     return css
 
 
+def generate_basic_plugin_ui(plugin_name):
+    """
+    Generate basic control UI HTML for a plugin without custom HTML.
+
+    Returns HTML string with plugin name header, control buttons (START, STOP, PAUSE, RESET),
+    status indicator, and error message area.
+    """
+    display_name = format_plugin_display_name(plugin_name)
+    # Escape HTML special characters for attribute value and text content
+    plugin_name_escaped_attr = plugin_name.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+    display_name_escaped = display_name.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+    html = f'''<div class="basic-plugin-ui">
+    <h2 class="basic-plugin-ui-title">{display_name_escaped}</h2>
+    <div class="basic-plugin-ui-status">
+        <span class="basic-plugin-ui-status-label">Status:</span>
+        <span class="basic-plugin-ui-status-value" id="basic-plugin-status-{plugin_name_escaped_attr}">Inactive</span>
+    </div>
+    <div class="basic-plugin-ui-controls">
+        <button class="basic-plugin-btn basic-plugin-btn-start" id="basic-plugin-start-{plugin_name_escaped_attr}" data-plugin-name="{plugin_name_escaped_attr}">START</button>
+        <button class="basic-plugin-btn basic-plugin-btn-pause" id="basic-plugin-pause-{plugin_name_escaped_attr}" data-plugin-name="{plugin_name_escaped_attr}">PAUSE</button>
+        <button class="basic-plugin-btn basic-plugin-btn-reset" id="basic-plugin-reset-{plugin_name_escaped_attr}" data-plugin-name="{plugin_name_escaped_attr}">RESET</button>
+        <button class="basic-plugin-btn basic-plugin-btn-stop" id="basic-plugin-stop-{plugin_name_escaped_attr}" data-plugin-name="{plugin_name_escaped_attr}">STOP</button>
+    </div>
+    <div class="basic-plugin-ui-feedback" id="basic-plugin-feedback-{plugin_name_escaped_attr}"></div>
+</div>'''
+    return html
+
+
+def generate_basic_plugin_ui_css():
+    """
+    Generate CSS for basic plugin control UI.
+
+    Returns CSS string for plugin name header, control buttons, status indicator,
+    and error message area. Styled consistently with existing UI.
+    """
+    css = '''
+/* Basic Plugin UI Styles */
+.basic-plugin-ui {
+    padding: 20px;
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.basic-plugin-ui-title {
+    font-size: 1.5em;
+    font-weight: bold;
+    margin: 0 0 20px 0;
+    color: #2c3e50;
+}
+
+.basic-plugin-ui-status {
+    margin-bottom: 20px;
+    padding: 10px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+}
+
+.basic-plugin-ui-status-label {
+    font-weight: bold;
+    margin-right: 10px;
+}
+
+.basic-plugin-ui-status-value {
+    color: #666;
+}
+
+.basic-plugin-ui-status-value.active {
+    color: #28a745;
+    font-weight: bold;
+}
+
+.basic-plugin-ui-controls {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+}
+
+.basic-plugin-btn {
+    padding: 10px 20px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-width: 100px;
+    flex: 1 1 auto;
+}
+
+.basic-plugin-btn:hover:not(:disabled) {
+    border-color: #667eea;
+    background-color: #f0f0ff;
+}
+
+.basic-plugin-btn:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+.basic-plugin-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.basic-plugin-btn-start {
+    background-color: #28a745;
+    color: white;
+    border-color: #28a745;
+}
+
+.basic-plugin-btn-start:hover:not(:disabled) {
+    background-color: #218838;
+    border-color: #218838;
+}
+
+.basic-plugin-btn-pause {
+    background-color: #ffc107;
+    color: #333;
+    border-color: #ffc107;
+}
+
+.basic-plugin-btn-pause:hover:not(:disabled) {
+    background-color: #e0a800;
+    border-color: #e0a800;
+}
+
+.basic-plugin-btn-reset {
+    background-color: #17a2b8;
+    color: white;
+    border-color: #17a2b8;
+}
+
+.basic-plugin-btn-reset:hover:not(:disabled) {
+    background-color: #138496;
+    border-color: #138496;
+}
+
+.basic-plugin-btn-stop {
+    background-color: #dc3545;
+    color: white;
+    border-color: #dc3545;
+}
+
+.basic-plugin-btn-stop:hover:not(:disabled) {
+    background-color: #c82333;
+    border-color: #c82333;
+}
+
+.basic-plugin-ui-feedback {
+    min-height: 20px;
+    margin-top: 10px;
+    font-size: 14px;
+}
+
+.basic-plugin-ui-feedback.error {
+    color: #dc3545;
+}
+
+.basic-plugin-ui-feedback.success {
+    color: #28a745;
+}
+
+.basic-plugin-ui-feedback.info {
+    color: #17a2b8;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .basic-plugin-ui {
+        padding: 15px;
+    }
+
+    .basic-plugin-ui-title {
+        font-size: 1.2em;
+    }
+
+    .basic-plugin-ui-controls {
+        flex-direction: column;
+    }
+
+    .basic-plugin-btn {
+        width: 100%;
+    }
+}
+'''
+    return css
+
+
+def generate_basic_plugin_ui_js():
+    """
+    Generate JavaScript for basic plugin control UI.
+
+    Returns JavaScript string with button click handlers for START, STOP, PAUSE, RESET,
+    API call functions, error handling, loading states, and UI state updates.
+    """
+    js = '''
+(function() {
+    'use strict';
+
+    // Basic Plugin UI Controller
+    var BasicPluginUI = {
+        // Send API request
+        apiRequest: function(url, method, body) {
+            return fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: body ? JSON.stringify(body) : undefined
+            }).then(function(response) {
+                if (!response.ok) {
+                    return response.json().then(function(error) {
+                        throw new Error(error.error || 'Request failed');
+                    }).catch(function() {
+                        throw new Error('Request failed with status ' + response.status);
+                    });
+                }
+                return response.json();
+            });
+        },
+
+        // Update feedback message
+        updateFeedback: function(pluginName, message, type) {
+            var feedbackEl = document.getElementById('basic-plugin-feedback-' + pluginName);
+            if (feedbackEl) {
+                feedbackEl.textContent = message || '';
+                feedbackEl.className = 'basic-plugin-ui-feedback' + (type ? ' ' + type : '');
+            }
+        },
+
+        // Update status indicator
+        updateStatus: function(pluginName, isActive) {
+            var statusEl = document.getElementById('basic-plugin-status-' + pluginName);
+            if (statusEl) {
+                statusEl.textContent = isActive ? 'Active' : 'Inactive';
+                statusEl.className = 'basic-plugin-ui-status-value' + (isActive ? ' active' : '');
+            }
+        },
+
+        // Set button loading state
+        setButtonLoading: function(button, loading) {
+            if (button) {
+                button.disabled = loading;
+                if (loading) {
+                    button.dataset.originalText = button.textContent;
+                    button.textContent = 'Loading...';
+                } else {
+                    button.textContent = button.dataset.originalText || button.textContent;
+                }
+            }
+        },
+
+        // Handle START button click
+        handleStart: function(pluginName) {
+            var startBtn = document.getElementById('basic-plugin-start-' + pluginName);
+            this.setButtonLoading(startBtn, true);
+            this.updateFeedback(pluginName, 'Activating plugin...', 'info');
+
+            this.apiRequest('/api/plugin/activate', 'POST', { name: pluginName })
+                .then(function(response) {
+                    BasicPluginUI.updateFeedback(pluginName, 'Plugin activated successfully', 'success');
+                    BasicPluginUI.updateStatus(pluginName, true);
+                    // Poll for active plugin status
+                    setTimeout(function() {
+                        BasicPluginUI.checkActivePlugin(pluginName);
+                    }, 500);
+                })
+                .catch(function(error) {
+                    BasicPluginUI.updateFeedback(pluginName, 'Error: ' + error.message, 'error');
+                })
+                .finally(function() {
+                    BasicPluginUI.setButtonLoading(startBtn, false);
+                });
+        },
+
+        // Handle STOP button click
+        handleStop: function(pluginName) {
+            var stopBtn = document.getElementById('basic-plugin-stop-' + pluginName);
+            this.setButtonLoading(stopBtn, true);
+            this.updateFeedback(pluginName, 'Stopping plugin...', 'info');
+
+            this.apiRequest('/api/plugin/stop', 'POST', { name: pluginName })
+                .then(function(response) {
+                    BasicPluginUI.updateFeedback(pluginName, 'Plugin stopped successfully', 'success');
+                    BasicPluginUI.updateStatus(pluginName, false);
+                })
+                .catch(function(error) {
+                    BasicPluginUI.updateFeedback(pluginName, 'Error: ' + error.message, 'error');
+                })
+                .finally(function() {
+                    BasicPluginUI.setButtonLoading(stopBtn, false);
+                });
+        },
+
+        // Handle PAUSE button click
+        handlePause: function(pluginName) {
+            var pauseBtn = document.getElementById('basic-plugin-pause-' + pluginName);
+            this.setButtonLoading(pauseBtn, true);
+            this.updateFeedback(pluginName, 'Pausing plugin...', 'info');
+
+            this.apiRequest('/api/plugin/pause', 'POST', { name: pluginName })
+                .then(function(response) {
+                    BasicPluginUI.updateFeedback(pluginName, 'Plugin paused successfully', 'success');
+                })
+                .catch(function(error) {
+                    BasicPluginUI.updateFeedback(pluginName, 'Error: ' + error.message, 'error');
+                })
+                .finally(function() {
+                    BasicPluginUI.setButtonLoading(pauseBtn, false);
+                });
+        },
+
+        // Handle RESET button click
+        handleReset: function(pluginName) {
+            var resetBtn = document.getElementById('basic-plugin-reset-' + pluginName);
+            this.setButtonLoading(resetBtn, true);
+            this.updateFeedback(pluginName, 'Resetting plugin...', 'info');
+
+            this.apiRequest('/api/plugin/reset', 'POST', { name: pluginName })
+                .then(function(response) {
+                    BasicPluginUI.updateFeedback(pluginName, 'Plugin reset successfully', 'success');
+                })
+                .catch(function(error) {
+                    BasicPluginUI.updateFeedback(pluginName, 'Error: ' + error.message, 'error');
+                })
+                .finally(function() {
+                    BasicPluginUI.setButtonLoading(resetBtn, false);
+                });
+        },
+
+        // Check active plugin status
+        checkActivePlugin: function(pluginName) {
+            this.apiRequest('/api/plugin/active', 'GET')
+                .then(function(response) {
+                    var isActive = response.active === pluginName;
+                    BasicPluginUI.updateStatus(pluginName, isActive);
+                })
+                .catch(function(error) {
+                    // Silently ignore polling errors
+                });
+        },
+
+        // Initialize plugin UI
+        init: function(pluginName) {
+            var self = this;
+
+            // Set up button event listeners
+            var startBtn = document.getElementById('basic-plugin-start-' + pluginName);
+            var stopBtn = document.getElementById('basic-plugin-stop-' + pluginName);
+            var pauseBtn = document.getElementById('basic-plugin-pause-' + pluginName);
+            var resetBtn = document.getElementById('basic-plugin-reset-' + pluginName);
+
+            if (startBtn) {
+                startBtn.addEventListener('click', function() {
+                    self.handleStart(pluginName);
+                });
+            }
+
+            if (stopBtn) {
+                stopBtn.addEventListener('click', function() {
+                    self.handleStop(pluginName);
+                });
+            }
+
+            if (pauseBtn) {
+                pauseBtn.addEventListener('click', function() {
+                    self.handlePause(pluginName);
+                });
+            }
+
+            if (resetBtn) {
+                resetBtn.addEventListener('click', function() {
+                    self.handleReset(pluginName);
+                });
+            }
+
+            // Check initial status
+            this.checkActivePlugin(pluginName);
+
+            // Poll for status updates every 2 seconds
+            setInterval(function() {
+                self.checkActivePlugin(pluginName);
+            }, 2000);
+        }
+    };
+
+    // Initialize all basic plugin UIs on DOM ready
+    function initBasicPluginUIs() {
+        var basicUIs = document.querySelectorAll('.basic-plugin-ui');
+        basicUIs.forEach(function(ui) {
+            var section = ui.closest('.plugin-section');
+            if (section) {
+                var pluginName = section.getAttribute('data-plugin-name');
+                if (pluginName) {
+                    BasicPluginUI.init(pluginName);
+                }
+            }
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initBasicPluginUIs);
+    } else {
+        initBasicPluginUIs();
+    }
+})();
+'''
+    return js
+
+
 def generate_selection_js(plugins):
     """
     Generate JavaScript for plugin selection functionality.
@@ -509,6 +920,11 @@ def generate_html_for_embedded(template_file, plugins_dir, output_file):
     plugin_js_content = []
     plugin_html_sections = []
 
+    # Generate basic UI CSS and JS (only once, shared by all basic UIs)
+    basic_ui_css = None
+    basic_ui_js = None
+    plugins_without_html = []
+
     for plugin in plugins:
         # Read plugin CSS
         if plugin['css_file']:
@@ -524,7 +940,7 @@ def generate_html_for_embedded(template_file, plugins_dir, output_file):
                 # Wrap in comment for identification
                 plugin_js_content.append(f"\n/* Plugin: {plugin['name']} */\n{js_content}")
 
-        # Read plugin HTML
+        # Read plugin HTML or generate basic UI
         if plugin['html_file']:
             html_content = read_file_safe(plugin['html_file'])
             if html_content:
@@ -532,6 +948,28 @@ def generate_html_for_embedded(template_file, plugins_dir, output_file):
                 # Escape HTML special characters for attribute value
                 plugin_name_escaped = plugin['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
                 plugin_html_sections.append(f'<section class="plugin-section plugin-{plugin["name"]}" data-plugin-name="{plugin_name_escaped}">{html_content}</section>')
+        else:
+            # Plugin without HTML file - will generate basic UI
+            plugins_without_html.append(plugin)
+
+    # Generate basic UI for plugins without HTML files
+    if plugins_without_html:
+        # Generate basic UI CSS (only once)
+        if basic_ui_css is None:
+            basic_ui_css = generate_basic_plugin_ui_css()
+            plugin_css_content.append(f"\n/* Basic Plugin UI (shared) */\n{basic_ui_css}")
+
+        # Generate basic UI JS (only once)
+        if basic_ui_js is None:
+            basic_ui_js = generate_basic_plugin_ui_js()
+            plugin_js_content.append(f"\n/* Basic Plugin UI (shared) */\n{basic_ui_js}")
+
+        # Generate basic UI HTML sections for each plugin without HTML
+        for plugin in plugins_without_html:
+            basic_ui_html = generate_basic_plugin_ui(plugin['name'])
+            # Wrap in section with plugin class and data attribute
+            plugin_name_escaped = plugin['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+            plugin_html_sections.append(f'<section class="plugin-section plugin-{plugin["name"]}" data-plugin-name="{plugin_name_escaped}">{basic_ui_html}</section>')
 
     # Replace placeholders in template
     html_content = template_content
@@ -672,6 +1110,12 @@ def generate_html_for_external(template_file, plugins_dir, output_file):
     # For external webserver, we can reference plugin HTML files directly, or inline them
     # For simplicity, we'll inline plugin HTML sections
     plugin_html_sections = []
+    plugins_without_html = []
+
+    # Generate basic UI CSS and JS (only once, shared by all basic UIs)
+    basic_ui_css = None
+    basic_ui_js = None
+
     for plugin in plugins:
         if plugin['html_file']:
             html_content = read_file_safe(plugin['html_file'])
@@ -680,9 +1124,40 @@ def generate_html_for_external(template_file, plugins_dir, output_file):
                 # Escape HTML special characters for attribute value
                 plugin_name_escaped = plugin['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
                 plugin_html_sections.append(f'    <section class="plugin-section plugin-{plugin["name"]}" data-plugin-name="{plugin_name_escaped}">{html_content}</section>')
+        else:
+            # Plugin without HTML file - will generate basic UI
+            plugins_without_html.append(plugin)
+
+    # Generate basic UI for plugins without HTML files
+    if plugins_without_html:
+        # Generate basic UI CSS (only once)
+        if basic_ui_css is None:
+            basic_ui_css = generate_basic_plugin_ui_css()
+
+        # Generate basic UI JS (only once)
+        if basic_ui_js is None:
+            basic_ui_js = generate_basic_plugin_ui_js()
+
+        # Generate basic UI HTML sections for each plugin without HTML
+        for plugin in plugins_without_html:
+            basic_ui_html = generate_basic_plugin_ui(plugin['name'])
+            # Wrap in section with plugin class and data attribute
+            plugin_name_escaped = plugin['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+            plugin_html_sections.append(f'    <section class="plugin-section plugin-{plugin["name"]}" data-plugin-name="{plugin_name_escaped}">{basic_ui_html}</section>')
 
     # Replace placeholders in template
     html_content = template_content
+
+    # Add basic UI CSS to head if needed (after html_content is set)
+    if plugins_without_html and basic_ui_css:
+        if '</head>' in html_content:
+            html_content = re.sub(r'(</head>)', f'    <style>{basic_ui_css}\n    </style>\n\\1', html_content, count=1)
+        elif '</style>' in html_content:
+            html_content = re.sub(r'(</style>)', basic_ui_css + r'\n\1', html_content, count=1)
+
+    # Add basic UI JS to plugin JS scripts if needed
+    if plugins_without_html and basic_ui_js:
+        plugin_js_scripts.append(f'    <script>{basic_ui_js}\n    </script>')
 
     # Replace {{PAGE_TITLE}} placeholder
     if '{{PAGE_TITLE}}' in html_content:

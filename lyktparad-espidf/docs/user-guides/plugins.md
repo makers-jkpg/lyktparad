@@ -2,6 +2,8 @@
 
 **Last Updated:** 2025-01-27
 
+**Note**: Basic UI feature added for plugins without custom HTML files.
+
 ## Table of Contents
 
 1. [Overview](#overview)
@@ -168,6 +170,29 @@ The web interface includes a dropdown menu at the top right of the page that all
 - Only the selected plugin's HTML is visible
 - Other plugins are hidden automatically
 - The dropdown shows all available plugins with formatted names (e.g., "Effects", "Sequence")
+
+### Basic Plugin UI
+
+Plugins that don't provide custom HTML files automatically receive a basic control interface. This basic UI allows you to control plugins that don't need complex interfaces but still support basic operations.
+
+**Basic UI Features:**
+- **Plugin Name Display**: Shows the formatted plugin name at the top
+- **Status Indicator**: Displays whether the plugin is currently Active or Inactive
+- **Control Buttons**:
+  - **START**: Activates the plugin and begins its operation
+  - **PAUSE**: Temporarily pauses the plugin's operation (plugin remains active)
+  - **RESET**: Resets the plugin's internal state
+  - **STOP**: Gracefully stops the plugin (calls pause callback if available) and deactivates it
+- **Feedback Messages**: Shows success/error messages for each operation
+
+**Using Basic UI:**
+1. Select a plugin from the dropdown that doesn't have a custom interface
+2. The basic UI will appear with control buttons
+3. Click START to activate the plugin
+4. Use PAUSE to temporarily pause, RESET to reset state, or STOP to deactivate
+5. The status indicator updates automatically to show the current state
+
+**Note**: Plugins with custom HTML files will show their custom interface instead of the basic UI. The basic UI is only provided for plugins that don't need complex interfaces.
 
 ### Sequence Plugin Web Interface
 

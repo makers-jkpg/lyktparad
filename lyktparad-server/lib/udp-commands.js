@@ -36,6 +36,9 @@ const UDP_CMD_API_PLUGIN_ACTIVATE = 0xFA;
 const UDP_CMD_API_PLUGIN_DEACTIVATE = 0xFB;
 const UDP_CMD_API_PLUGIN_ACTIVE = 0xFC;
 const UDP_CMD_API_PLUGINS_LIST = 0xFD;
+const UDP_CMD_API_PLUGIN_STOP = 0xF9;
+const UDP_CMD_API_PLUGIN_PAUSE = 0xFE;
+const UDP_CMD_API_PLUGIN_RESET = 0xFF;
 
 /*******************************************************
  *                Endpoint to Command ID Mapping
@@ -72,7 +75,10 @@ function getCommandId(method, path) {
         'POST /api/plugin/activate': UDP_CMD_API_PLUGIN_ACTIVATE,
         'POST /api/plugin/deactivate': UDP_CMD_API_PLUGIN_DEACTIVATE,
         'GET /api/plugin/active': UDP_CMD_API_PLUGIN_ACTIVE,
-        'GET /api/plugins': UDP_CMD_API_PLUGINS_LIST
+        'GET /api/plugins': UDP_CMD_API_PLUGINS_LIST,
+        'POST /api/plugin/stop': UDP_CMD_API_PLUGIN_STOP,
+        'POST /api/plugin/pause': UDP_CMD_API_PLUGIN_PAUSE,
+        'POST /api/plugin/reset': UDP_CMD_API_PLUGIN_RESET
     };
     return mapping[key] || null;
 }
@@ -110,7 +116,10 @@ function getEndpointInfo(commandId) {
         [UDP_CMD_API_PLUGIN_ACTIVATE]: { method: 'POST', path: '/api/plugin/activate' },
         [UDP_CMD_API_PLUGIN_DEACTIVATE]: { method: 'POST', path: '/api/plugin/deactivate' },
         [UDP_CMD_API_PLUGIN_ACTIVE]: { method: 'GET', path: '/api/plugin/active' },
-        [UDP_CMD_API_PLUGINS_LIST]: { method: 'GET', path: '/api/plugins' }
+        [UDP_CMD_API_PLUGINS_LIST]: { method: 'GET', path: '/api/plugins' },
+        [UDP_CMD_API_PLUGIN_STOP]: { method: 'POST', path: '/api/plugin/stop' },
+        [UDP_CMD_API_PLUGIN_PAUSE]: { method: 'POST', path: '/api/plugin/pause' },
+        [UDP_CMD_API_PLUGIN_RESET]: { method: 'POST', path: '/api/plugin/reset' }
     };
     return mapping[commandId] || null;
 }
@@ -138,6 +147,9 @@ module.exports = {
     UDP_CMD_API_PLUGIN_DEACTIVATE,
     UDP_CMD_API_PLUGIN_ACTIVE,
     UDP_CMD_API_PLUGINS_LIST,
+    UDP_CMD_API_PLUGIN_STOP,
+    UDP_CMD_API_PLUGIN_PAUSE,
+    UDP_CMD_API_PLUGIN_RESET,
     getCommandId,
     getEndpointInfo
 };

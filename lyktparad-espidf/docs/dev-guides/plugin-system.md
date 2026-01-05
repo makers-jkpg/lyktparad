@@ -2,6 +2,8 @@
 
 **Last Updated:** 2025-01-27
 
+**Note**: Basic UI feature added for plugins without custom HTML files.
+
 ## Table of Contents
 
 1. [Overview](#overview)
@@ -525,6 +527,24 @@ The plugin selection system is handled automatically. Your plugin JavaScript doe
 Plugins can include HTML files that are automatically integrated into the web interface. HTML files should contain HTML fragments (not full pages) that will be inserted into the main page.
 
 **Important:** Your HTML will be wrapped in a `<section>` tag automatically, so you don't need to include one yourself unless you need nested sections.
+
+**Basic UI for Plugins Without HTML:**
+
+If a plugin does not provide an HTML file, the system automatically generates a basic control UI. This basic UI provides:
+- Plugin name header
+- Status indicator (Active/Inactive)
+- Four control buttons: START, STOP, PAUSE, RESET
+- Error/success feedback messages
+
+The basic UI is automatically generated during the HTML generation process and only appears for plugins that don't have custom HTML files. Plugins with HTML files will use their custom interface instead.
+
+**Basic UI Behavior:**
+- START button: Activates the plugin via `/api/plugin/activate`
+- PAUSE button: Sends PAUSE command via `/api/plugin/pause`
+- RESET button: Sends RESET command via `/api/plugin/reset`
+- STOP button: Calls plugin's `on_pause` callback (if available) for graceful stop, then deactivates the plugin via `/api/plugin/stop`
+
+The basic UI automatically polls plugin status every 2 seconds to update the status indicator.
 
 Example `my_plugin.html`:
 
