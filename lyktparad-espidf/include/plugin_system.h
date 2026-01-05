@@ -108,6 +108,78 @@ typedef struct {
      * @return ESP_OK on success, error code on failure
      */
     esp_err_t (*on_deactivate)(void);
+
+    /**
+     * @brief Plugin START command callback (optional, may be NULL)
+     *
+     * Called when MESH_CMD_PLUGIN_START (0x05) is received.
+     *
+     * @return ESP_OK on success, error code on failure
+     */
+    esp_err_t (*on_start)(void);
+
+    /**
+     * @brief Plugin PAUSE command callback (optional, may be NULL)
+     *
+     * Called when MESH_CMD_PLUGIN_PAUSE (0x06) is received.
+     *
+     * @return ESP_OK on success, error code on failure
+     */
+    esp_err_t (*on_pause)(void);
+
+    /**
+     * @brief Plugin RESET command callback (optional, may be NULL)
+     *
+     * Called when MESH_CMD_PLUGIN_RESET (0x07) is received.
+     *
+     * @return ESP_OK on success, error code on failure
+     */
+    esp_err_t (*on_reset)(void);
+
+    /**
+     * @brief Plugin BEAT command callback (optional, may be NULL)
+     *
+     * Called when MESH_CMD_PLUGIN_BEAT (0x08) is received.
+     *
+     * @param data Command data (data[0] = MESH_CMD_PLUGIN_BEAT, data[1] = pointer)
+     * @param len Data length (must be 2)
+     * @return ESP_OK on success, error code on failure
+     */
+    esp_err_t (*on_beat)(uint8_t *data, uint16_t len);
+
+    /**
+     * @brief Plugin state query callback (optional, may be NULL)
+     *
+     * Query plugin-specific state (pointer, active status, rhythm, length, etc.).
+     *
+     * @param query_type Query type identifier (plugin-specific enum or integer)
+     * @param result Output parameter for query result (type depends on query_type)
+     * @return ESP_OK on success, error code on failure
+     */
+    esp_err_t (*get_state)(uint32_t query_type, void *result);
+
+    /**
+     * @brief Plugin operation execution callback (optional, may be NULL)
+     *
+     * Execute plugin operations (store, start, pause, reset, broadcast_beat, etc.).
+     *
+     * @param operation_type Operation type identifier (plugin-specific enum or integer)
+     * @param params Operation parameters (type depends on operation_type)
+     * @return ESP_OK on success, error code on failure
+     */
+    esp_err_t (*execute_operation)(uint32_t operation_type, void *params);
+
+    /**
+     * @brief Plugin helper function callback (optional, may be NULL)
+     *
+     * Get helper function results (size calculations, etc.).
+     *
+     * @param helper_type Helper type identifier (plugin-specific enum or integer)
+     * @param params Helper parameters (type depends on helper_type)
+     * @param result Output parameter for helper result (type depends on helper_type)
+     * @return ESP_OK on success, error code on failure
+     */
+    esp_err_t (*get_helper)(uint32_t helper_type, void *params, void *result);
 } plugin_callback_t;
 
 /*******************************************************
@@ -269,5 +341,71 @@ bool plugin_is_active(const char *name);
  * @return ESP_ERR_INVALID_SIZE if max_count is less than the number of registered plugins
  */
 esp_err_t plugin_get_all_names(const char *names[], uint8_t max_count, uint8_t *count);
+
+/**
+ * @brief Handle plugin command routing for MESH_CMD_PLUGIN_* commands
+ *
+ * This function routes core plugin commands (MESH_CMD_PLUGIN_START, MESH_CMD_PLUGIN_PAUSE,
+ * MESH_CMD_PLUGIN_RESET, MESH_CMD_PLUGIN_BEAT) to the active plugin's callbacks.
+ *
+ * @param cmd Command ID (MESH_CMD_PLUGIN_START, MESH_CMD_PLUGIN_PAUSE, MESH_CMD_PLUGIN_RESET, or MESH_CMD_PLUGIN_BEAT)
+ * @param data Command data (for BEAT command, data[1] contains pointer)
+ * @param len Data length (1 for START/PAUSE/RESET, 2 for BEAT)
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_ARG if cmd is not a valid plugin command or data is NULL when len > 0
+ * @return ESP_ERR_NOT_FOUND if no plugin is active
+ * @return ESP_ERR_INVALID_STATE if active plugin doesn't have the required callback
+ * @return Error code from plugin's callback
+ */
+esp_err_t plugin_system_handle_plugin_command(uint8_t cmd, uint8_t *data, uint16_t len);
+
+/**
+ * @brief Query plugin state
+ *
+ * Queries the specified plugin's state using its get_state callback.
+ *
+ * @param plugin_name Plugin name (non-NULL, must be registered)
+ * @param query_type Query type identifier (plugin-specific)
+ * @param result Output parameter for query result (non-NULL)
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_ARG if plugin_name or result is NULL
+ * @return ESP_ERR_NOT_FOUND if plugin is not registered
+ * @return ESP_ERR_INVALID_STATE if plugin doesn't have get_state callback
+ * @return Error code from plugin's get_state callback
+ */
+esp_err_t plugin_query_state(const char *plugin_name, uint32_t query_type, void *result);
+
+/**
+ * @brief Execute plugin operation
+ *
+ * Executes an operation on the specified plugin using its execute_operation callback.
+ *
+ * @param plugin_name Plugin name (non-NULL, must be registered)
+ * @param operation_type Operation type identifier (plugin-specific)
+ * @param params Operation parameters (may be NULL if operation requires no parameters)
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_ARG if plugin_name is NULL
+ * @return ESP_ERR_NOT_FOUND if plugin is not registered
+ * @return ESP_ERR_INVALID_STATE if plugin doesn't have execute_operation callback
+ * @return Error code from plugin's execute_operation callback
+ */
+esp_err_t plugin_execute_operation(const char *plugin_name, uint32_t operation_type, void *params);
+
+/**
+ * @brief Get plugin helper result
+ *
+ * Gets a helper function result from the specified plugin using its get_helper callback.
+ *
+ * @param plugin_name Plugin name (non-NULL, must be registered)
+ * @param helper_type Helper type identifier (plugin-specific)
+ * @param params Helper parameters (may be NULL if helper requires no parameters)
+ * @param result Output parameter for helper result (non-NULL)
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_ARG if plugin_name or result is NULL
+ * @return ESP_ERR_NOT_FOUND if plugin is not registered
+ * @return ESP_ERR_INVALID_STATE if plugin doesn't have get_helper callback
+ * @return Error code from plugin's get_helper callback
+ */
+esp_err_t plugin_get_helper(const char *plugin_name, uint32_t helper_type, void *params, void *result);
 
 #endif /* __PLUGIN_SYSTEM_H__ */

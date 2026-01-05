@@ -24,7 +24,6 @@
 #include "light_neopixel.h"
 #include "light_common_cathode.h"
 #include "plugins/effects/effects_plugin.h"
-#include "plugins/sequence/sequence_plugin.h"
 #include "config/mesh_config.h"
 #include "mesh_ota.h"
 #include "plugin_system.h"
@@ -85,6 +84,39 @@ void esp_mesh_p2p_rx_main(void *arg)
                     ESP_LOGI(MESH_TAG, "[ROOT ACTION] RGB command received from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
                     mesh_root_handle_rgb_command(r, g, b);
                     continue;
+                } else if ((data.size == 1 && (cmd == 0x05 || cmd == 0x06 || cmd == 0x07)) ||  /* MESH_CMD_PLUGIN_START, PAUSE, RESET */
+                           (data.size == 2 && cmd == 0x08) ||  /* MESH_CMD_PLUGIN_BEAT */
+                           (data.size >= 3 && cmd == 0x04)) {  /* MESH_CMD_PLUGIN_DATA */
+                    /* Route plugin control commands through plugin system */
+                    if (cmd == 0x04) {
+                        /* MESH_CMD_PLUGIN_DATA - route to active plugin's command_handler */
+                        const char *active_plugin = plugin_get_active();
+                        if (active_plugin != NULL) {
+                            const plugin_info_t *plugin = plugin_get_by_name(active_plugin);
+                            if (plugin != NULL && plugin->callbacks.command_handler != NULL) {
+                                err = plugin->callbacks.command_handler(0x04, data.data, data.size);
+                                if (err == ESP_OK) {
+                                    ESP_LOGD(mesh_common_get_tag(), "[PLUGIN DATA] Command routed to plugin '%s'", active_plugin);
+                                    continue;
+                                }
+                            }
+                        }
+                        ESP_LOGD(mesh_common_get_tag(), "[PLUGIN DATA] No active plugin for command 0x04");
+                        continue;
+                    } else {
+                        /* MESH_CMD_PLUGIN_START, PAUSE, RESET, BEAT */
+                        err = plugin_system_handle_plugin_command(cmd, data.data, data.size);
+                        if (err == ESP_OK) {
+                            ESP_LOGD(mesh_common_get_tag(), "[PLUGIN CONTROL] Command 0x%02X routed to plugin system", cmd);
+                            continue;
+                        } else if (err == ESP_ERR_NOT_FOUND) {
+                            ESP_LOGD(mesh_common_get_tag(), "[PLUGIN CONTROL] No active plugin for command 0x%02X", cmd);
+                            continue;
+                        } else {
+                            ESP_LOGE(mesh_common_get_tag(), "[PLUGIN CONTROL] Plugin command routing error 0x%02X: 0x%x", cmd, err);
+                            continue;
+                        }
+                    }
                 } else if (cmd >= 0x10 && cmd <= 0xEF) {
                     /* Route plugin commands (0x10-0xEF) to plugin system */
                     err = plugin_system_handle_command(cmd, data.data, data.size);
@@ -133,8 +165,9 @@ void esp_mesh_p2p_rx_main(void *arg)
                           ((uint32_t)(uint8_t)data.data[4] << 0);
             ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat received from "MACSTR", count:%" PRIu32, MAC2STR(from.addr), hb);
             /* Skip heartbeat LED changes if sequence mode is active (sequence controls LED) */
-            const plugin_info_t *sequence_plugin = plugin_get_by_name("sequence");
-            if (sequence_plugin != NULL && sequence_plugin->callbacks.is_active != NULL && sequence_plugin->callbacks.is_active()) {
+            bool sequence_active = false;
+            esp_err_t query_err = plugin_query_state("sequence", 0x01, &sequence_active);  /* SEQUENCE_QUERY_IS_ACTIVE */
+            if (query_err == ESP_OK && sequence_active) {
                 ESP_LOGD(mesh_common_get_tag(), "[NODE ACTION] Heartbeat #%lu - skipping LED change (sequence active)", (unsigned long)hb);
             } else if (!(hb%2)) {
                 /* even heartbeat: turn off light */
@@ -172,8 +205,10 @@ void esp_mesh_p2p_rx_main(void *arg)
             uint8_t g = data.data[2];
             uint8_t b = data.data[3];
             ESP_LOGI(MESH_TAG, "[NODE ACTION] RGB command received from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
-            /* Stop sequence playback if active */
-            sequence_plugin_node_stop();
+            /* Pause active plugin if sequence plugin is active */
+            if (plugin_is_active("sequence")) {
+                plugin_execute_operation("sequence", 0x03, NULL);  /* SEQUENCE_OP_PAUSE */
+            }
             /* Store RGB values for use in heartbeat handler */
             last_rgb_r = r;
             last_rgb_g = g;
@@ -183,45 +218,37 @@ void esp_mesh_p2p_rx_main(void *arg)
             if (err != ESP_OK) {
                 ESP_LOGE(mesh_common_get_tag(), "[RGB] failed to set LED: 0x%x", err);
             }
-        } else if (data.proto == MESH_PROTO_BIN && data.size >= 3 && data.data[0] == MESH_CMD_SEQUENCE) {
-            /* Route MESH_CMD_SEQUENCE to sequence plugin (backward compatibility) */
-            const plugin_info_t *sequence_plugin = plugin_get_by_name("sequence");
-            if (sequence_plugin != NULL && sequence_plugin->callbacks.command_handler != NULL) {
-                uint8_t num_rows = data.data[2];
-                if (num_rows >= 1 && num_rows <= 16) {
-                    uint16_t expected_size = sequence_mesh_cmd_size(num_rows);
-                    if (data.size == expected_size) {
-                        err = sequence_plugin->callbacks.command_handler(MESH_CMD_SEQUENCE, data.data, data.size);
-                        if (err != ESP_OK) {
-                            ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] plugin command handler returned error: 0x%x", err);
-                        }
-                    } else {
-                        ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] size mismatch: got %d, expected %d for %d rows", data.size, expected_size, num_rows);
-                        err = ESP_ERR_INVALID_SIZE;
+        } else if (data.proto == MESH_PROTO_BIN && data.size >= 3 && data.data[0] == 0x04) {  /* MESH_CMD_PLUGIN_DATA */
+            /* Route MESH_CMD_PLUGIN_DATA to active plugin's command_handler */
+            const char *active_plugin = plugin_get_active();
+            if (active_plugin != NULL) {
+                const plugin_info_t *plugin = plugin_get_by_name(active_plugin);
+                if (plugin != NULL && plugin->callbacks.command_handler != NULL) {
+                    err = plugin->callbacks.command_handler(0x04, data.data, data.size);
+                    if (err != ESP_OK) {
+                        ESP_LOGE(mesh_common_get_tag(), "[PLUGIN DATA] plugin '%s' command handler returned error: 0x%x", active_plugin, err);
                     }
                 } else {
-                    ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] invalid length: %d (must be 1-16)", num_rows);
-                    err = ESP_ERR_INVALID_ARG;
+                    ESP_LOGE(mesh_common_get_tag(), "[PLUGIN DATA] active plugin '%s' not found or has no command handler", active_plugin);
+                    err = ESP_ERR_NOT_FOUND;
                 }
             } else {
-                ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE] sequence plugin not found or has no command handler");
+                ESP_LOGD(mesh_common_get_tag(), "[PLUGIN DATA] No active plugin for command 0x04");
                 err = ESP_ERR_NOT_FOUND;
             }
         } else if (data.proto == MESH_PROTO_BIN &&
-                   ((data.size == 1 && (data.data[0] == MESH_CMD_SEQUENCE_START ||
-                                        data.data[0] == MESH_CMD_SEQUENCE_STOP ||
-                                        data.data[0] == MESH_CMD_SEQUENCE_RESET)) ||
-                    (data.size == 2 && data.data[0] == MESH_CMD_SEQUENCE_BEAT))) {
-            /* Route sequence control commands to sequence plugin (backward compatibility) */
-            const plugin_info_t *sequence_plugin = plugin_get_by_name("sequence");
-            if (sequence_plugin != NULL && sequence_plugin->callbacks.command_handler != NULL) {
-                err = sequence_plugin->callbacks.command_handler(data.data[0], data.data, data.size);
-                if (err != ESP_OK) {
-                    ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE CONTROL] plugin command handler returned error 0x%02x: 0x%x", data.data[0], err);
-                }
+                   ((data.size == 1 && (data.data[0] == 0x05 ||  /* MESH_CMD_PLUGIN_START */
+                                        data.data[0] == 0x06 ||  /* MESH_CMD_PLUGIN_PAUSE */
+                                        data.data[0] == 0x07)) ||  /* MESH_CMD_PLUGIN_RESET */
+                    (data.size == 2 && data.data[0] == 0x08))) {  /* MESH_CMD_PLUGIN_BEAT */
+            /* Route plugin control commands through plugin system */
+            err = plugin_system_handle_plugin_command(data.data[0], data.data, data.size);
+            if (err == ESP_OK) {
+                ESP_LOGD(mesh_common_get_tag(), "[PLUGIN CONTROL] Command 0x%02X routed to plugin system", data.data[0]);
+            } else if (err == ESP_ERR_NOT_FOUND) {
+                ESP_LOGD(mesh_common_get_tag(), "[PLUGIN CONTROL] No active plugin for command 0x%02X", data.data[0]);
             } else {
-                ESP_LOGE(mesh_common_get_tag(), "[SEQUENCE CONTROL] sequence plugin not found or has no command handler");
-                err = ESP_ERR_NOT_FOUND;
+                ESP_LOGE(mesh_common_get_tag(), "[PLUGIN CONTROL] Plugin command routing error 0x%02x: 0x%x", data.data[0], err);
             }
         } else if (data.proto == MESH_PROTO_BIN && data.size >= 1) {
             uint8_t cmd = data.data[0];

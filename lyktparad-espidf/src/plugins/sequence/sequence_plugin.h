@@ -26,21 +26,7 @@
 
 #define SEQUENCE_COLOR_DATA_SIZE  (384)  /* Maximum packed color array size (256 squares × 1.5 bytes) */
 
-/* Helper functions for calculating variable-length sizes based on number of rows */
-static inline uint16_t sequence_color_data_size(uint8_t num_rows) {
-    /* Calculate packed size: (num_rows * 16 / 2) * 3 = num_rows * 24 */
-    return (uint16_t)((num_rows * 16 / 2) * 3);
-}
-
-static inline uint16_t sequence_payload_size(uint8_t num_rows) {
-    /* HTTP payload: rhythm(1) + length(1) + color_data(variable) */
-    return 2 + sequence_color_data_size(num_rows);
-}
-
-static inline uint16_t sequence_mesh_cmd_size(uint8_t num_rows) {
-    /* Mesh command: cmd(1) + rhythm(1) + length(1) + color_data(variable) */
-    return 3 + sequence_color_data_size(num_rows);
-}
+/* Helper functions moved to plugin implementation - use plugin_get_helper() instead */
 
 /*******************************************************
  *                Plugin Registration
@@ -69,9 +55,9 @@ esp_err_t sequence_plugin_root_store_and_broadcast(uint8_t rhythm, uint8_t num_r
 esp_err_t sequence_plugin_root_start(void);
 
 /**
- * @brief Stop sequence playback on root node and broadcast STOP command
+ * @brief Pause sequence playback on root node and broadcast PAUSE command
  */
-esp_err_t sequence_plugin_root_stop(void);
+esp_err_t sequence_plugin_root_pause(void);
 
 /**
  * @brief Reset sequence pointer to 0 on root node and broadcast RESET command
@@ -98,8 +84,8 @@ esp_err_t sequence_plugin_root_broadcast_beat(void);
  *******************************************************/
 
 /**
- * @brief Stop sequence playback (called from mesh_child.c on RGB command)
+ * @brief Pause sequence playback (called from mesh_child.c on RGB command)
  */
-void sequence_plugin_node_stop(void);
+void sequence_plugin_node_pause(void);
 
 #endif /* __SEQUENCE_PLUGIN_H__ */

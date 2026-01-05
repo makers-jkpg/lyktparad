@@ -26,11 +26,11 @@
 #define  MESH_CMD_HEARTBEAT      (0x01)
 #define  MESH_CMD_LIGHT_ON_OFF   (0x02)
 #define  MESH_CMD_SET_RGB        (0x03)
-#define  MESH_CMD_SEQUENCE       (0x04)  /* Sequence command: 386 bytes total (1 byte command + 1 byte rhythm + 384 bytes color data) */
-#define  MESH_CMD_SEQUENCE_START (0x05)  /* Start sequence playback */
-#define  MESH_CMD_SEQUENCE_STOP  (0x06)  /* Stop sequence playback */
-#define  MESH_CMD_SEQUENCE_RESET (0x07)  /* Reset sequence pointer to 0 */
-#define  MESH_CMD_SEQUENCE_BEAT  (0x08)  /* Tempo synchronization beat (2 bytes: command + 1-byte pointer) */
+#define  MESH_CMD_PLUGIN_DATA    (0x04)  /* Plugin data command: variable length (1 byte command + plugin-specific data) */
+#define  MESH_CMD_PLUGIN_START   (0x05)  /* Start plugin playback */
+#define  MESH_CMD_PLUGIN_PAUSE   (0x06)  /* Pause plugin playback */
+#define  MESH_CMD_PLUGIN_RESET   (0x07)  /* Reset plugin state */
+#define  MESH_CMD_PLUGIN_BEAT    (0x08)  /* Plugin beat synchronization (2 bytes: command + 1-byte pointer) */
 #define  MESH_CMD_EFFECT         (0x09)  /* Effect command */
 
 /*******************************************************
@@ -43,7 +43,7 @@
  *   - 0x01: MESH_CMD_HEARTBEAT
  *   - 0x02: MESH_CMD_LIGHT_ON_OFF
  *   - 0x03: MESH_CMD_SET_RGB
- *   - 0x04-0x08: Sequence commands (MESH_CMD_SEQUENCE, START, STOP, RESET, BEAT)
+ *   - 0x04-0x08: Plugin commands (MESH_CMD_PLUGIN_DATA, START, PAUSE, RESET, BEAT)
  *   - 0x09: MESH_CMD_EFFECT
  *   - 0x0A-0x0F: Reserved for future core commands
  *

@@ -17,7 +17,6 @@
 #include "mesh_common.h"
 #include "mesh_version.h"
 #include "config/mesh_config.h"
-#include "plugins/sequence/sequence_plugin.h"
 #include "plugin_system.h"
 #include "mesh_ota.h"
 #include "light_neopixel.h"
@@ -1415,10 +1414,17 @@ esp_err_t mesh_udp_bridge_collect_state(mesh_state_data_t *state)
         }
     }
 
-    /* Get sequence state */
-    state->sequence_active = sequence_plugin_root_is_active() ? 1 : 0;
+    /* Get sequence state using plugin query interface */
+    bool is_active = false;
+    esp_err_t query_err = plugin_query_state("sequence", 0x01, &is_active);  /* SEQUENCE_QUERY_IS_ACTIVE */
+    state->sequence_active = (query_err == ESP_OK && is_active) ? 1 : 0;
     if (state->sequence_active) {
-        state->sequence_position = htons(sequence_plugin_root_get_pointer());
+        uint16_t pointer = 0;
+        query_err = plugin_query_state("sequence", 0x02, &pointer);  /* SEQUENCE_QUERY_GET_POINTER */
+        if (query_err != ESP_OK) {
+            pointer = 0;  /* Default to 0 on error */
+        }
+        state->sequence_position = htons(pointer);
         /* Note: sequence_total is not directly available, we'll set it to 0 for now */
         state->sequence_total = htons(0);
     } else {
@@ -2337,8 +2343,17 @@ static esp_err_t handle_api_sequence_post(const uint8_t *payload, size_t payload
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Calculate expected payload size */
-    uint16_t expected_size = sequence_payload_size(num_rows);
+    /* Calculate expected payload size using plugin helper */
+    uint16_t expected_size = 0;
+    esp_err_t helper_err = plugin_get_helper("sequence", 0x01, &num_rows, &expected_size);  /* SEQUENCE_HELPER_PAYLOAD_SIZE */
+    if (helper_err != ESP_OK) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_STATE;
+    }
     if (payload_size != expected_size) {
         if (max_response_size < 1) {
             return ESP_ERR_INVALID_SIZE;
@@ -2352,8 +2367,20 @@ static esp_err_t handle_api_sequence_post(const uint8_t *payload, size_t payload
     const uint8_t *color_data = &payload[2];
     uint16_t color_data_len = payload_size - 2;
 
-    /* Store and broadcast sequence data */
-    esp_err_t err = sequence_plugin_root_store_and_broadcast(rhythm, num_rows, (uint8_t *)color_data, color_data_len);
+    /* Store and broadcast sequence data using plugin operation */
+    typedef struct {
+        uint8_t rhythm;
+        uint8_t num_rows;
+        uint8_t *color_data;
+        uint16_t color_data_len;
+    } store_params_t;
+    store_params_t store_params = {
+        .rhythm = rhythm,
+        .num_rows = num_rows,
+        .color_data = (uint8_t *)color_data,
+        .color_data_len = color_data_len
+    };
+    esp_err_t err = plugin_execute_operation("sequence", 0x01, &store_params);  /* SEQUENCE_OP_STORE */
 
     /* Response format: [success:1] (0=failure, 1=success) */
     if (max_response_size < 1) {
@@ -2396,7 +2423,12 @@ static esp_err_t handle_api_sequence_pointer(uint8_t *payload_out, size_t *paylo
         return ESP_ERR_INVALID_SIZE;
     }
 
-    uint16_t pointer = sequence_plugin_root_get_pointer();
+    /* Get pointer using plugin query */
+    uint16_t pointer = 0;
+    esp_err_t query_err = plugin_query_state("sequence", 0x02, &pointer);  /* SEQUENCE_QUERY_GET_POINTER */
+    if (query_err != ESP_OK) {
+        pointer = 0;  /* Default to 0 on error */
+    }
     uint16_t pointer_net = htons(pointer);
     memcpy(payload_out, &pointer_net, 2);
     *payload_size_out = 2;
@@ -2427,7 +2459,8 @@ static esp_err_t handle_api_sequence_start(uint8_t *response_out, size_t *respon
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = sequence_plugin_root_start();
+    /* Execute start operation using plugin query interface */
+    esp_err_t err = plugin_execute_operation("sequence", 0x02, NULL);  /* SEQUENCE_OP_START */
 
     /* Response format: [success:1] (0=failure, 1=success) */
     if (max_response_size < 1) {
@@ -2463,7 +2496,8 @@ static esp_err_t handle_api_sequence_stop(uint8_t *response_out, size_t *respons
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = sequence_plugin_root_stop();
+    /* Execute pause operation using plugin query interface */
+    esp_err_t err = plugin_execute_operation("sequence", 0x03, NULL);  /* SEQUENCE_OP_PAUSE */
 
     /* Response format: [success:1] (0=failure, 1=success) */
     if (max_response_size < 1) {
@@ -2499,7 +2533,8 @@ static esp_err_t handle_api_sequence_reset(uint8_t *response_out, size_t *respon
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = sequence_plugin_root_reset();
+    /* Execute reset operation using plugin query interface */
+    esp_err_t err = plugin_execute_operation("sequence", 0x04, NULL);  /* SEQUENCE_OP_RESET */
 
     /* Response format: [success:1] (0=failure, 1=success) */
     if (max_response_size < 1) {
@@ -2541,7 +2576,12 @@ static esp_err_t handle_api_sequence_status(uint8_t *payload_out, size_t *payloa
         return ESP_ERR_INVALID_SIZE;
     }
 
-    bool active = sequence_plugin_root_is_active();
+    /* Query active state using plugin query interface */
+    bool active = false;
+    esp_err_t query_err = plugin_query_state("sequence", 0x01, &active);  /* SEQUENCE_QUERY_IS_ACTIVE */
+    if (query_err != ESP_OK) {
+        active = false;  /* Default to false on error */
+    }
     payload_out[0] = active ? 1 : 0;
     *payload_size_out = 1;
 

@@ -312,3 +312,158 @@ esp_err_t plugin_get_all_names(const char *names[], uint8_t max_count, uint8_t *
 
     return ESP_OK;
 }
+
+esp_err_t plugin_system_handle_plugin_command(uint8_t cmd, uint8_t *data, uint16_t len)
+{
+    /* Validate command ID */
+    if (cmd != 0x05 && cmd != 0x06 && cmd != 0x07 && cmd != 0x08) {
+        ESP_LOGE(TAG, "Plugin command routing failed: invalid command ID 0x%02X (expected 0x05-0x08)", cmd);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Validate data pointer if len > 0 */
+    if (len > 0 && data == NULL) {
+        ESP_LOGE(TAG, "Plugin command routing failed: data pointer is NULL but len > 0");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Get active plugin */
+    if (active_plugin_name == NULL) {
+        ESP_LOGD(TAG, "Plugin command routing: no active plugin");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Look up active plugin */
+    const plugin_info_t *plugin = plugin_get_by_name(active_plugin_name);
+    if (plugin == NULL) {
+        ESP_LOGE(TAG, "Plugin command routing failed: active plugin '%s' not found in registry", active_plugin_name);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Route command to appropriate callback */
+    esp_err_t err = ESP_OK;
+    switch (cmd) {
+        case 0x05: /* MESH_CMD_PLUGIN_START */
+            if (plugin->callbacks.on_start == NULL) {
+                ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_start callback", active_plugin_name);
+                return ESP_ERR_INVALID_STATE;
+            }
+            if (len != 1) {
+                ESP_LOGE(TAG, "Plugin command routing failed: START command requires len=1, got %d", len);
+                return ESP_ERR_INVALID_ARG;
+            }
+            err = plugin->callbacks.on_start();
+            break;
+
+        case 0x06: /* MESH_CMD_PLUGIN_PAUSE */
+            if (plugin->callbacks.on_pause == NULL) {
+                ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_pause callback", active_plugin_name);
+                return ESP_ERR_INVALID_STATE;
+            }
+            if (len != 1) {
+                ESP_LOGE(TAG, "Plugin command routing failed: PAUSE command requires len=1, got %d", len);
+                return ESP_ERR_INVALID_ARG;
+            }
+            err = plugin->callbacks.on_pause();
+            break;
+
+        case 0x07: /* MESH_CMD_PLUGIN_RESET */
+            if (plugin->callbacks.on_reset == NULL) {
+                ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_reset callback", active_plugin_name);
+                return ESP_ERR_INVALID_STATE;
+            }
+            if (len != 1) {
+                ESP_LOGE(TAG, "Plugin command routing failed: RESET command requires len=1, got %d", len);
+                return ESP_ERR_INVALID_ARG;
+            }
+            err = plugin->callbacks.on_reset();
+            break;
+
+        case 0x08: /* MESH_CMD_PLUGIN_BEAT */
+            if (plugin->callbacks.on_beat == NULL) {
+                ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_beat callback", active_plugin_name);
+                return ESP_ERR_INVALID_STATE;
+            }
+            if (len != 2) {
+                ESP_LOGE(TAG, "Plugin command routing failed: BEAT command requires len=2, got %d", len);
+                return ESP_ERR_INVALID_ARG;
+            }
+            err = plugin->callbacks.on_beat(data, len);
+            break;
+
+        default:
+            ESP_LOGE(TAG, "Plugin command routing failed: unhandled command ID 0x%02X", cmd);
+            return ESP_ERR_INVALID_ARG;
+    }
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Plugin '%s' command callback (0x%02X) returned error: %s", active_plugin_name, cmd, esp_err_to_name(err));
+    } else {
+        ESP_LOGD(TAG, "Plugin command routed to plugin '%s' (command ID 0x%02X)", active_plugin_name, cmd);
+    }
+
+    return err;
+}
+
+esp_err_t plugin_query_state(const char *plugin_name, uint32_t query_type, void *result)
+{
+    if (plugin_name == NULL || result == NULL) {
+        ESP_LOGE(TAG, "plugin_query_state failed: plugin_name or result is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const plugin_info_t *plugin = plugin_get_by_name(plugin_name);
+    if (plugin == NULL) {
+        ESP_LOGE(TAG, "plugin_query_state failed: plugin '%s' not found", plugin_name);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (plugin->callbacks.get_state == NULL) {
+        ESP_LOGE(TAG, "plugin_query_state failed: plugin '%s' has no get_state callback", plugin_name);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    return plugin->callbacks.get_state(query_type, result);
+}
+
+esp_err_t plugin_execute_operation(const char *plugin_name, uint32_t operation_type, void *params)
+{
+    if (plugin_name == NULL) {
+        ESP_LOGE(TAG, "plugin_execute_operation failed: plugin_name is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const plugin_info_t *plugin = plugin_get_by_name(plugin_name);
+    if (plugin == NULL) {
+        ESP_LOGE(TAG, "plugin_execute_operation failed: plugin '%s' not found", plugin_name);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (plugin->callbacks.execute_operation == NULL) {
+        ESP_LOGE(TAG, "plugin_execute_operation failed: plugin '%s' has no execute_operation callback", plugin_name);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    return plugin->callbacks.execute_operation(operation_type, params);
+}
+
+esp_err_t plugin_get_helper(const char *plugin_name, uint32_t helper_type, void *params, void *result)
+{
+    if (plugin_name == NULL || result == NULL) {
+        ESP_LOGE(TAG, "plugin_get_helper failed: plugin_name or result is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const plugin_info_t *plugin = plugin_get_by_name(plugin_name);
+    if (plugin == NULL) {
+        ESP_LOGE(TAG, "plugin_get_helper failed: plugin '%s' not found", plugin_name);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (plugin->callbacks.get_helper == NULL) {
+        ESP_LOGE(TAG, "plugin_get_helper failed: plugin '%s' has no get_helper callback", plugin_name);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    return plugin->callbacks.get_helper(helper_type, params, result);
+}

@@ -1,6 +1,5 @@
 #include "mesh_web.h"
 #include "light_neopixel.h"
-#include "plugins/sequence/sequence_plugin.h"
 #include "plugin_system.h"
 #include "mesh_ota.h"
 #include "mesh_version.h"
@@ -192,8 +191,17 @@ static esp_err_t api_sequence_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* Calculate expected payload size */
-    expected_size = sequence_payload_size(num_rows);
+    /* Calculate expected payload size using plugin helper */
+    uint16_t payload_size_result = 0;
+    esp_err_t helper_err = plugin_get_helper("sequence", 0x01, &num_rows, &payload_size_result);  /* SEQUENCE_HELPER_PAYLOAD_SIZE */
+    if (helper_err != ESP_OK) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Failed to calculate payload size\"}", -1);
+        return ESP_FAIL;
+    }
+    expected_size = payload_size_result;
 
     /* Read remaining payload */
     while (total_received < expected_size) {
@@ -241,8 +249,17 @@ static esp_err_t api_sequence_post_handler(httpd_req_t *req)
     uint8_t *color_data = &content[2];
     uint16_t color_data_len = total_received - 2;
 
-    /* Validate color data length */
-    if (color_data_len != sequence_color_data_size(num_rows)) {
+    /* Validate color data length using plugin helper */
+    uint16_t color_data_size_result = 0;
+    helper_err = plugin_get_helper("sequence", 0x03, &num_rows, &color_data_size_result);  /* SEQUENCE_HELPER_COLOR_DATA_SIZE */
+    if (helper_err != ESP_OK) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Failed to calculate color data size\"}", -1);
+        return ESP_FAIL;
+    }
+    if (color_data_len != color_data_size_result) {
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -250,8 +267,20 @@ static esp_err_t api_sequence_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* Store and broadcast sequence data */
-    esp_err_t err = sequence_plugin_root_store_and_broadcast(rhythm, num_rows, color_data, color_data_len);
+    /* Store and broadcast sequence data using plugin operation */
+    typedef struct {
+        uint8_t rhythm;
+        uint8_t num_rows;
+        uint8_t *color_data;
+        uint16_t color_data_len;
+    } store_params_t;
+    store_params_t store_params = {
+        .rhythm = rhythm,
+        .num_rows = num_rows,
+        .color_data = color_data,
+        .color_data_len = color_data_len
+    };
+    esp_err_t err = plugin_execute_operation("sequence", 0x01, &store_params);  /* SEQUENCE_OP_STORE */
 
     if (err == ESP_OK) {
         httpd_resp_set_type(req, "application/json");
@@ -278,7 +307,16 @@ static esp_err_t api_sequence_pointer_handler(httpd_req_t *req)
         return ESP_ERR_INVALID_STATE;
     }
 
-    uint16_t pointer = sequence_plugin_root_get_pointer();
+    /* Get pointer using plugin query */
+    uint16_t pointer = 0;
+    esp_err_t query_err = plugin_query_state("sequence", 0x02, &pointer);  /* SEQUENCE_QUERY_GET_POINTER */
+    if (query_err != ESP_OK) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "0", -1);
+        return ESP_FAIL;
+    }
     char response[16];
     int len = snprintf(response, sizeof(response), "%d", pointer);
 
@@ -306,7 +344,8 @@ static esp_err_t api_sequence_start_handler(httpd_req_t *req)
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = sequence_plugin_root_start();
+    /* Execute start operation using plugin query interface */
+    esp_err_t err = plugin_execute_operation("sequence", 0x02, NULL);  /* SEQUENCE_OP_START */
 
     if (err == ESP_OK) {
         httpd_resp_set_type(req, "application/json");
@@ -331,11 +370,12 @@ static esp_err_t api_sequence_stop_handler(httpd_req_t *req)
         httpd_resp_set_status(req, "403 Forbidden");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_send(req, "{\"success\":false,\"error\":\"Only root node can stop sequence\"}", -1);
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Only root node can pause sequence\"}", -1);
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = sequence_plugin_root_stop();
+    /* Execute pause operation using plugin query interface */
+    esp_err_t err = plugin_execute_operation("sequence", 0x03, NULL);  /* SEQUENCE_OP_PAUSE */
 
     if (err == ESP_OK) {
         httpd_resp_set_type(req, "application/json");
@@ -364,7 +404,8 @@ static esp_err_t api_sequence_reset_handler(httpd_req_t *req)
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = sequence_plugin_root_reset();
+    /* Execute reset operation using plugin query interface */
+    esp_err_t err = plugin_execute_operation("sequence", 0x04, NULL);  /* SEQUENCE_OP_RESET */
 
     if (err == ESP_OK) {
         httpd_resp_set_type(req, "application/json");
@@ -393,7 +434,13 @@ static esp_err_t api_sequence_status_handler(httpd_req_t *req)
         return ESP_ERR_INVALID_STATE;
     }
 
-    bool active = sequence_plugin_root_is_active();
+    /* Query active state using plugin query interface */
+    bool active = false;
+    esp_err_t query_err = plugin_query_state("sequence", 0x01, &active);  /* SEQUENCE_QUERY_IS_ACTIVE */
+    if (query_err != ESP_OK) {
+        /* If query fails, assume not active */
+        active = false;
+    }
 
     char response[128];
     int len = snprintf(response, sizeof(response), "{\"active\":%s}",

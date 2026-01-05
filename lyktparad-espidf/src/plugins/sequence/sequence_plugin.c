@@ -27,6 +27,24 @@
 
 static const char *TAG = "sequence_plugin";
 
+/* Query type constants for get_state callback */
+#define SEQUENCE_QUERY_IS_ACTIVE  0x01
+#define SEQUENCE_QUERY_GET_POINTER 0x02
+#define SEQUENCE_QUERY_GET_RHYTHM  0x03
+#define SEQUENCE_QUERY_GET_LENGTH  0x04
+
+/* Operation type constants for execute_operation callback */
+#define SEQUENCE_OP_STORE          0x01
+#define SEQUENCE_OP_START          0x02
+#define SEQUENCE_OP_PAUSE          0x03
+#define SEQUENCE_OP_RESET          0x04
+#define SEQUENCE_OP_BROADCAST_BEAT 0x05
+
+/* Helper type constants for get_helper callback */
+#define SEQUENCE_HELPER_PAYLOAD_SIZE    0x01
+#define SEQUENCE_HELPER_MESH_CMD_SIZE   0x02
+#define SEQUENCE_HELPER_COLOR_DATA_SIZE 0x03
+
 /* Default CONFIG_MESH_ROUTE_TABLE_SIZE if not defined */
 #ifndef CONFIG_MESH_ROUTE_TABLE_SIZE
 #define CONFIG_MESH_ROUTE_TABLE_SIZE 50
@@ -56,7 +74,7 @@ static void extract_square_rgb(uint8_t *packed_data, uint16_t square_index, uint
 static esp_err_t sequence_handle_command_internal(uint8_t cmd, uint8_t *data, uint16_t len);
 static esp_err_t sequence_broadcast_control(uint8_t cmd);
 static esp_err_t sequence_handle_start(uint8_t *data, uint16_t len);
-static esp_err_t sequence_handle_stop(uint8_t *data, uint16_t len);
+static esp_err_t sequence_handle_pause(uint8_t *data, uint16_t len);
 static esp_err_t sequence_handle_reset(uint8_t *data, uint16_t len);
 static esp_err_t sequence_handle_beat(uint8_t *data, uint16_t len);
 
@@ -188,14 +206,13 @@ static void sequence_timer_cb(void *arg)
 /**
  * @brief Sequence plugin command handler
  *
- * Handles sequence commands including:
- * - MESH_CMD_SEQUENCE (0x04): Store and start sequence data
- * - MESH_CMD_SEQUENCE_START (0x05): Start sequence playback
- * - MESH_CMD_SEQUENCE_STOP (0x06): Stop sequence playback
- * - MESH_CMD_SEQUENCE_RESET (0x07): Reset sequence pointer to 0
- * - MESH_CMD_SEQUENCE_BEAT (0x08): Update pointer from BEAT data (child nodes only)
+ * Handles plugin data commands:
+ * - MESH_CMD_PLUGIN_DATA (0x04): Store and start sequence data
  *
- * @param cmd Command ID (MESH_CMD_SEQUENCE, MESH_CMD_SEQUENCE_START, etc.)
+ * Note: MESH_CMD_PLUGIN_START, MESH_CMD_PLUGIN_PAUSE, MESH_CMD_PLUGIN_RESET, and
+ * MESH_CMD_PLUGIN_BEAT are handled via plugin callbacks (on_start, on_pause, on_reset, on_beat).
+ *
+ * @param cmd Command ID (should be MESH_CMD_PLUGIN_DATA = 0x04)
  * @param data Command data (includes command byte at data[0])
  * @param len Data length
  * @return ESP_OK on success, error code on failure
@@ -214,27 +231,13 @@ static esp_err_t sequence_command_handler(uint8_t cmd, uint8_t *data, uint16_t l
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* Route command to appropriate handler */
-    switch (cmd) {
-        case MESH_CMD_SEQUENCE:
-            return sequence_handle_command_internal(cmd, data, len);
-
-        case MESH_CMD_SEQUENCE_START:
-            return sequence_handle_start(data, len);
-
-        case MESH_CMD_SEQUENCE_STOP:
-            return sequence_handle_stop(data, len);
-
-        case MESH_CMD_SEQUENCE_RESET:
-            return sequence_handle_reset(data, len);
-
-        case MESH_CMD_SEQUENCE_BEAT:
-            return sequence_handle_beat(data, len);
-
-        default:
-            ESP_LOGE(TAG, "Invalid command ID: 0x%02X (expected MESH_CMD_SEQUENCE or control command)", cmd);
-            return ESP_ERR_INVALID_ARG;
+    /* Only handle MESH_CMD_PLUGIN_DATA (0x04) */
+    if (cmd == 0x04) {  /* MESH_CMD_PLUGIN_DATA */
+        return sequence_handle_command_internal(cmd, data, len);
     }
+
+    ESP_LOGE(TAG, "Invalid command ID: 0x%02X (expected MESH_CMD_PLUGIN_DATA = 0x04)", cmd);
+    return ESP_ERR_INVALID_ARG;
 }
 
 static esp_err_t sequence_handle_command_internal(uint8_t cmd, uint8_t *data, uint16_t len)
@@ -244,8 +247,8 @@ static esp_err_t sequence_handle_command_internal(uint8_t cmd, uint8_t *data, ui
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (data[0] != MESH_CMD_SEQUENCE) {
-        ESP_LOGE(TAG, "Command byte mismatch: 0x%02X (expected MESH_CMD_SEQUENCE)", data[0]);
+    if (data[0] != 0x04) {  /* MESH_CMD_PLUGIN_DATA */
+        ESP_LOGE(TAG, "Command byte mismatch: 0x%02X (expected MESH_CMD_PLUGIN_DATA = 0x04)", data[0]);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -261,7 +264,8 @@ static esp_err_t sequence_handle_command_internal(uint8_t cmd, uint8_t *data, ui
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint16_t expected_size = sequence_mesh_cmd_size(num_rows);
+    /* Calculate expected mesh command size: cmd(1) + rhythm(1) + length(1) + color_data(variable) */
+    uint16_t expected_size = 3 + ((num_rows * 16 / 2) * 3);
     if (len != expected_size) {
         ESP_LOGE(TAG, "Invalid sequence command size: %d (expected %d for %d rows)", len, expected_size, num_rows);
         return ESP_ERR_INVALID_SIZE;
@@ -299,13 +303,13 @@ static esp_err_t sequence_handle_command_internal(uint8_t cmd, uint8_t *data, ui
  * Starts sequence playback. On root node, calls sequence_plugin_root_start().
  * On child node, starts timer if sequence data exists.
  *
- * @param data Command data (data[0] = MESH_CMD_SEQUENCE_START)
+ * @param data Command data (data[0] = MESH_CMD_PLUGIN_START = 0x05)
  * @param len Data length (must be 1)
  * @return ESP_OK on success, error code on failure
  */
 static esp_err_t sequence_handle_start(uint8_t *data, uint16_t len)
 {
-    if (data == NULL || len != 1 || data[0] != MESH_CMD_SEQUENCE_START) {
+    if (data == NULL || len != 1 || data[0] != 0x05) {  /* MESH_CMD_PLUGIN_START */
         ESP_LOGE(TAG, "Invalid START command data: data=%p, len=%d", data, len);
         return ESP_ERR_INVALID_ARG;
     }
@@ -321,7 +325,14 @@ static esp_err_t sequence_handle_start(uint8_t *data, uint16_t len)
         }
 
         sequence_timer_stop();
-        sequence_pointer = 0;
+
+        /* Preserve pointer if resuming from pause (valid sequence data exists) */
+        /* Validate pointer range and reset if out of bounds */
+        uint16_t max_squares = sequence_length * 16;
+        if (sequence_pointer >= max_squares) {
+            sequence_pointer = 0;  /* Pointer out of range, reset to 0 */
+        }
+        /* Otherwise, preserve current pointer value (resume from pause) */
 
         esp_err_t err = sequence_timer_start(sequence_rhythm);
         if (err != ESP_OK) {
@@ -335,29 +346,29 @@ static esp_err_t sequence_handle_start(uint8_t *data, uint16_t len)
 }
 
 /**
- * @brief Handle STOP command
+ * @brief Handle PAUSE command
  *
- * Stops sequence playback. On root node, calls sequence_plugin_root_stop().
+ * Pauses sequence playback (preserves state). On root node, calls sequence_plugin_root_pause().
  * On child node, stops timer.
  *
- * @param data Command data (data[0] = MESH_CMD_SEQUENCE_STOP)
+ * @param data Command data (data[0] = MESH_CMD_PLUGIN_PAUSE = 0x06)
  * @param len Data length (must be 1)
  * @return ESP_OK on success, error code on failure
  */
-static esp_err_t sequence_handle_stop(uint8_t *data, uint16_t len)
+static esp_err_t sequence_handle_pause(uint8_t *data, uint16_t len)
 {
-    if (data == NULL || len != 1 || data[0] != MESH_CMD_SEQUENCE_STOP) {
-        ESP_LOGE(TAG, "Invalid STOP command data: data=%p, len=%d", data, len);
+    if (data == NULL || len != 1 || data[0] != 0x06) {  /* MESH_CMD_PLUGIN_PAUSE */
+        ESP_LOGE(TAG, "Invalid PAUSE command data: data=%p, len=%d", data, len);
         return ESP_ERR_INVALID_ARG;
     }
 
     if (esp_mesh_is_root()) {
         /* Root node: use root function */
-        return sequence_plugin_root_stop();
+        return sequence_plugin_root_pause();
     } else {
         /* Child node: stop timer */
         sequence_timer_stop();
-        ESP_LOGI(TAG, "Sequence playback stopped (child node)");
+        ESP_LOGI(TAG, "Sequence playback paused (child node)");
         return ESP_OK;
     }
 }
@@ -368,13 +379,13 @@ static esp_err_t sequence_handle_stop(uint8_t *data, uint16_t len)
  * Resets sequence pointer to 0. On root node, calls sequence_plugin_root_reset().
  * On child node, resets pointer and restarts timer if active.
  *
- * @param data Command data (data[0] = MESH_CMD_SEQUENCE_RESET)
+ * @param data Command data (data[0] = MESH_CMD_PLUGIN_RESET = 0x07)
  * @param len Data length (must be 1)
  * @return ESP_OK on success, error code on failure
  */
 static esp_err_t sequence_handle_reset(uint8_t *data, uint16_t len)
 {
-    if (data == NULL || len != 1 || data[0] != MESH_CMD_SEQUENCE_RESET) {
+    if (data == NULL || len != 1 || data[0] != 0x07) {  /* MESH_CMD_PLUGIN_RESET */
         ESP_LOGE(TAG, "Invalid RESET command data: data=%p, len=%d", data, len);
         return ESP_ERR_INVALID_ARG;
     }
@@ -411,13 +422,13 @@ static esp_err_t sequence_handle_reset(uint8_t *data, uint16_t len)
  * Updates sequence pointer from BEAT data. Only valid for child nodes.
  * Root nodes don't receive BEAT commands (they broadcast them).
  *
- * @param data Command data (data[0] = MESH_CMD_SEQUENCE_BEAT, data[1] = pointer)
+ * @param data Command data (data[0] = MESH_CMD_PLUGIN_BEAT = 0x08, data[1] = pointer)
  * @param len Data length (must be 2)
  * @return ESP_OK on success, error code on failure
  */
 static esp_err_t sequence_handle_beat(uint8_t *data, uint16_t len)
 {
-    if (data == NULL || len != 2 || data[0] != MESH_CMD_SEQUENCE_BEAT) {
+    if (data == NULL || len != 2 || data[0] != 0x08) {  /* MESH_CMD_PLUGIN_BEAT */
         ESP_LOGE(TAG, "Invalid BEAT command data: data=%p, len=%d", data, len);
         return ESP_ERR_INVALID_ARG;
     }
@@ -485,6 +496,226 @@ static esp_err_t sequence_on_deactivate(void)
     return ESP_OK;
 }
 
+static esp_err_t sequence_on_start(void)
+{
+    if (esp_mesh_is_root()) {
+        return sequence_plugin_root_start();
+    } else {
+        /* Child node: start timer if sequence data exists */
+        if (sequence_rhythm == 0 || sequence_length == 0) {
+            ESP_LOGE(TAG, "No sequence data available for START (rhythm=%d, length=%d)", sequence_rhythm, sequence_length);
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        sequence_timer_stop();
+
+        /* Preserve pointer if resuming from pause (valid sequence data exists) */
+        /* Validate pointer range and reset if out of bounds */
+        uint16_t max_squares = sequence_length * 16;
+        if (sequence_pointer >= max_squares) {
+            sequence_pointer = 0;  /* Pointer out of range, reset to 0 */
+        }
+        /* Otherwise, preserve current pointer value (resume from pause) */
+
+        esp_err_t err = sequence_timer_start(sequence_rhythm);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to start sequence timer: 0x%x", err);
+            return err;
+        }
+
+        ESP_LOGI(TAG, "Sequence playback started (child node)");
+        return ESP_OK;
+    }
+}
+
+static esp_err_t sequence_on_pause(void)
+{
+    if (esp_mesh_is_root()) {
+        return sequence_plugin_root_pause();
+    } else {
+        /* Child node: stop timer */
+        sequence_timer_stop();
+        ESP_LOGI(TAG, "Sequence playback paused (child node)");
+        return ESP_OK;
+    }
+}
+
+static esp_err_t sequence_on_reset(void)
+{
+    if (esp_mesh_is_root()) {
+        return sequence_plugin_root_reset();
+    } else {
+        /* Child node: reset pointer and restart timer if active */
+        sequence_pointer = 0;
+
+        if (sequence_active) {
+            if (sequence_rhythm == 0 || sequence_length == 0) {
+                ESP_LOGE(TAG, "Cannot restart timer: invalid sequence data (rhythm=%d, length=%d)", sequence_rhythm, sequence_length);
+                sequence_timer_stop();  /* Stop timer but don't restart */
+                return ESP_ERR_INVALID_STATE;
+            }
+            sequence_timer_stop();
+            esp_err_t err = sequence_timer_start(sequence_rhythm);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to restart sequence timer: 0x%x", err);
+                return err;
+            }
+        }
+
+        ESP_LOGI(TAG, "Sequence pointer reset to 0 (child node)");
+        return ESP_OK;
+    }
+}
+
+static esp_err_t sequence_on_beat(uint8_t *data, uint16_t len)
+{
+    if (data == NULL || len != 2 || data[0] != 0x08) {  /* MESH_CMD_PLUGIN_BEAT */
+        ESP_LOGE(TAG, "Invalid BEAT command data: data=%p, len=%d", data, len);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* BEAT is only for child nodes, root nodes broadcast it */
+    if (esp_mesh_is_root()) {
+        ESP_LOGW(TAG, "Root node received BEAT callback (should not happen)");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Child node: update pointer from BEAT data */
+    uint8_t pointer = data[1];
+    if (sequence_length == 0) {
+        ESP_LOGE(TAG, "No sequence data available for BEAT (length=0)");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint16_t max_squares = sequence_length * 16;
+
+    if (pointer >= max_squares) {
+        ESP_LOGE(TAG, "Invalid BEAT pointer: %d (max: %d)", pointer, max_squares - 1);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    sequence_pointer = pointer;
+    ESP_LOGD(TAG, "BEAT received - pointer updated to %d", sequence_pointer);
+
+    return ESP_OK;
+}
+
+/*******************************************************
+ *                Query Interface Callbacks
+ *******************************************************/
+
+static esp_err_t sequence_get_state(uint32_t query_type, void *result)
+{
+    if (result == NULL) {
+        ESP_LOGE(TAG, "sequence_get_state failed: result is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    switch (query_type) {
+        case SEQUENCE_QUERY_IS_ACTIVE:
+            *((bool *)result) = sequence_active;
+            return ESP_OK;
+
+        case SEQUENCE_QUERY_GET_POINTER:
+            *((uint16_t *)result) = sequence_pointer;
+            return ESP_OK;
+
+        case SEQUENCE_QUERY_GET_RHYTHM:
+            *((uint8_t *)result) = sequence_rhythm;
+            return ESP_OK;
+
+        case SEQUENCE_QUERY_GET_LENGTH:
+            *((uint8_t *)result) = sequence_length;
+            return ESP_OK;
+
+        default:
+            ESP_LOGE(TAG, "sequence_get_state failed: invalid query_type 0x%08X", query_type);
+            return ESP_ERR_INVALID_ARG;
+    }
+}
+
+static esp_err_t sequence_execute_operation(uint32_t operation_type, void *params)
+{
+    switch (operation_type) {
+        case SEQUENCE_OP_STORE: {
+            if (params == NULL) {
+                ESP_LOGE(TAG, "sequence_execute_operation STORE failed: params is NULL");
+                return ESP_ERR_INVALID_ARG;
+            }
+            /* params points to: struct { uint8_t rhythm; uint8_t num_rows; uint8_t *color_data; uint16_t color_data_len; } */
+            typedef struct {
+                uint8_t rhythm;
+                uint8_t num_rows;
+                uint8_t *color_data;
+                uint16_t color_data_len;
+            } store_params_t;
+            store_params_t *store_params = (store_params_t *)params;
+            return sequence_plugin_root_store_and_broadcast(store_params->rhythm, store_params->num_rows,
+                                                           store_params->color_data, store_params->color_data_len);
+        }
+
+        case SEQUENCE_OP_START:
+            return sequence_plugin_root_start();
+
+        case SEQUENCE_OP_PAUSE:
+            return sequence_plugin_root_pause();
+
+        case SEQUENCE_OP_RESET:
+            return sequence_plugin_root_reset();
+
+        case SEQUENCE_OP_BROADCAST_BEAT:
+            return sequence_plugin_root_broadcast_beat();
+
+        default:
+            ESP_LOGE(TAG, "sequence_execute_operation failed: invalid operation_type 0x%08X", operation_type);
+            return ESP_ERR_INVALID_ARG;
+    }
+}
+
+static esp_err_t sequence_get_helper(uint32_t helper_type, void *params, void *result)
+{
+    if (result == NULL) {
+        ESP_LOGE(TAG, "sequence_get_helper failed: result is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    switch (helper_type) {
+        case SEQUENCE_HELPER_PAYLOAD_SIZE: {
+            if (params == NULL) {
+                ESP_LOGE(TAG, "sequence_get_helper PAYLOAD_SIZE failed: params is NULL");
+                return ESP_ERR_INVALID_ARG;
+            }
+            uint8_t num_rows = *((uint8_t *)params);
+            *((uint16_t *)result) = 2 + ((num_rows * 16 / 2) * 3);  /* rhythm(1) + length(1) + color_data */
+            return ESP_OK;
+        }
+
+        case SEQUENCE_HELPER_MESH_CMD_SIZE: {
+            if (params == NULL) {
+                ESP_LOGE(TAG, "sequence_get_helper MESH_CMD_SIZE failed: params is NULL");
+                return ESP_ERR_INVALID_ARG;
+            }
+            uint8_t num_rows = *((uint8_t *)params);
+            *((uint16_t *)result) = 3 + ((num_rows * 16 / 2) * 3);  /* cmd(1) + rhythm(1) + length(1) + color_data */
+            return ESP_OK;
+        }
+
+        case SEQUENCE_HELPER_COLOR_DATA_SIZE: {
+            if (params == NULL) {
+                ESP_LOGE(TAG, "sequence_get_helper COLOR_DATA_SIZE failed: params is NULL");
+                return ESP_ERR_INVALID_ARG;
+            }
+            uint8_t num_rows = *((uint8_t *)params);
+            *((uint16_t *)result) = (num_rows * 16 / 2) * 3;  /* packed color data size */
+            return ESP_OK;
+        }
+
+        default:
+            ESP_LOGE(TAG, "sequence_get_helper failed: invalid helper_type 0x%08X", helper_type);
+            return ESP_ERR_INVALID_ARG;
+    }
+}
+
 /*******************************************************
  *                Plugin Registration
  *******************************************************/
@@ -502,6 +733,13 @@ void sequence_plugin_register(void)
             .is_active = sequence_is_active,
             .on_activate = sequence_on_activate,
             .on_deactivate = sequence_on_deactivate,
+            .on_start = sequence_on_start,
+            .on_pause = sequence_on_pause,
+            .on_reset = sequence_on_reset,
+            .on_beat = sequence_on_beat,
+            .get_state = sequence_get_state,
+            .execute_operation = sequence_execute_operation,
+            .get_helper = sequence_get_helper,
         },
         .user_data = NULL,
     };
@@ -568,7 +806,7 @@ esp_err_t sequence_plugin_root_store_and_broadcast(uint8_t rhythm, uint8_t num_r
     }
 
     uint8_t *tx_buf = mesh_common_get_tx_buf();
-    tx_buf[0] = MESH_CMD_SEQUENCE;
+    tx_buf[0] = 0x04;  /* MESH_CMD_PLUGIN_DATA */
     tx_buf[1] = rhythm;
     tx_buf[2] = num_rows;
     memcpy(&tx_buf[3], color_data, color_data_len);
@@ -599,7 +837,7 @@ esp_err_t sequence_plugin_root_store_and_broadcast(uint8_t rhythm, uint8_t num_r
 
 static esp_err_t sequence_broadcast_control(uint8_t cmd)
 {
-    if (cmd != MESH_CMD_SEQUENCE_START && cmd != MESH_CMD_SEQUENCE_STOP && cmd != MESH_CMD_SEQUENCE_RESET) {
+    if (cmd != 0x05 && cmd != 0x06 && cmd != 0x07) {  /* MESH_CMD_PLUGIN_START, MESH_CMD_PLUGIN_PAUSE, MESH_CMD_PLUGIN_RESET */
         ESP_LOGE(TAG, "Invalid control command: 0x%02x", cmd);
         return ESP_ERR_INVALID_ARG;
     }
@@ -640,8 +878,8 @@ static esp_err_t sequence_broadcast_control(uint8_t cmd)
         }
     }
 
-    const char *cmd_name = (cmd == MESH_CMD_SEQUENCE_START) ? "START" :
-                          (cmd == MESH_CMD_SEQUENCE_STOP) ? "STOP" : "RESET";
+    const char *cmd_name = (cmd == 0x05) ? "START" :  /* MESH_CMD_PLUGIN_START */
+                          (cmd == 0x06) ? "PAUSE" : "RESET";  /* MESH_CMD_PLUGIN_PAUSE, MESH_CMD_PLUGIN_RESET */
     ESP_LOGI(TAG, "%s command broadcast - sent to %d/%d child nodes (success:%d, failed:%d)",
              cmd_name, success_count, child_node_count, success_count, fail_count);
 
@@ -671,7 +909,7 @@ esp_err_t sequence_plugin_root_broadcast_beat(void)
     }
 
     uint8_t *tx_buf = mesh_common_get_tx_buf();
-    tx_buf[0] = MESH_CMD_SEQUENCE_BEAT;
+    tx_buf[0] = 0x08;  /* MESH_CMD_PLUGIN_BEAT */
     tx_buf[1] = sequence_pointer & 0xFF;
 
     mesh_data_t data;
@@ -705,20 +943,27 @@ esp_err_t sequence_plugin_root_start(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (sequence_rhythm == 0) {
-        ESP_LOGE(TAG, "No sequence data available");
+    if (sequence_rhythm == 0 || sequence_length == 0) {
+        ESP_LOGE(TAG, "No sequence data available (rhythm=%d, length=%d)", sequence_rhythm, sequence_length);
         return ESP_ERR_INVALID_STATE;
     }
 
     sequence_timer_stop();
-    sequence_pointer = 0;
+
+    /* Preserve pointer if resuming from pause (valid sequence data exists) */
+    /* Validate pointer range and reset if out of bounds */
+    uint16_t max_squares = sequence_length * 16;
+    if (sequence_pointer >= max_squares) {
+        sequence_pointer = 0;  /* Pointer out of range, reset to 0 */
+    }
+    /* Otherwise, preserve current pointer value (resume from pause) */
 
     esp_err_t err = sequence_timer_start(sequence_rhythm);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start sequence timer: 0x%x", err);
     }
 
-    esp_err_t broadcast_err = sequence_broadcast_control(MESH_CMD_SEQUENCE_START);
+    esp_err_t broadcast_err = sequence_broadcast_control(0x05);  /* MESH_CMD_PLUGIN_START */
     if (broadcast_err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to broadcast START command: 0x%x", broadcast_err);
     }
@@ -727,21 +972,21 @@ esp_err_t sequence_plugin_root_start(void)
     return err;
 }
 
-esp_err_t sequence_plugin_root_stop(void)
+esp_err_t sequence_plugin_root_pause(void)
 {
     if (!esp_mesh_is_root()) {
-        ESP_LOGE(TAG, "Not root node, cannot stop sequence");
+        ESP_LOGE(TAG, "Not root node, cannot pause sequence");
         return ESP_ERR_INVALID_STATE;
     }
 
     sequence_timer_stop();
 
-    esp_err_t broadcast_err = sequence_broadcast_control(MESH_CMD_SEQUENCE_STOP);
+    esp_err_t broadcast_err = sequence_broadcast_control(0x06);  /* MESH_CMD_PLUGIN_PAUSE */
     if (broadcast_err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to broadcast STOP command: 0x%x", broadcast_err);
+        ESP_LOGW(TAG, "Failed to broadcast PAUSE command: 0x%x", broadcast_err);
     }
 
-    ESP_LOGI(TAG, "Sequence playback stopped");
+    ESP_LOGI(TAG, "Sequence playback paused");
     return ESP_OK;
 }
 
@@ -762,7 +1007,7 @@ esp_err_t sequence_plugin_root_reset(void)
         }
     }
 
-    esp_err_t broadcast_err = sequence_broadcast_control(MESH_CMD_SEQUENCE_RESET);
+    esp_err_t broadcast_err = sequence_broadcast_control(0x07);  /* MESH_CMD_PLUGIN_RESET */
     if (broadcast_err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to broadcast RESET command: 0x%x", broadcast_err);
     }
@@ -785,7 +1030,7 @@ bool sequence_plugin_root_is_active(void)
  *                Child Node Functions (for mesh_child.c)
  *******************************************************/
 
-void sequence_plugin_node_stop(void)
+void sequence_plugin_node_pause(void)
 {
     sequence_timer_stop();
 }
