@@ -62,7 +62,7 @@ function parseHttpRequest(req) {
  * @returns {Buffer} Binary payload buffer
  */
 function jsonToBinary(commandId, jsonBody) {
-    const { UDP_CMD_API_COLOR_POST, UDP_CMD_API_SEQUENCE_POST, UDP_CMD_API_OTA_DOWNLOAD, UDP_CMD_API_OTA_REBOOT } = require('./udp-commands');
+    const { UDP_CMD_API_COLOR_POST, UDP_CMD_API_SEQUENCE_POST, UDP_CMD_API_OTA_DOWNLOAD, UDP_CMD_API_OTA_REBOOT, UDP_CMD_API_PLUGIN_ACTIVATE, UDP_CMD_API_PLUGIN_DEACTIVATE } = require('./udp-commands');
 
     switch (commandId) {
         case UDP_CMD_API_COLOR_POST:
@@ -115,6 +115,20 @@ function jsonToBinary(commandId, jsonBody) {
             rebootPayload.writeUInt16BE(timeout, 0);
             rebootPayload.writeUInt16BE(delay, 2);
             return rebootPayload;
+
+        case UDP_CMD_API_PLUGIN_ACTIVATE:
+        case UDP_CMD_API_PLUGIN_DEACTIVATE:
+            // POST /api/plugin/activate or /api/plugin/deactivate: { "name": "effects" }
+            // Binary: [name_len:1][name:N bytes]
+            const name = jsonBody.name || '';
+            const nameBytes = Buffer.from(name, 'utf8');
+            if (nameBytes.length > 63) {
+                throw new Error('Plugin name too long (max 63 bytes)');
+            }
+            const buffer = Buffer.alloc(1 + nameBytes.length);
+            buffer[0] = nameBytes.length;
+            nameBytes.copy(buffer, 1);
+            return buffer;
 
         default:
             // For GET requests or simple POST requests, return empty buffer

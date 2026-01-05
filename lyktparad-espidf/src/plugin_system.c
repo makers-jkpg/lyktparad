@@ -28,6 +28,9 @@ static plugin_info_t plugin_registry[MAX_PLUGINS];
 static uint8_t plugin_count = 0;
 static uint8_t next_command_id = PLUGIN_CMD_ID_MIN;
 
+/* Active plugin tracking - only one plugin can be active at a time (mutual exclusivity) */
+static const char *active_plugin_name = NULL;
+
 esp_err_t plugin_register(const plugin_info_t *info, uint8_t *assigned_cmd_id)
 {
     /* Validate input parameters */
@@ -156,6 +159,12 @@ esp_err_t plugin_system_handle_command(uint8_t cmd, uint8_t *data, uint16_t len)
         return ESP_ERR_NOT_FOUND;
     }
 
+    /* Check if plugin is active */
+    if (!plugin_is_active(plugin->name)) {
+        ESP_LOGD(TAG, "Command routing: plugin '%s' is not active, rejecting command 0x%02X", plugin->name, cmd);
+        return ESP_ERR_INVALID_STATE;
+    }
+
     /* Call plugin's command handler */
     if (plugin->callbacks.command_handler == NULL) {
         ESP_LOGE(TAG, "Command routing failed: plugin '%s' has NULL command_handler", plugin->name);
@@ -170,4 +179,136 @@ esp_err_t plugin_system_handle_command(uint8_t cmd, uint8_t *data, uint16_t len)
     }
 
     return err;
+}
+
+esp_err_t plugin_activate(const char *name)
+{
+    if (name == NULL) {
+        ESP_LOGE(TAG, "Plugin activation failed: name is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Look up plugin */
+    const plugin_info_t *plugin = plugin_get_by_name(name);
+    if (plugin == NULL) {
+        ESP_LOGE(TAG, "Plugin activation failed: plugin '%s' not found", name);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* If another plugin is active, deactivate it first */
+    if (active_plugin_name != NULL) {
+        if (strcmp(active_plugin_name, name) == 0) {
+            /* Already active, no-op */
+            ESP_LOGD(TAG, "Plugin '%s' is already active", name);
+            return ESP_OK;
+        }
+
+        /* Deactivate current plugin */
+        esp_err_t deactivate_err = plugin_deactivate(active_plugin_name);
+        if (deactivate_err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to deactivate current plugin '%s': %s",
+                     active_plugin_name, esp_err_to_name(deactivate_err));
+            return deactivate_err;
+        }
+    }
+
+    /* Call plugin's on_activate callback if provided */
+    if (plugin->callbacks.on_activate != NULL) {
+        esp_err_t activate_err = plugin->callbacks.on_activate();
+        if (activate_err != ESP_OK) {
+            ESP_LOGE(TAG, "Plugin '%s' on_activate callback failed: %s",
+                     name, esp_err_to_name(activate_err));
+            return activate_err;
+        }
+    }
+
+    /* Set as active plugin */
+    active_plugin_name = plugin->name;
+    ESP_LOGI(TAG, "Plugin '%s' activated", name);
+
+    return ESP_OK;
+}
+
+esp_err_t plugin_deactivate(const char *name)
+{
+    if (name == NULL) {
+        ESP_LOGE(TAG, "Plugin deactivation failed: name is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Check if plugin is currently active */
+    if (active_plugin_name == NULL || strcmp(active_plugin_name, name) != 0) {
+        ESP_LOGD(TAG, "Plugin '%s' is not active, nothing to deactivate", name);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Look up plugin */
+    const plugin_info_t *plugin = plugin_get_by_name(name);
+    if (plugin == NULL) {
+        ESP_LOGE(TAG, "Plugin deactivation failed: plugin '%s' not found", name);
+        active_plugin_name = NULL; /* Clear active plugin even if lookup fails */
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Call plugin's on_deactivate callback if provided */
+    if (plugin->callbacks.on_deactivate != NULL) {
+        esp_err_t deactivate_err = plugin->callbacks.on_deactivate();
+        if (deactivate_err != ESP_OK) {
+            ESP_LOGW(TAG, "Plugin '%s' on_deactivate callback returned error: %s",
+                     name, esp_err_to_name(deactivate_err));
+            /* Continue with deactivation even if callback fails */
+        }
+    }
+
+    /* Clear active plugin */
+    active_plugin_name = NULL;
+    ESP_LOGI(TAG, "Plugin '%s' deactivated", name);
+
+    return ESP_OK;
+}
+
+esp_err_t plugin_deactivate_all(void)
+{
+    if (active_plugin_name == NULL) {
+        return ESP_OK; /* No plugin active */
+    }
+
+    return plugin_deactivate(active_plugin_name);
+}
+
+const char *plugin_get_active(void)
+{
+    return active_plugin_name;
+}
+
+bool plugin_is_active(const char *name)
+{
+    if (name == NULL) {
+        return false;
+    }
+
+    if (active_plugin_name == NULL) {
+        return false;
+    }
+
+    return (strcmp(active_plugin_name, name) == 0);
+}
+
+esp_err_t plugin_get_all_names(const char *names[], uint8_t max_count, uint8_t *count)
+{
+    if (names == NULL || count == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (max_count < plugin_count) {
+        ESP_LOGE(TAG, "plugin_get_all_names failed: max_count (%d) is less than plugin_count (%d)", max_count, plugin_count);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    *count = plugin_count;
+    for (uint8_t i = 0; i < plugin_count; i++) {
+        names[i] = plugin_registry[i].name;
+    }
+
+    return ESP_OK;
 }

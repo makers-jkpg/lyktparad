@@ -15,6 +15,7 @@
 
 #include "sequence_plugin.h"
 #include "plugin_system.h"
+#include "plugin_light.h"
 #include "mesh_commands.h"
 #include "mesh_common.h"
 #include "light_neopixel.h"
@@ -143,6 +144,13 @@ static esp_err_t sequence_timer_start(uint8_t rhythm)
 
 static void sequence_timer_cb(void *arg)
 {
+    /* Check if sequence plugin is active */
+    if (!plugin_is_active("sequence")) {
+        ESP_LOGW(TAG, "Sequence timer callback called but plugin is not active, stopping timer");
+        sequence_timer_stop();
+        return;
+    }
+
     /* Defensive check: timer should never run with invalid sequence data */
     if (sequence_length == 0 || sequence_rhythm == 0) {
         ESP_LOGE(TAG, "Timer callback called with invalid sequence data (length=%d, rhythm=%d), stopping timer", sequence_length, sequence_rhythm);
@@ -159,7 +167,7 @@ static void sequence_timer_cb(void *arg)
     g_scaled = g_4bit * 16;
     b_scaled = b_4bit * 16;
 
-    esp_err_t err = mesh_light_set_rgb(r_scaled, g_scaled, b_scaled);
+    esp_err_t err = plugin_light_set_rgb(r_scaled, g_scaled, b_scaled);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set LED in timer callback: 0x%x", err);
     }
@@ -194,6 +202,18 @@ static void sequence_timer_cb(void *arg)
  */
 static esp_err_t sequence_command_handler(uint8_t cmd, uint8_t *data, uint16_t len)
 {
+    /* Validate data */
+    if (data == NULL || len < 1) {
+        ESP_LOGE(TAG, "Invalid command data: data=%p, len=%d", data, len);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Check if sequence plugin is active */
+    if (!plugin_is_active("sequence")) {
+        ESP_LOGD(TAG, "Command received but sequence plugin is not active");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     /* Route command to appropriate handler */
     switch (cmd) {
         case MESH_CMD_SEQUENCE:
@@ -444,6 +464,27 @@ static esp_err_t sequence_deinit(void)
     return ESP_OK;
 }
 
+static esp_err_t sequence_on_activate(void)
+{
+    /* Sequence plugin activation: no special initialization needed */
+    /* Sequence data and state are preserved from previous activation */
+    ESP_LOGD(TAG, "Sequence plugin activated");
+    return ESP_OK;
+}
+
+static esp_err_t sequence_on_deactivate(void)
+{
+    /* Stop sequence timer */
+    sequence_timer_stop();
+
+    /* Clear playback state (but preserve sequence data) */
+    sequence_active = false;
+    /* Note: sequence_pointer, sequence_rhythm, sequence_colors, sequence_length are preserved */
+
+    ESP_LOGD(TAG, "Sequence plugin deactivated");
+    return ESP_OK;
+}
+
 /*******************************************************
  *                Plugin Registration
  *******************************************************/
@@ -459,6 +500,8 @@ void sequence_plugin_register(void)
             .init = sequence_init,
             .deinit = sequence_deinit,
             .is_active = sequence_is_active,
+            .on_activate = sequence_on_activate,
+            .on_deactivate = sequence_on_deactivate,
         },
         .user_data = NULL,
     };

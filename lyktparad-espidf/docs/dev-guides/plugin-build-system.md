@@ -265,6 +265,99 @@ const char *html = plugin_effects_html;
 size_t html_len = plugin_effects_html_size;
 ```
 
+## HTML Page Generation
+
+### Overview
+
+The build system generates the main HTML page by combining a template file with plugin HTML, CSS, and JavaScript fragments. This process is handled by `tools/generate_html.py`, which supports both embedded (C string literal) and external (HTML file) output modes.
+
+### Generation Process
+
+1. **Template Reading**: The script reads the template file (embedded or external)
+2. **Plugin Discovery**: Plugins are discovered from the plugins directory
+3. **Plugin Name Formatting**: Directory names are formatted for display (e.g., "effects" → "Effects")
+4. **Dropdown Generation**: A dropdown menu is generated listing all available plugins
+5. **CSS Generation**: Layout CSS is generated for the page header, content area, and plugin visibility
+6. **JavaScript Generation**: Selection JavaScript is generated for dropdown functionality and localStorage persistence
+7. **Plugin HTML Wrapping**: Each plugin's HTML is wrapped in a `<section>` tag with `data-plugin-name` attribute
+8. **Placeholder Replacement**: Template placeholders are replaced with generated content
+
+### Template Placeholders
+
+The template file supports the following placeholders:
+
+- `{{PAGE_TITLE}}`: Replaced with "MAKERS JÖNKÖPING LJUSPARAD 2026"
+- `{{PLUGIN_DROPDOWN}}`: Replaced with dropdown HTML
+- `{{PLUGIN_LAYOUT_CSS}}`: Replaced with layout CSS for page structure
+- `{{PLUGIN_SELECTION_JS}}`: Replaced with JavaScript for plugin selection
+- `{{PLUGIN_HTML}}`: Replaced with plugin HTML sections
+- `{{PLUGIN_CSS}}`: Replaced with plugin CSS (embedded) or CSS links (external)
+- `{{PLUGIN_JS}}`: Replaced with plugin JavaScript (embedded) or script tags (external)
+
+### Plugin HTML Wrapping
+
+Each plugin's HTML is automatically wrapped in a section tag:
+
+```html
+<section class="plugin-section plugin-{plugin_name}" data-plugin-name="{plugin_name}">
+    <!-- Plugin HTML content here -->
+</section>
+```
+
+The `data-plugin-name` attribute is used by JavaScript to identify and show/hide plugin sections.
+
+### Dropdown Generation
+
+The dropdown is generated with:
+- A placeholder option: "Select Plugin..."
+- An option for each plugin with:
+  - `value`: Plugin directory name (e.g., "effects")
+  - Display text: Formatted plugin name (e.g., "Effects")
+
+Plugin names are formatted by:
+1. Replacing underscores with spaces
+2. Capitalizing each word
+
+### Layout CSS Generation
+
+The generated CSS includes:
+- `.page-header`: Fixed header (150px height) at top of page
+- `.page-title`: Title styling
+- `.plugin-dropdown-container`: Dropdown positioning
+- `.plugin-selector`: Dropdown styling
+- `.page-content`: Content area with margin-top to account for fixed header
+- `.plugin-section`: Hidden by default (`display: none`)
+- `.plugin-section.active`: Visible when selected (`display: block`)
+- Responsive design media queries for mobile devices
+
+### Selection JavaScript Generation
+
+The generated JavaScript includes:
+- Plugin list array with all plugin names
+- `PluginSelector` object with:
+  - `init()`: Initializes dropdown and loads saved selection from localStorage
+  - `isValidPlugin()`: Validates plugin name
+  - `selectPlugin()`: Shows selected plugin, hides others
+- Event listener for dropdown changes
+- localStorage persistence for selection
+- DOM ready initialization
+
+### Build Integration
+
+HTML generation is integrated into the CMake build system:
+
+**Embedded Mode**:
+- Template: `templates/embedded_template.html`
+- Output: `build/generated_html.h` (C string literal)
+- Used by: ESP32 embedded webserver
+
+**External Mode**:
+- Template: `lyktparad-server/web-ui/index.html`
+- Output: `lyktparad-server/web-ui/index.html` (overwrites template)
+- Used by: Node.js external webserver
+
+Both modes use the same generation logic, ensuring consistency between embedded and external webservers.
+
 ## External Webserver Integration
 
 ### File Copying

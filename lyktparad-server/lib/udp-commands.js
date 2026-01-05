@@ -32,6 +32,10 @@ const UDP_CMD_API_OTA_DISTRIBUTION_STATUS = 0xF5;
 const UDP_CMD_API_OTA_DISTRIBUTION_PROGRESS = 0xF6;
 const UDP_CMD_API_OTA_DISTRIBUTION_CANCEL = 0xF7;
 const UDP_CMD_API_OTA_REBOOT = 0xF8;
+const UDP_CMD_API_PLUGIN_ACTIVATE = 0xFA;
+const UDP_CMD_API_PLUGIN_DEACTIVATE = 0xFB;
+const UDP_CMD_API_PLUGIN_ACTIVE = 0xFC;
+const UDP_CMD_API_PLUGINS_LIST = 0xFD;
 
 /*******************************************************
  *                Endpoint to Command ID Mapping
@@ -64,7 +68,11 @@ function getCommandId(method, path) {
         'GET /api/ota/distribution/status': UDP_CMD_API_OTA_DISTRIBUTION_STATUS,
         'GET /api/ota/distribution/progress': UDP_CMD_API_OTA_DISTRIBUTION_PROGRESS,
         'POST /api/ota/distribution/cancel': UDP_CMD_API_OTA_DISTRIBUTION_CANCEL,
-        'POST /api/ota/reboot': UDP_CMD_API_OTA_REBOOT
+        'POST /api/ota/reboot': UDP_CMD_API_OTA_REBOOT,
+        'POST /api/plugin/activate': UDP_CMD_API_PLUGIN_ACTIVATE,
+        'POST /api/plugin/deactivate': UDP_CMD_API_PLUGIN_DEACTIVATE,
+        'GET /api/plugin/active': UDP_CMD_API_PLUGIN_ACTIVE,
+        'GET /api/plugins': UDP_CMD_API_PLUGINS_LIST
     };
     return mapping[key] || null;
 }
@@ -98,7 +106,11 @@ function getEndpointInfo(commandId) {
         [UDP_CMD_API_OTA_DISTRIBUTION_STATUS]: { method: 'GET', path: '/api/ota/distribution/status' },
         [UDP_CMD_API_OTA_DISTRIBUTION_PROGRESS]: { method: 'GET', path: '/api/ota/distribution/progress' },
         [UDP_CMD_API_OTA_DISTRIBUTION_CANCEL]: { method: 'POST', path: '/api/ota/distribution/cancel' },
-        [UDP_CMD_API_OTA_REBOOT]: { method: 'POST', path: '/api/ota/reboot' }
+        [UDP_CMD_API_OTA_REBOOT]: { method: 'POST', path: '/api/ota/reboot' },
+        [UDP_CMD_API_PLUGIN_ACTIVATE]: { method: 'POST', path: '/api/plugin/activate' },
+        [UDP_CMD_API_PLUGIN_DEACTIVATE]: { method: 'POST', path: '/api/plugin/deactivate' },
+        [UDP_CMD_API_PLUGIN_ACTIVE]: { method: 'GET', path: '/api/plugin/active' },
+        [UDP_CMD_API_PLUGINS_LIST]: { method: 'GET', path: '/api/plugins' }
     };
     return mapping[commandId] || null;
 }
@@ -122,6 +134,10 @@ module.exports = {
     UDP_CMD_API_OTA_DISTRIBUTION_PROGRESS,
     UDP_CMD_API_OTA_DISTRIBUTION_CANCEL,
     UDP_CMD_API_OTA_REBOOT,
+    UDP_CMD_API_PLUGIN_ACTIVATE,
+    UDP_CMD_API_PLUGIN_DEACTIVATE,
+    UDP_CMD_API_PLUGIN_ACTIVE,
+    UDP_CMD_API_PLUGINS_LIST,
     getCommandId,
     getEndpointInfo
 };

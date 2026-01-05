@@ -54,6 +54,10 @@
 #define UDP_CMD_API_OTA_DISTRIBUTION_PROGRESS  0xF6
 #define UDP_CMD_API_OTA_DISTRIBUTION_CANCEL  0xF7
 #define UDP_CMD_API_OTA_REBOOT  0xF8
+#define UDP_CMD_API_PLUGIN_ACTIVATE    0xFA
+#define UDP_CMD_API_PLUGIN_DEACTIVATE  0xFB
+#define UDP_CMD_API_PLUGIN_ACTIVE       0xFC
+#define UDP_CMD_API_PLUGINS_LIST        0xFD
 
 /*******************************************************
  *                State Update Data Structures

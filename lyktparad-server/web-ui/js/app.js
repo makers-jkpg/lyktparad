@@ -85,6 +85,67 @@ function updateNodeCount() {
     });
 }
 
+// Plugin activation API functions
+async function activatePlugin(pluginName) {
+  try {
+    const response = await fetch('/api/plugin/activate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: pluginName })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to activate plugin');
+    }
+
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    console.error('Plugin activation error:', error);
+    throw error;
+  }
+}
+
+async function deactivatePlugin(pluginName) {
+  try {
+    const response = await fetch('/api/plugin/deactivate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: pluginName })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to deactivate plugin');
+    }
+
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    console.error('Plugin deactivation error:', error);
+    throw error;
+  }
+}
+
+async function getActivePlugin() {
+  try {
+    const response = await fetch('/api/plugin/active');
+    if (!response.ok) {
+      throw new Error('Failed to get active plugin');
+    }
+    const result = await response.json();
+    return result.active;
+  } catch (error) {
+    console.error('Get active plugin error:', error);
+    return null;
+  }
+}
+
 // Utility functions
 function rgbToHex(r, g, b) {
   return '#' + [r, g, b].map(x => {

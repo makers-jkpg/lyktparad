@@ -20,7 +20,7 @@ const { getEndpointInfo } = require('./udp-commands');
  * @returns {Object} JSON response object
  */
 function binaryToJson(commandId, payload) {
-    const { UDP_CMD_API_NODES, UDP_CMD_API_COLOR_GET, UDP_CMD_API_SEQUENCE_POINTER, UDP_CMD_API_SEQUENCE_STATUS, UDP_CMD_API_OTA_STATUS, UDP_CMD_API_OTA_VERSION, UDP_CMD_API_OTA_DISTRIBUTION_STATUS, UDP_CMD_API_OTA_DISTRIBUTION_PROGRESS } = require('./udp-commands');
+    const { UDP_CMD_API_NODES, UDP_CMD_API_COLOR_GET, UDP_CMD_API_SEQUENCE_POINTER, UDP_CMD_API_SEQUENCE_STATUS, UDP_CMD_API_OTA_STATUS, UDP_CMD_API_OTA_VERSION, UDP_CMD_API_OTA_DISTRIBUTION_STATUS, UDP_CMD_API_OTA_DISTRIBUTION_PROGRESS, UDP_CMD_API_PLUGIN_ACTIVATE, UDP_CMD_API_PLUGIN_DEACTIVATE, UDP_CMD_API_PLUGIN_ACTIVE, UDP_CMD_API_PLUGINS_LIST } = require('./udp-commands');
 
     switch (commandId) {
         case UDP_CMD_API_NODES:
@@ -113,6 +113,58 @@ function binaryToJson(commandId, payload) {
                 progress = 0.0;
             }
             return { progress: progress };
+
+        case UDP_CMD_API_PLUGIN_ACTIVATE:
+        case UDP_CMD_API_PLUGIN_DEACTIVATE:
+            // POST /api/plugin/activate or /api/plugin/deactivate
+            // Response: [success:1][name_len:1][name:N bytes]
+            if (payload.length < 1) {
+                return { success: false, error: 'Invalid response' };
+            }
+            const success = payload[0] !== 0;
+            if (success && payload.length >= 2) {
+                const nameLen = payload[1];
+                if (payload.length >= 2 + nameLen) {
+                    const name = payload.slice(2, 2 + nameLen).toString('utf8');
+                    return { success: true, plugin: name };
+                }
+            }
+            return { success: false, error: 'Activation failed' };
+
+        case UDP_CMD_API_PLUGIN_ACTIVE:
+            // GET /api/plugin/active: { active: string | null }
+            // Response: [name_len:1][name:N bytes] or [0] if no active plugin
+            if (payload.length < 1) {
+                return { active: null };
+            }
+            const activeNameLen = payload[0];
+            if (activeNameLen == 0) {
+                return { active: null };
+            }
+            if (payload.length >= 1 + activeNameLen) {
+                const activeName = payload.slice(1, 1 + activeNameLen).toString('utf8');
+                return { active: activeName };
+            }
+            return { active: null };
+
+        case UDP_CMD_API_PLUGINS_LIST:
+            // GET /api/plugins: { plugins: string[] }
+            // Response: [count:1][name1_len:1][name1:N bytes][name2_len:1][name2:N bytes]...
+            if (payload.length < 1) {
+                return { plugins: [] };
+            }
+            const pluginCount = payload[0];
+            const plugins = [];
+            let offset = 1;
+            for (let i = 0; i < pluginCount && offset < payload.length; i++) {
+                if (offset >= payload.length) break;
+                const pluginNameLen = payload[offset++];
+                if (offset + pluginNameLen > payload.length) break;
+                const pluginName = payload.slice(offset, offset + pluginNameLen).toString('utf8');
+                plugins.push(pluginName);
+                offset += pluginNameLen;
+            }
+            return { plugins: plugins };
 
         default:
             // For POST requests or unknown commands, try to parse as JSON string
