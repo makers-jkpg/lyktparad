@@ -88,6 +88,26 @@ typedef struct {
      * @return true if plugin is active, false otherwise
      */
     bool (*is_active)(void);
+
+    /**
+     * @brief Plugin activation callback (optional, may be NULL)
+     *
+     * Called when plugin is activated. Plugin should initialize
+     * its state if needed.
+     *
+     * @return ESP_OK on success, error code on failure
+     */
+    esp_err_t (*on_activate)(void);
+
+    /**
+     * @brief Plugin deactivation callback (optional, may be NULL)
+     *
+     * Called when plugin is deactivated. Plugin should stop
+     * timers, clear state, and clean up resources.
+     *
+     * @return ESP_OK on success, error code on failure
+     */
+    esp_err_t (*on_deactivate)(void);
 } plugin_callback_t;
 
 /*******************************************************
@@ -185,5 +205,67 @@ const plugin_info_t *plugin_get_by_cmd_id(uint8_t cmd_id);
  * @return Error code from plugin's command_handler callback
  */
 esp_err_t plugin_system_handle_command(uint8_t cmd, uint8_t *data, uint16_t len);
+
+/**
+ * @brief Activate a plugin by name
+ *
+ * Activates the specified plugin and automatically deactivates
+ * any currently active plugin. Only one plugin can be active at a time.
+ *
+ * @param name Plugin name (non-NULL, must be registered)
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_ARG if name is NULL
+ * @return ESP_ERR_NOT_FOUND if plugin with name is not registered
+ * @return Error code from plugin's on_activate callback if it fails
+ */
+esp_err_t plugin_activate(const char *name);
+
+/**
+ * @brief Deactivate a plugin by name
+ *
+ * Deactivates the specified plugin if it is currently active.
+ *
+ * @param name Plugin name (non-NULL, must be registered)
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_ARG if name is NULL
+ * @return ESP_ERR_NOT_FOUND if plugin with name is not registered
+ * @return ESP_ERR_INVALID_STATE if plugin is not currently active
+ * @return Error code from plugin's on_deactivate callback if it fails
+ */
+esp_err_t plugin_deactivate(const char *name);
+
+/**
+ * @brief Deactivate all plugins
+ *
+ * Deactivates the currently active plugin (if any).
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t plugin_deactivate_all(void);
+
+/**
+ * @brief Get the name of the currently active plugin
+ *
+ * @return Pointer to active plugin name, or NULL if no plugin is active
+ */
+const char *plugin_get_active(void);
+
+/**
+ * @brief Check if a plugin is currently active
+ *
+ * @param name Plugin name (non-NULL)
+ * @return true if plugin is active, false otherwise
+ */
+bool plugin_is_active(const char *name);
+
+/**
+ * @brief Get all registered plugin names
+ *
+ * @param names Output array of plugin names (must be large enough for MAX_PLUGINS)
+ * @param count Output parameter for number of plugins (non-NULL)
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_ARG if names or count is NULL
+ */
+esp_err_t plugin_get_all_names(const char *names[], uint8_t *count);
 
 #endif /* __PLUGIN_SYSTEM_H__ */

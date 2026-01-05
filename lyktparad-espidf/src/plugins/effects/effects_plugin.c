@@ -14,6 +14,7 @@
 
 #include "effects_plugin.h"
 #include "plugin_system.h"
+#include "plugin_light.h"
 #include "light_common_cathode.h"
 #include "mesh_commands.h"
 #include "esp_timer.h"
@@ -121,6 +122,13 @@ static esp_err_t effect_timer_stop(void)
 static void effect_timer_callback(void *arg)
 {
     (void)arg;
+    /* Check if effects plugin is active */
+    if (!plugin_is_active("effects")) {
+        ESP_LOGW(TAG, "Effect timer callback called but plugin is not active, stopping timer");
+        effect_timer_stop();
+        return;
+    }
+
     if (!effect_running) {
         return;
     }
@@ -130,7 +138,7 @@ static void effect_timer_callback(void *arg)
 
         if (!strobe_is_on) {
             /* Turn ON */
-            set_rgb_led(p->r_on, p->g_on, p->b_on);
+            plugin_set_rgb_led(p->r_on, p->g_on, p->b_on);
             strobe_is_on = true;
             /* Schedule next toggle after duration_on */
             if (effect_timer != NULL) {
@@ -139,7 +147,7 @@ static void effect_timer_callback(void *arg)
             return;
         } else {
             /* Turn OFF */
-            set_rgb_led(p->r_off, p->g_off, p->b_off);
+            plugin_set_rgb_led(p->r_off, p->g_off, p->b_off);
             strobe_is_on = false;
 
             if (p->repeat_count > 0) {
@@ -165,7 +173,7 @@ static void effect_timer_callback(void *arg)
 
         if (fade_phase == 1) { /* fade_in: from on -> off */
             if (p->fade_in_ms == 0) {
-                set_rgb_led(p->r_off, p->g_off, p->b_off);
+                plugin_set_rgb_led(p->r_off, p->g_off, p->b_off);
                 fade_phase = 2; /* go to hold */
                 fade_elapsed_ms = 0;
                 if (p->duration_ms > 0) {
@@ -178,11 +186,11 @@ static void effect_timer_callback(void *arg)
                 uint8_t r = interp_u8(p->r_on, p->r_off, elapsed, total);
                 uint8_t g = interp_u8(p->g_on, p->g_off, elapsed, total);
                 uint8_t b = interp_u8(p->b_on, p->b_off, elapsed, total);
-                set_rgb_led(r, g, b);
+                plugin_set_rgb_led(r, g, b);
 
                 fade_elapsed_ms += fade_step_ms;
                 if (fade_elapsed_ms >= p->fade_in_ms) {
-                    set_rgb_led(p->r_off, p->g_off, p->b_off);
+                    plugin_set_rgb_led(p->r_off, p->g_off, p->b_off);
                     fade_phase = 2; /* hold */
                     fade_elapsed_ms = 0;
                     if (p->duration_ms > 0) {
@@ -211,7 +219,7 @@ static void effect_timer_callback(void *arg)
                         return;
                     }
                 }
-                set_rgb_led(p->r_on, p->g_on, p->b_on);
+                plugin_set_rgb_led(p->r_on, p->g_on, p->b_on);
                 fade_phase = 1;
                 fade_elapsed_ms = 0;
                 if (effect_timer != NULL) esp_timer_start_once(effect_timer, 1);
@@ -221,7 +229,7 @@ static void effect_timer_callback(void *arg)
 
         if (fade_phase == 3) { /* fade_out: from off -> on */
             if (p->fade_out_ms == 0) {
-                set_rgb_led(p->r_on, p->g_on, p->b_on);
+                plugin_set_rgb_led(p->r_on, p->g_on, p->b_on);
                 if (p->repeat_count > 0) {
                     if (fade_repeat_remaining > 0) fade_repeat_remaining--;
                     if (fade_repeat_remaining == 0) {
@@ -240,11 +248,11 @@ static void effect_timer_callback(void *arg)
                 uint8_t r = interp_u8(p->r_off, p->r_on, elapsed, total);
                 uint8_t g = interp_u8(p->g_off, p->g_on, elapsed, total);
                 uint8_t b = interp_u8(p->b_off, p->b_on, elapsed, total);
-                set_rgb_led(r, g, b);
+                plugin_set_rgb_led(r, g, b);
 
                 fade_elapsed_ms += fade_step_ms;
                 if (fade_elapsed_ms >= p->fade_out_ms) {
-                    set_rgb_led(p->r_on, p->g_on, p->b_on);
+                    plugin_set_rgb_led(p->r_on, p->g_on, p->b_on);
                     if (p->repeat_count > 0) {
                         if (fade_repeat_remaining > 0) fade_repeat_remaining--;
                         if (fade_repeat_remaining == 0) {
@@ -360,7 +368,7 @@ static void play_effect(struct effect_params_t *params)
             }
 
             /* Set initial color to 'on' values, then start after optional delay */
-            set_rgb_led(p->r_on, p->g_on, p->b_on);
+            plugin_set_rgb_led(p->r_on, p->g_on, p->b_on);
             if (p->base.start_delay_ms > 0) {
                 esp_timer_start_once(effect_timer, (uint64_t)p->base.start_delay_ms * 1000ULL);
             } else {
@@ -385,15 +393,21 @@ static void play_effect(struct effect_params_t *params)
 
 static esp_err_t effects_command_handler(uint8_t cmd, uint8_t *data, uint16_t len)
 {
-    /* Validate command */
-    if (cmd != MESH_CMD_EFFECT) {
-        ESP_LOGE(TAG, "Invalid command ID: 0x%02X (expected MESH_CMD_EFFECT)", cmd);
-        return ESP_ERR_INVALID_ARG;
-    }
-
     /* Validate data */
     if (data == NULL || len < 2) {
         ESP_LOGE(TAG, "Invalid command data: data=%p, len=%d", data, len);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Check if effects plugin is active */
+    if (!plugin_is_active("effects")) {
+        ESP_LOGD(TAG, "Command received but effects plugin is not active");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Validate command */
+    if (cmd != MESH_CMD_EFFECT) {
+        ESP_LOGE(TAG, "Invalid command ID: 0x%02X (expected MESH_CMD_EFFECT)", cmd);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -429,6 +443,35 @@ static esp_err_t effects_deinit(void)
     return effect_timer_stop();
 }
 
+static esp_err_t effects_on_activate(void)
+{
+    /* Effects plugin activation: no special initialization needed */
+    /* State is preserved from previous activation */
+    ESP_LOGD(TAG, "Effects plugin activated");
+    return ESP_OK;
+}
+
+static esp_err_t effects_on_deactivate(void)
+{
+    /* Stop effect timer and cleanup */
+    esp_err_t err = effect_timer_stop();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to stop effect timer during deactivation: %s", esp_err_to_name(err));
+    }
+
+    /* Clear effect state */
+    effect_running = false;
+    current_effect_id = 0;
+    strobe_is_on = false;
+    strobe_repeat_remaining = 0;
+    fade_phase = 0;
+    fade_elapsed_ms = 0;
+    fade_repeat_remaining = 0;
+
+    ESP_LOGD(TAG, "Effects plugin deactivated");
+    return ESP_OK;
+}
+
 /*******************************************************
  *                Plugin Registration
  *******************************************************/
@@ -444,6 +487,8 @@ void effects_plugin_register(void)
             .init = effects_init,
             .deinit = effects_deinit,
             .is_active = effects_is_active,
+            .on_activate = effects_on_activate,
+            .on_deactivate = effects_on_deactivate,
         },
         .user_data = NULL,
     };

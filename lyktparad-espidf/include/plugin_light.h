@@ -1,0 +1,52 @@
+/* Plugin-Safe LED Control Header
+ *
+ * This module provides plugin-safe wrapper functions for LED control.
+ * These functions check if a plugin is active before allowing LED control.
+ * Only the active plugin can control LEDs.
+ *
+ * Copyright (c) 2025 the_louie
+ *
+ * This example code is in the Public Domain (or CC0 licensed, at your option.)
+ *
+ * Unless required by applicable law or agreed to in writing, this
+ * software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ * CONDITIONS OF ANY KIND, either express or implied.
+ */
+
+#ifndef __PLUGIN_LIGHT_H__
+#define __PLUGIN_LIGHT_H__
+
+#include "esp_err.h"
+#include <stdint.h>
+
+/**
+ * @brief Set RGB LED color (plugin-safe wrapper)
+ *
+ * This function checks if a plugin is active before
+ * allowing LED control. Only the active plugin can control LEDs.
+ * Plugins should check their active status before calling this function.
+ *
+ * @param r Red component (0-255)
+ * @param g Green component (0-255)
+ * @param b Blue component (0-255)
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_STATE if no plugin is active
+ */
+esp_err_t plugin_light_set_rgb(uint8_t r, uint8_t g, uint8_t b);
+
+/**
+ * @brief Set RGB LED color using direct LED control (plugin-safe wrapper)
+ *
+ * This function checks if a plugin is active before
+ * allowing LED control. Only the active plugin can control LEDs.
+ * Plugins should check their active status before calling this function.
+ *
+ * @param r Red component (0-255)
+ * @param g Green component (0-255)
+ * @param b Blue component (0-255)
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_STATE if no plugin is active
+ */
+esp_err_t plugin_set_rgb_led(int r, int g, int b);
+
+#endif /* __PLUGIN_LIGHT_H__ */

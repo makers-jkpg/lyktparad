@@ -351,22 +351,89 @@ def generate_selection_js(plugins):
             if (initialSelection && this.isValidPlugin(initialSelection)) {{
                 selector.value = initialSelection;
                 this.selectPlugin(initialSelection);
+
+                // For external webserver, also check active plugin status
+                if (typeof getActivePlugin === 'function') {{
+                    getActivePlugin().then(function(activePlugin) {{
+                        if (activePlugin && selector.value !== activePlugin) {{
+                            selector.value = activePlugin;
+                            PluginSelector.selectPlugin(activePlugin);
+                            try {{
+                                localStorage.setItem('selectedPlugin', activePlugin);
+                            }} catch (e) {{
+                                // localStorage not available, ignore
+                            }}
+                        }}
+                    }}).catch(function(error) {{
+                        console.error('Failed to get active plugin:', error);
+                    }});
+                }}
+            }}
+
+            // Poll active plugin status (external webserver only)
+            if (typeof getActivePlugin === 'function') {{
+                setInterval(function() {{
+                    getActivePlugin().then(function(activePlugin) {{
+                        if (activePlugin && selector.value !== activePlugin) {{
+                            selector.value = activePlugin;
+                            PluginSelector.selectPlugin(activePlugin);
+                            try {{
+                                localStorage.setItem('selectedPlugin', activePlugin);
+                            }} catch (e) {{
+                                // localStorage not available, ignore
+                            }}
+                        }}
+                    }}).catch(function(error) {{
+                        // Silently ignore polling errors
+                    }});
+                }}, 2000); // Poll every 2 seconds
             }}
 
             // Add change event listener
             selector.addEventListener('change', function(e) {{
                 var pluginName = e.target.value;
-                PluginSelector.selectPlugin(pluginName);
-
-                // Save to localStorage
-                try {{
-                    if (pluginName) {{
-                        localStorage.setItem('selectedPlugin', pluginName);
+                if (pluginName) {{
+                    // Check if activatePlugin function exists (external webserver)
+                    if (typeof activatePlugin === 'function') {{
+                        // External webserver: activate plugin via API
+                        activatePlugin(pluginName)
+                            .then(function() {{
+                                PluginSelector.selectPlugin(pluginName);
+                                try {{
+                                    localStorage.setItem('selectedPlugin', pluginName);
+                                }} catch (e) {{
+                                    // localStorage not available, ignore
+                                }}
+                            }})
+                            .catch(function(error) {{
+                                console.error('Failed to activate plugin:', error);
+                                // Reset dropdown to previous selection
+                                var previousSelection = null;
+                                try {{
+                                    previousSelection = localStorage.getItem('selectedPlugin');
+                                }} catch (e) {{
+                                    // localStorage not available, ignore
+                                }}
+                                if (!previousSelection && plugins.length > 0) {{
+                                    previousSelection = plugins[0];
+                                }}
+                                if (previousSelection) {{
+                                    selector.value = previousSelection;
+                                }}
+                            }});
                     }} else {{
-                        localStorage.removeItem('selectedPlugin');
+                        // Embedded webserver: just update UI
+                        PluginSelector.selectPlugin(pluginName);
+                        try {{
+                            if (pluginName) {{
+                                localStorage.setItem('selectedPlugin', pluginName);
+                            }} else {{
+                                localStorage.removeItem('selectedPlugin');
+                            }}
+                        }} catch (e) {{
+                            // localStorage not available, ignore
+                        }}
                     }}
-                }} catch (e) {{
-                    // localStorage not available, ignore
                 }}
             }});
         }},

@@ -18,6 +18,7 @@
 #include "mesh_version.h"
 #include "config/mesh_config.h"
 #include "plugins/sequence/sequence_plugin.h"
+#include "plugin_system.h"
 #include "mesh_ota.h"
 #include "light_neopixel.h"
 #include "esp_log.h"
@@ -2885,6 +2886,234 @@ static esp_err_t handle_api_ota_reboot(const uint8_t *payload, size_t payload_si
 }
 
 /**
+ * @brief Handle API command: POST /api/plugin/activate
+ *
+ * @param payload Request payload: [name_len:1][name:N bytes]
+ * @param payload_size Payload size
+ * @param response_out Output buffer for response
+ * @param response_size_out Output parameter for response size
+ * @param max_response_size Maximum response buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_plugin_activate(const uint8_t *payload, size_t payload_size,
+                                            uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+{
+    if (payload == NULL || payload_size == 0 || response_out == NULL || response_size_out == NULL) {
+        if (response_size_out) *response_size_out = 0;
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Parse plugin name from payload: [name_len:1][name:N bytes] */
+    if (payload_size < 1) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0; /* failure */
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t name_len = payload[0];
+    if (name_len == 0 || name_len >= payload_size) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0; /* failure */
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char plugin_name[64] = {0};
+    if (name_len >= sizeof(plugin_name)) {
+        name_len = sizeof(plugin_name) - 1;
+    }
+    memcpy(plugin_name, &payload[1], name_len);
+    plugin_name[name_len] = '\0';
+
+    /* Activate plugin */
+    esp_err_t err = plugin_activate(plugin_name);
+    if (err != ESP_OK) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0; /* failure */
+        *response_size_out = 1;
+        return err;
+    }
+
+    /* Success response: [success:1][name_len:1][name:N bytes] */
+    if (max_response_size < 2 + name_len) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    response_out[0] = 1; /* success */
+    response_out[1] = name_len;
+    memcpy(&response_out[2], plugin_name, name_len);
+    *response_size_out = 2 + name_len;
+    return ESP_OK;
+}
+
+/**
+ * @brief Handle API command: POST /api/plugin/deactivate
+ *
+ * @param payload Request payload: [name_len:1][name:N bytes]
+ * @param payload_size Payload size
+ * @param response_out Output buffer for response
+ * @param response_size_out Output parameter for response size
+ * @param max_response_size Maximum response buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_plugin_deactivate(const uint8_t *payload, size_t payload_size,
+                                             uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+{
+    if (payload == NULL || payload_size == 0 || response_out == NULL || response_size_out == NULL) {
+        if (response_size_out) *response_size_out = 0;
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Parse plugin name from payload: [name_len:1][name:N bytes] */
+    if (payload_size < 1) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0; /* failure */
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t name_len = payload[0];
+    if (name_len == 0 || name_len >= payload_size) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0; /* failure */
+        *response_size_out = 1;
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char plugin_name[64] = {0};
+    if (name_len >= sizeof(plugin_name)) {
+        name_len = sizeof(plugin_name) - 1;
+    }
+    memcpy(plugin_name, &payload[1], name_len);
+    plugin_name[name_len] = '\0';
+
+    /* Deactivate plugin */
+    esp_err_t err = plugin_deactivate(plugin_name);
+    if (err != ESP_OK) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0; /* failure */
+        *response_size_out = 1;
+        return err;
+    }
+
+    /* Success response: [success:1][name_len:1][name:N bytes] */
+    if (max_response_size < 2 + name_len) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    response_out[0] = 1; /* success */
+    response_out[1] = name_len;
+    memcpy(&response_out[2], plugin_name, name_len);
+    *response_size_out = 2 + name_len;
+    return ESP_OK;
+}
+
+/**
+ * @brief Handle API command: GET /api/plugin/active
+ *
+ * @param response_out Output buffer for response
+ * @param response_size_out Output parameter for response size
+ * @param max_response_size Maximum response buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_plugin_active(uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+{
+    if (response_out == NULL || response_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const char *active = plugin_get_active();
+    if (active == NULL) {
+        /* No active plugin: [0] */
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_OK;
+    }
+
+    /* Active plugin: [name_len:1][name:N bytes] */
+    uint8_t name_len = strlen(active);
+    if (name_len > 63) {
+        name_len = 63; /* Limit to 63 bytes */
+    }
+
+    if (max_response_size < 1 + name_len) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    response_out[0] = name_len;
+    memcpy(&response_out[1], active, name_len);
+    *response_size_out = 1 + name_len;
+    return ESP_OK;
+}
+
+/**
+ * @brief Handle API command: GET /api/plugins
+ *
+ * @param response_out Output buffer for response
+ * @param response_size_out Output parameter for response size
+ * @param max_response_size Maximum response buffer size
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t handle_api_plugins_list(uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+{
+    if (response_out == NULL || response_size_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const char *names[16]; /* MAX_PLUGINS = 16 */
+    uint8_t count = 0;
+    esp_err_t err = plugin_get_all_names(names, &count);
+    if (err != ESP_OK) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0; /* failure */
+        *response_size_out = 1;
+        return err;
+    }
+
+    /* Response format: [count:1][name1_len:1][name1:N bytes][name2_len:1][name2:N bytes]... */
+    size_t offset = 0;
+    if (max_response_size < 1) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    response_out[offset++] = count;
+
+    for (uint8_t i = 0; i < count; i++) {
+        uint8_t name_len = strlen(names[i]);
+        if (name_len > 63) {
+            name_len = 63; /* Limit to 63 bytes */
+        }
+
+        if (offset + 1 + name_len > max_response_size) {
+            /* Truncate if buffer is too small */
+            break;
+        }
+
+        response_out[offset++] = name_len;
+        memcpy(&response_out[offset], names[i], name_len);
+        offset += name_len;
+    }
+
+    *response_size_out = offset;
+    return ESP_OK;
+}
+
+/**
  * @brief Process incoming UDP API command and send response.
  *
  * @param commandId Command ID
@@ -2980,6 +3209,22 @@ static esp_err_t process_api_command(uint8_t commandId, uint16_t seqNum,
 
         case UDP_CMD_API_OTA_REBOOT:
             handle_api_ota_reboot(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_PLUGIN_ACTIVATE:
+            handle_api_plugin_activate(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_PLUGIN_DEACTIVATE:
+            handle_api_plugin_deactivate(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_PLUGIN_ACTIVE:
+            handle_api_plugin_active(response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_PLUGINS_LIST:
+            handle_api_plugins_list(response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
         default:

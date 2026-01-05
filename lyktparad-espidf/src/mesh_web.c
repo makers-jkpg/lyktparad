@@ -1,6 +1,7 @@
 #include "mesh_web.h"
 #include "light_neopixel.h"
 #include "plugins/sequence/sequence_plugin.h"
+#include "plugin_system.h"
 #include "mesh_ota.h"
 #include "mesh_version.h"
 #include "esp_http_server.h"
@@ -34,6 +35,10 @@ static esp_err_t api_ota_distribution_status_get_handler(httpd_req_t *req);
 static esp_err_t api_ota_distribution_progress_get_handler(httpd_req_t *req);
 static esp_err_t api_ota_distribution_cancel_post_handler(httpd_req_t *req);
 static esp_err_t api_ota_reboot_post_handler(httpd_req_t *req);
+static esp_err_t api_plugin_activate_handler(httpd_req_t *req);
+static esp_err_t api_plugin_deactivate_handler(httpd_req_t *req);
+static esp_err_t api_plugin_active_handler(httpd_req_t *req);
+static esp_err_t api_plugins_list_handler(httpd_req_t *req);
 static esp_err_t index_handler(httpd_req_t *req);
 
 /* HTML page is now generated from template and plugins - see generated_html.h */
@@ -781,6 +786,148 @@ static esp_err_t api_ota_reboot_post_handler(httpd_req_t *req)
     }
 }
 
+/* API: POST /api/plugin/activate - Activate plugin by name */
+static esp_err_t api_plugin_activate_handler(httpd_req_t *req)
+{
+    char content[256];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+
+    if (ret <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid request\"}", -1);
+        return ESP_FAIL;
+    }
+
+    content[ret] = '\0';
+
+    /* Parse JSON: {"name": "effects"} or {"name": "sequence"} */
+    char plugin_name[64] = {0};
+    if (sscanf(content, "{\"name\":\"%63[^\"]\"}", plugin_name) != 1) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid JSON format\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Activate plugin */
+    esp_err_t err = plugin_activate(plugin_name);
+    if (err != ESP_OK) {
+        char error_msg[128];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"%s\"}", esp_err_to_name(err));
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+
+    /* Send success response */
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    char response[128];
+    snprintf(response, sizeof(response), "{\"success\":true,\"plugin\":\"%s\"}", plugin_name);
+    return httpd_resp_send(req, response, -1);
+}
+
+/* API: POST /api/plugin/deactivate - Deactivate plugin by name */
+static esp_err_t api_plugin_deactivate_handler(httpd_req_t *req)
+{
+    char content[256];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+
+    if (ret <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid request\"}", -1);
+        return ESP_FAIL;
+    }
+
+    content[ret] = '\0';
+
+    /* Parse JSON: {"name": "effects"} or {"name": "sequence"} */
+    char plugin_name[64] = {0};
+    if (sscanf(content, "{\"name\":\"%63[^\"]\"}", plugin_name) != 1) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid JSON format\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Deactivate plugin */
+    esp_err_t err = plugin_deactivate(plugin_name);
+    if (err != ESP_OK) {
+        char error_msg[128];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"%s\"}", esp_err_to_name(err));
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
+    }
+
+    /* Send success response */
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    char response[128];
+    snprintf(response, sizeof(response), "{\"success\":true,\"plugin\":\"%s\"}", plugin_name);
+    return httpd_resp_send(req, response, -1);
+}
+
+/* API: GET /api/plugin/active - Get currently active plugin */
+static esp_err_t api_plugin_active_handler(httpd_req_t *req)
+{
+    const char *active = plugin_get_active();
+    char response[128];
+    if (active != NULL) {
+        snprintf(response, sizeof(response), "{\"active\":\"%s\"}", active);
+    } else {
+        snprintf(response, sizeof(response), "{\"active\":null}");
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    return httpd_resp_send(req, response, -1);
+}
+
+/* API: GET /api/plugins - Get list of all registered plugins */
+static esp_err_t api_plugins_list_handler(httpd_req_t *req)
+{
+    const char *names[16]; /* MAX_PLUGINS = 16 */
+    uint8_t count = 0;
+    esp_err_t err = plugin_get_all_names(names, &count);
+
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"error\":\"Failed to get plugin list\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Build JSON array of plugin names */
+    char response[512] = "{\"plugins\":[";
+    int offset = strlen(response);
+    for (uint8_t i = 0; i < count; i++) {
+        if (i > 0) {
+            response[offset++] = ',';
+        }
+        offset += snprintf(response + offset, sizeof(response) - offset, "\"%s\"", names[i]);
+        if (offset >= (int)sizeof(response) - 10) {
+            break; /* Prevent buffer overflow */
+        }
+    }
+    offset += snprintf(response + offset, sizeof(response) - offset, "]}");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    return httpd_resp_send(req, response, -1);
+}
+
 /* GET / - Serves main HTML page */
 static esp_err_t index_handler(httpd_req_t *req)
 {
@@ -804,7 +951,7 @@ esp_err_t mesh_web_server_start(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 21;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, sequence_start, sequence_stop, sequence_reset, sequence_status, ota_download, ota_status, ota_cancel, ota_version, ota_distribute, ota_distribution_status, ota_distribution_progress, ota_distribution_cancel, ota_reboot, index = 19 handlers */
+    config.max_uri_handlers = 25;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, sequence_start, sequence_stop, sequence_reset, sequence_status, ota_download, ota_status, ota_cancel, ota_version, ota_distribute, ota_distribution_status, ota_distribution_progress, ota_distribution_cancel, ota_reboot, plugin_activate, plugin_deactivate, plugin_active, plugins_list, index = 23 handlers */
     config.stack_size = 8192;
     config.server_port = 80;
 
@@ -1060,6 +1207,62 @@ esp_err_t mesh_web_server_start(void)
         reg_err = httpd_register_uri_handler(server_handle, &ota_reboot_uri);
         if (reg_err != ESP_OK) {
             ESP_LOGE(WEB_TAG, "Failed to register OTA reboot URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t plugin_activate_uri = {
+            .uri       = "/api/plugin/activate",
+            .method    = HTTP_POST,
+            .handler   = api_plugin_activate_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &plugin_activate_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register plugin activate URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t plugin_deactivate_uri = {
+            .uri       = "/api/plugin/deactivate",
+            .method    = HTTP_POST,
+            .handler   = api_plugin_deactivate_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &plugin_deactivate_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register plugin deactivate URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t plugin_active_uri = {
+            .uri       = "/api/plugin/active",
+            .method    = HTTP_GET,
+            .handler   = api_plugin_active_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &plugin_active_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register plugin active URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t plugins_list_uri = {
+            .uri       = "/api/plugins",
+            .method    = HTTP_GET,
+            .handler   = api_plugins_list_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &plugins_list_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register plugins list URI: 0x%x", reg_err);
             httpd_stop(server_handle);
             server_handle = NULL;
             return ESP_FAIL;

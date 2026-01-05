@@ -349,6 +349,7 @@ set(ALL_SOURCES
     "root_status_led.c"
     "mesh_udp_bridge.c"
     "plugin_system.c"
+    "plugin_light.c"
 )
 
 list(APPEND ALL_SOURCES ${PLUGIN_SOURCES})
