@@ -2,7 +2,7 @@
 
 **Last Updated:** 2025-01-27
 
-**Note**: Basic UI feature added for plugins without custom HTML files.
+**Note**: Basic UI feature added for plugins without custom HTML files. Plugin protocol redesigned with plugin ID prefix (0x0B-0xEE). API endpoints added for plugin control (stop, pause, reset).
 
 ## Table of Contents
 
@@ -239,6 +239,9 @@ void my_plugin_plugin_register(void)
             .init = my_plugin_init,  /* Optional */
             .deinit = my_plugin_deinit,  /* Optional */
             .is_active = my_plugin_is_active,  /* Optional */
+            .get_state = my_plugin_get_state,  /* Optional - for plugin query interface */
+            .execute_operation = my_plugin_execute_operation,  /* Optional - for plugin query interface */
+            .get_helper = my_plugin_get_helper,  /* Optional - for plugin query interface */
         },
         .user_data = NULL,  /* Optional */
     };
@@ -413,6 +416,41 @@ static void my_plugin_stop_timer(void)
 ```
 
 **Note**: The timer callback in `plugin_callback_t` is optional. If your plugin doesn't need periodic updates, set it to `NULL`.
+
+## Plugin Query Interface
+
+The plugin system provides a query interface that allows core files to interact with plugins without direct function calls. This promotes encapsulation and allows plugins to control their own state and operations.
+
+### Query Interface Callbacks
+
+Plugins can optionally provide three query interface callbacks:
+
+**`get_state`**: Query plugin-specific state (pointer, active status, rhythm, length, etc.)
+```c
+esp_err_t (*get_state)(uint32_t query_type, void *result);
+```
+
+**`execute_operation`**: Execute plugin operations (store, start, pause, reset, broadcast_beat, etc.)
+```c
+esp_err_t (*execute_operation)(uint32_t operation_type, void *params);
+```
+
+**`get_helper`**: Get helper function results (size calculations, etc.)
+```c
+esp_err_t (*get_helper)(uint32_t helper_type, void *params, void *result);
+```
+
+### Using the Query Interface
+
+Core files can use these functions to interact with plugins:
+
+- `plugin_query_state(plugin_name, query_type, result)` - Query plugin state
+- `plugin_execute_operation(plugin_name, operation_type, params)` - Execute plugin operation
+- `plugin_get_helper(plugin_name, helper_type, params, result)` - Get helper result
+
+**Example**: The sequence plugin uses this interface to allow core files to query the sequence pointer, execute operations like storing sequence data, and get helper calculations like payload sizes, all without exposing direct function calls.
+
+**Note**: These callbacks are optional. If your plugin doesn't need to expose state or operations to core files, set them to `NULL`.
 
 ## Plugin Registration
 
@@ -643,6 +681,37 @@ The build system automatically:
 
 No manual build configuration is required.
 
+### HTTP API Endpoints
+
+The plugin system provides HTTP API endpoints for plugin control. These endpoints are available on both embedded and external webservers.
+
+**Plugin Activation/Deactivation:**
+- `POST /api/plugin/activate` - Activate a plugin by name
+  - Request body: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}` or `{"success": false, "error": "error_message"}`
+- `POST /api/plugin/deactivate` - Deactivate a plugin by name
+  - Request body: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}` or `{"success": false, "error": "error_message"}`
+- `GET /api/plugin/active` - Get currently active plugin
+  - Response: `{"plugin": "plugin_name"}` or `{"plugin": null}` if none active
+
+**Plugin Control Commands:**
+- `POST /api/plugin/stop` - Stop plugin (calls `on_pause` callback if available, then deactivates)
+  - Request body: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}` or `{"success": false, "error": "error_message"}`
+- `POST /api/plugin/pause` - Pause plugin playback
+  - Request body: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}` or `{"success": false, "error": "error_message"}`
+- `POST /api/plugin/reset` - Reset plugin state
+  - Request body: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}` or `{"success": false, "error": "error_message"}`
+
+**Plugin Discovery:**
+- `GET /api/plugins` - Get list of all registered plugins
+  - Response: `{"plugins": ["plugin1", "plugin2", ...]}`
+
+All endpoints return JSON responses and include CORS headers for cross-origin requests.
+
 ## Build System Integration
 
 ### Automatic Discovery
@@ -781,6 +850,9 @@ void my_plugin_plugin_register(void)
             .init = NULL,
             .deinit = NULL,
             .is_active = NULL,
+            .get_state = NULL,
+            .execute_operation = NULL,
+            .get_helper = NULL,
         },
         .user_data = NULL,
     };
@@ -845,10 +917,19 @@ void my_plugin_plugin_register(void)
         .command_id = 0,
         .callbacks = {
             .command_handler = my_plugin_command_handler,
+            .on_start = NULL,
+            .on_pause = NULL,
+            .on_reset = NULL,
+            .on_beat = NULL,
+            .on_activate = NULL,
+            .on_deactivate = NULL,
             .timer_callback = my_plugin_timer_callback,
             .init = my_plugin_init,
             .deinit = my_plugin_deinit,
             .is_active = my_plugin_is_active,
+            .get_state = NULL,
+            .execute_operation = NULL,
+            .get_helper = NULL,
         },
         .user_data = NULL,
     };

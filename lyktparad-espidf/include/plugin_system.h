@@ -115,7 +115,7 @@ typedef struct {
     /**
      * @brief Plugin START command callback (optional, may be NULL)
      *
-     * Called when MESH_CMD_PLUGIN_START (0x05) is received.
+     * Called when PLUGIN_CMD_START (0x01) is received via plugin protocol.
      *
      * @return ESP_OK on success, error code on failure
      */
@@ -124,7 +124,7 @@ typedef struct {
     /**
      * @brief Plugin PAUSE command callback (optional, may be NULL)
      *
-     * Called when MESH_CMD_PLUGIN_PAUSE (0x06) is received.
+     * Called when PLUGIN_CMD_PAUSE (0x02) is received via plugin protocol.
      *
      * @return ESP_OK on success, error code on failure
      */
@@ -133,7 +133,7 @@ typedef struct {
     /**
      * @brief Plugin RESET command callback (optional, may be NULL)
      *
-     * Called when MESH_CMD_PLUGIN_RESET (0x07) is received.
+     * Called when PLUGIN_CMD_RESET (0x03) is received via plugin protocol.
      *
      * @return ESP_OK on success, error code on failure
      */
@@ -142,10 +142,10 @@ typedef struct {
     /**
      * @brief Plugin BEAT command callback (optional, may be NULL)
      *
-     * Called when MESH_CMD_PLUGIN_BEAT (0x08) is received.
+     * Called when PLUGIN_CMD_BEAT (0x05) is received via plugin protocol.
      *
-     * @param data Command data (data[0] = MESH_CMD_PLUGIN_BEAT, data[1] = pointer)
-     * @param len Data length (must be 2)
+     * @param data Command data (data[0] = PLUGIN_CMD_BEAT, data[1] onwards = beat data)
+     * @param len Data length (includes command byte)
      * @return ESP_OK on success, error code on failure
      */
     esp_err_t (*on_beat)(uint8_t *data, uint16_t len);

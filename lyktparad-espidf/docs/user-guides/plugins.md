@@ -2,7 +2,7 @@
 
 **Last Updated:** 2025-01-27
 
-**Note**: Basic UI feature added for plugins without custom HTML files.
+**Note**: Basic UI feature added for plugins without custom HTML files. Plugin protocol redesigned with plugin ID prefix (0x0B-0xEE). API endpoints added for plugin control (stop, pause, reset).
 
 ## Table of Contents
 
@@ -233,6 +233,33 @@ The Effects plugin does not currently provide a web interface. Effects are contr
 ### HTTP API
 
 Plugins can be controlled via HTTP API endpoints on both embedded and external webservers.
+
+#### General Plugin API
+
+**Plugin Activation/Deactivation:**
+- `POST /api/plugin/activate` - Activate a plugin by name
+  - Request: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}`
+- `POST /api/plugin/deactivate` - Deactivate a plugin by name
+  - Request: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}`
+- `GET /api/plugin/active` - Get currently active plugin
+  - Response: `{"plugin": "plugin_name"}` or `{"plugin": null}`
+
+**Plugin Control Commands:**
+- `POST /api/plugin/stop` - Stop plugin (gracefully pauses then deactivates)
+  - Request: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}`
+- `POST /api/plugin/pause` - Pause plugin playback
+  - Request: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}`
+- `POST /api/plugin/reset` - Reset plugin state
+  - Request: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}`
+
+**Plugin Discovery:**
+- `GET /api/plugins` - Get list of all registered plugins
+  - Response: `{"plugins": ["plugin1", "plugin2", ...]}`
 
 #### Sequence Plugin API
 
