@@ -31,7 +31,7 @@
  *******************************************************/
 
 struct effect_params_t {
-    uint8_t command;           /* command is the effect command identifier (i.e., always MESH_CMD_EFFECT) */
+    uint8_t command;           /* command is the effect command identifier (deprecated field, kept for compatibility) */
     uint8_t effect_id;         /* effect_id is the id of the effect to play */
     uint16_t start_delay_ms;   /* start_delay_ms is the delay before starting the effect */
 };

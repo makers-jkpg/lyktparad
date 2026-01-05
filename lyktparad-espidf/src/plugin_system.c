@@ -14,19 +14,20 @@
  */
 
 #include "plugin_system.h"
+#include "mesh_commands.h"
 #include "esp_log.h"
 #include <string.h>
 
 static const char *TAG = "plugin_system";
 
 #define MAX_PLUGINS 16
-#define PLUGIN_CMD_ID_MIN 0x10
-#define PLUGIN_CMD_ID_MAX 0xEF
+#define PLUGIN_ID_MIN 0x0B
+#define PLUGIN_ID_MAX 0xEE
 
 /* Plugin registry */
 static plugin_info_t plugin_registry[MAX_PLUGINS];
 static uint8_t plugin_count = 0;
-static uint8_t next_command_id = PLUGIN_CMD_ID_MIN;
+static uint8_t next_plugin_id = PLUGIN_ID_MIN;
 
 /* Active plugin tracking - only one plugin can be active at a time (mutual exclusivity) */
 static const char *active_plugin_name = NULL;
@@ -73,15 +74,15 @@ esp_err_t plugin_register(const plugin_info_t *info, uint8_t *assigned_cmd_id)
         return ESP_ERR_NO_MEM;
     }
 
-    /* Check if command ID range is exhausted */
-    if (next_command_id > PLUGIN_CMD_ID_MAX) {
-        ESP_LOGE(TAG, "Plugin registration failed: command ID range exhausted (0x%02X-0x%02X)", PLUGIN_CMD_ID_MIN, PLUGIN_CMD_ID_MAX);
+    /* Check if plugin ID range is exhausted */
+    if (next_plugin_id > PLUGIN_ID_MAX) {
+        ESP_LOGE(TAG, "Plugin registration failed: plugin ID range exhausted (0x%02X-0x%02X)", PLUGIN_ID_MIN, PLUGIN_ID_MAX);
         return ESP_ERR_NO_MEM;
     }
 
-    /* Assign command ID and prepare plugin copy */
+    /* Assign plugin ID and prepare plugin copy */
     plugin_info_t plugin_copy = *info;
-    plugin_copy.command_id = next_command_id;
+    plugin_copy.command_id = next_plugin_id;
 
     /* Call optional init callback before adding to registry */
     if (plugin_copy.callbacks.init != NULL) {
@@ -96,11 +97,11 @@ esp_err_t plugin_register(const plugin_info_t *info, uint8_t *assigned_cmd_id)
     plugin_registry[plugin_count] = plugin_copy;
 
     /* Set output parameter */
-    *assigned_cmd_id = next_command_id;
+    *assigned_cmd_id = next_plugin_id;
 
     /* Increment counters */
     plugin_count++;
-    next_command_id++;
+    next_plugin_id++;
 
     ESP_LOGI(TAG, "Plugin '%s' registered with command ID 0x%02X", info->name, plugin_copy.command_id);
 
@@ -122,15 +123,15 @@ const plugin_info_t *plugin_get_by_name(const char *name)
     return NULL;
 }
 
-const plugin_info_t *plugin_get_by_cmd_id(uint8_t cmd_id)
+const plugin_info_t *plugin_get_by_id(uint8_t plugin_id)
 {
-    /* Validate command ID is in plugin range */
-    if (cmd_id < PLUGIN_CMD_ID_MIN || cmd_id > PLUGIN_CMD_ID_MAX) {
+    /* Validate plugin ID is in plugin range */
+    if (plugin_id < PLUGIN_ID_MIN || plugin_id > PLUGIN_ID_MAX) {
         return NULL;
     }
 
     for (uint8_t i = 0; i < plugin_count; i++) {
-        if (plugin_registry[i].command_id == cmd_id) {
+        if (plugin_registry[i].command_id == plugin_id) {
             return &plugin_registry[i];
         }
     }
@@ -138,44 +139,65 @@ const plugin_info_t *plugin_get_by_cmd_id(uint8_t cmd_id)
     return NULL;
 }
 
-esp_err_t plugin_system_handle_command(uint8_t cmd, uint8_t *data, uint16_t len)
+esp_err_t plugin_get_id_by_name(const char *name, uint8_t *plugin_id)
 {
-    /* Validate command ID is in plugin range */
-    if (cmd < PLUGIN_CMD_ID_MIN || cmd > PLUGIN_CMD_ID_MAX) {
-        ESP_LOGE(TAG, "Command routing failed: command ID 0x%02X outside plugin range (0x%02X-0x%02X)", cmd, PLUGIN_CMD_ID_MIN, PLUGIN_CMD_ID_MAX);
+    if (name == NULL || plugin_id == NULL) {
+        ESP_LOGE(TAG, "plugin_get_id_by_name failed: name or plugin_id is NULL");
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Validate data pointer if len > 0 */
-    if (len > 0 && data == NULL) {
-        ESP_LOGE(TAG, "Command routing failed: data pointer is NULL but len > 0");
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    /* Look up plugin by command ID */
-    const plugin_info_t *plugin = plugin_get_by_cmd_id(cmd);
+    const plugin_info_t *plugin = plugin_get_by_name(name);
     if (plugin == NULL) {
-        ESP_LOGD(TAG, "Command routing: no plugin registered for command ID 0x%02X", cmd);
+        ESP_LOGE(TAG, "plugin_get_id_by_name failed: plugin '%s' not found", name);
         return ESP_ERR_NOT_FOUND;
     }
 
-    /* Check if plugin is active */
-    if (!plugin_is_active(plugin->name)) {
-        ESP_LOGD(TAG, "Command routing: plugin '%s' is not active, rejecting command 0x%02X", plugin->name, cmd);
-        return ESP_ERR_INVALID_STATE;
+    *plugin_id = plugin->command_id;
+    return ESP_OK;
+}
+
+esp_err_t plugin_system_handle_command(uint8_t *data, uint16_t len)
+{
+    /* Validate data pointer and minimum length */
+    if (data == NULL) {
+        ESP_LOGE(TAG, "Command routing failed: data pointer is NULL");
+        return ESP_ERR_INVALID_ARG;
     }
 
-    /* Call plugin's command handler */
+    if (len < 2) {
+        ESP_LOGE(TAG, "Command routing failed: len < 2 (need plugin ID + command byte)");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Extract plugin ID from first byte */
+    uint8_t plugin_id = data[0];
+
+    /* Validate plugin ID is in plugin range */
+    if (plugin_id < PLUGIN_ID_MIN || plugin_id > PLUGIN_ID_MAX) {
+        ESP_LOGE(TAG, "Command routing failed: plugin ID 0x%02X outside plugin range (0x%02X-0x%02X)", plugin_id, PLUGIN_ID_MIN, PLUGIN_ID_MAX);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Look up plugin by plugin ID */
+    const plugin_info_t *plugin = plugin_get_by_id(plugin_id);
+    if (plugin == NULL) {
+        ESP_LOGD(TAG, "Command routing: no plugin registered for plugin ID 0x%02X", plugin_id);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Call plugin's command handler with remaining data (skip plugin ID byte) */
     if (plugin->callbacks.command_handler == NULL) {
         ESP_LOGE(TAG, "Command routing failed: plugin '%s' has NULL command_handler", plugin->name);
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = plugin->callbacks.command_handler(cmd, data, len);
+    /* Pass remaining data (skip plugin ID byte) to command handler */
+    /* Command handler receives: [CMD:1] [LENGTH:2?] [DATA:N] */
+    esp_err_t err = plugin->callbacks.command_handler(&data[1], len - 1);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Plugin '%s' command handler returned error: %s", plugin->name, esp_err_to_name(err));
     } else {
-        ESP_LOGD(TAG, "Command routed to plugin '%s' (command ID 0x%02X)", plugin->name, cmd);
+        ESP_LOGD(TAG, "Command routed to plugin '%s' (plugin ID 0x%02X)", plugin->name, plugin_id);
     }
 
     return err;
@@ -313,93 +335,116 @@ esp_err_t plugin_get_all_names(const char *names[], uint8_t max_count, uint8_t *
     return ESP_OK;
 }
 
-esp_err_t plugin_system_handle_plugin_command(uint8_t cmd, uint8_t *data, uint16_t len)
+esp_err_t plugin_system_handle_plugin_command(uint8_t *data, uint16_t len)
 {
-    /* Validate command ID */
-    if (cmd != 0x05 && cmd != 0x06 && cmd != 0x07 && cmd != 0x08) {
-        ESP_LOGE(TAG, "Plugin command routing failed: invalid command ID 0x%02X (expected 0x05-0x08)", cmd);
+    /* Validate data pointer and minimum length */
+    if (data == NULL) {
+        ESP_LOGE(TAG, "Plugin command routing failed: data pointer is NULL");
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Validate data pointer if len > 0 */
-    if (len > 0 && data == NULL) {
-        ESP_LOGE(TAG, "Plugin command routing failed: data pointer is NULL but len > 0");
+    if (len < 2) {
+        ESP_LOGE(TAG, "Plugin command routing failed: len < 2 (need plugin ID + command byte)");
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Get active plugin */
-    if (active_plugin_name == NULL) {
-        ESP_LOGD(TAG, "Plugin command routing: no active plugin");
-        return ESP_ERR_NOT_FOUND;
+    /* Extract plugin ID from first byte */
+    uint8_t plugin_id = data[0];
+
+    /* Validate plugin ID is in plugin range */
+    if (plugin_id < PLUGIN_ID_MIN || plugin_id > PLUGIN_ID_MAX) {
+        ESP_LOGE(TAG, "Plugin command routing failed: plugin ID 0x%02X outside plugin range (0x%02X-0x%02X)", plugin_id, PLUGIN_ID_MIN, PLUGIN_ID_MAX);
+        return ESP_ERR_INVALID_ARG;
     }
 
-    /* Look up active plugin */
-    const plugin_info_t *plugin = plugin_get_by_name(active_plugin_name);
+    /* Extract command byte from second byte */
+    uint8_t cmd = data[1];
+
+    /* Validate command byte */
+    if (cmd != PLUGIN_CMD_START && cmd != PLUGIN_CMD_PAUSE && cmd != PLUGIN_CMD_RESET && cmd != PLUGIN_CMD_BEAT) {
+        ESP_LOGE(TAG, "Plugin command routing failed: invalid command byte 0x%02X (expected 0x%02X-0x%02X)", cmd, PLUGIN_CMD_START, PLUGIN_CMD_BEAT);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Look up plugin by plugin ID */
+    const plugin_info_t *plugin = plugin_get_by_id(plugin_id);
     if (plugin == NULL) {
-        ESP_LOGE(TAG, "Plugin command routing failed: active plugin '%s' not found in registry", active_plugin_name);
+        ESP_LOGD(TAG, "Plugin command routing: no plugin registered for plugin ID 0x%02X", plugin_id);
         return ESP_ERR_NOT_FOUND;
     }
 
     /* Route command to appropriate callback */
     esp_err_t err = ESP_OK;
     switch (cmd) {
-        case 0x05: /* MESH_CMD_PLUGIN_START */
+        case PLUGIN_CMD_START:
+            /* Enforce mutual exclusivity: START command must stop other plugins and activate this one */
+            esp_err_t deactivate_err = plugin_deactivate_all();
+            if (deactivate_err != ESP_OK && deactivate_err != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(TAG, "Failed to deactivate other plugins before START: %s", esp_err_to_name(deactivate_err));
+            }
+            /* Activate the target plugin */
+            esp_err_t activate_err = plugin_activate(plugin->name);
+            if (activate_err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to activate plugin '%s' for START command: %s", plugin->name, esp_err_to_name(activate_err));
+                return activate_err;
+            }
             if (plugin->callbacks.on_start == NULL) {
-                ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_start callback", active_plugin_name);
+                ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_start callback", plugin->name);
                 return ESP_ERR_INVALID_STATE;
             }
-            if (len != 1) {
-                ESP_LOGE(TAG, "Plugin command routing failed: START command requires len=1, got %d", len);
+            if (len != 2) {
+                ESP_LOGE(TAG, "Plugin command routing failed: START command requires len=2, got %d", len);
                 return ESP_ERR_INVALID_ARG;
             }
             err = plugin->callbacks.on_start();
             break;
 
-        case 0x06: /* MESH_CMD_PLUGIN_PAUSE */
+        case PLUGIN_CMD_PAUSE:
             if (plugin->callbacks.on_pause == NULL) {
-                ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_pause callback", active_plugin_name);
+                ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_pause callback", plugin->name);
                 return ESP_ERR_INVALID_STATE;
             }
-            if (len != 1) {
-                ESP_LOGE(TAG, "Plugin command routing failed: PAUSE command requires len=1, got %d", len);
+            if (len != 2) {
+                ESP_LOGE(TAG, "Plugin command routing failed: PAUSE command requires len=2, got %d", len);
                 return ESP_ERR_INVALID_ARG;
             }
             err = plugin->callbacks.on_pause();
             break;
 
-        case 0x07: /* MESH_CMD_PLUGIN_RESET */
+        case PLUGIN_CMD_RESET:
             if (plugin->callbacks.on_reset == NULL) {
-                ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_reset callback", active_plugin_name);
+                ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_reset callback", plugin->name);
                 return ESP_ERR_INVALID_STATE;
             }
-            if (len != 1) {
-                ESP_LOGE(TAG, "Plugin command routing failed: RESET command requires len=1, got %d", len);
+            if (len != 2) {
+                ESP_LOGE(TAG, "Plugin command routing failed: RESET command requires len=2, got %d", len);
                 return ESP_ERR_INVALID_ARG;
             }
             err = plugin->callbacks.on_reset();
             break;
 
-        case 0x08: /* MESH_CMD_PLUGIN_BEAT */
+        case PLUGIN_CMD_BEAT:
             if (plugin->callbacks.on_beat == NULL) {
-                ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_beat callback", active_plugin_name);
+                ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_beat callback", plugin->name);
                 return ESP_ERR_INVALID_STATE;
             }
-            if (len != 2) {
-                ESP_LOGE(TAG, "Plugin command routing failed: BEAT command requires len=2, got %d", len);
+            if (len < 3) {
+                ESP_LOGE(TAG, "Plugin command routing failed: BEAT command requires len>=3, got %d", len);
                 return ESP_ERR_INVALID_ARG;
             }
-            err = plugin->callbacks.on_beat(data, len);
+            /* Pass remaining data (skip plugin ID and command bytes) to on_beat */
+            err = plugin->callbacks.on_beat(&data[2], len - 2);
             break;
 
         default:
-            ESP_LOGE(TAG, "Plugin command routing failed: unhandled command ID 0x%02X", cmd);
+            ESP_LOGE(TAG, "Plugin command routing failed: unhandled command byte 0x%02X", cmd);
             return ESP_ERR_INVALID_ARG;
     }
 
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Plugin '%s' command callback (0x%02X) returned error: %s", active_plugin_name, cmd, esp_err_to_name(err));
+        ESP_LOGE(TAG, "Plugin '%s' command callback (0x%02X) returned error: %s", plugin->name, cmd, esp_err_to_name(err));
     } else {
-        ESP_LOGD(TAG, "Plugin command routed to plugin '%s' (command ID 0x%02X)", active_plugin_name, cmd);
+        ESP_LOGD(TAG, "Plugin command routed to plugin '%s' (plugin ID 0x%02X, command 0x%02X)", plugin->name, plugin_id, cmd);
     }
 
     return err;

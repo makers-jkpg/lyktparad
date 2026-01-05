@@ -27,6 +27,9 @@
 
 static const char *TAG = "sequence_plugin";
 
+/* Plugin ID storage (assigned during registration) */
+static uint8_t sequence_plugin_id = 0;
+
 /* Query type constants for get_state callback */
 #define SEQUENCE_QUERY_IS_ACTIVE  0x01
 #define SEQUENCE_QUERY_GET_POINTER 0x02
@@ -207,17 +210,18 @@ static void sequence_timer_cb(void *arg)
  * @brief Sequence plugin command handler
  *
  * Handles plugin data commands:
- * - MESH_CMD_PLUGIN_DATA (0x04): Store and start sequence data
+ * - PLUGIN_CMD_DATA (0x04): Store and start sequence data
  *
- * Note: MESH_CMD_PLUGIN_START, MESH_CMD_PLUGIN_PAUSE, MESH_CMD_PLUGIN_RESET, and
- * MESH_CMD_PLUGIN_BEAT are handled via plugin callbacks (on_start, on_pause, on_reset, on_beat).
+ * Note: PLUGIN_CMD_START, PLUGIN_CMD_PAUSE, PLUGIN_CMD_RESET, and
+ * PLUGIN_CMD_BEAT are handled via plugin callbacks (on_start, on_pause, on_reset, on_beat).
  *
- * @param cmd Command ID (should be MESH_CMD_PLUGIN_DATA = 0x04)
- * @param data Command data (includes command byte at data[0])
- * @param len Data length
+ * The plugin ID has already been validated by the plugin system before this handler is called.
+ *
+ * @param data Command data (data[0] is command byte, e.g., PLUGIN_CMD_DATA)
+ * @param len Data length (includes command byte)
  * @return ESP_OK on success, error code on failure
  */
-static esp_err_t sequence_command_handler(uint8_t cmd, uint8_t *data, uint16_t len)
+static esp_err_t sequence_command_handler(uint8_t *data, uint16_t len)
 {
     /* Validate data */
     if (data == NULL || len < 1) {
@@ -225,60 +229,73 @@ static esp_err_t sequence_command_handler(uint8_t cmd, uint8_t *data, uint16_t l
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Check if sequence plugin is active */
-    if (!plugin_is_active("sequence")) {
-        ESP_LOGD(TAG, "Command received but sequence plugin is not active");
-        return ESP_ERR_INVALID_STATE;
-    }
+    /* Extract command byte from data[0] */
+    uint8_t cmd = data[0];
 
-    /* Only handle MESH_CMD_PLUGIN_DATA (0x04) */
-    if (cmd == 0x04) {  /* MESH_CMD_PLUGIN_DATA */
+    /* Only handle PLUGIN_CMD_DATA (0x04) */
+    if (cmd == PLUGIN_CMD_DATA) {
         return sequence_handle_command_internal(cmd, data, len);
     }
 
-    ESP_LOGE(TAG, "Invalid command ID: 0x%02X (expected MESH_CMD_PLUGIN_DATA = 0x04)", cmd);
+    ESP_LOGE(TAG, "Invalid command byte: 0x%02X (expected PLUGIN_CMD_DATA = 0x04)", cmd);
     return ESP_ERR_INVALID_ARG;
 }
 
 static esp_err_t sequence_handle_command_internal(uint8_t cmd, uint8_t *data, uint16_t len)
 {
-    if (data == NULL || len < 3) {
-        ESP_LOGE(TAG, "Invalid command data: data=%p, len=%d", data, len);
+    if (data == NULL || len < 5) {
+        ESP_LOGE(TAG, "Invalid command data: data=%p, len=%d (need at least 5 bytes: CMD + LENGTH + rhythm + num_rows)", data, len);
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (data[0] != 0x04) {  /* MESH_CMD_PLUGIN_DATA */
-        ESP_LOGE(TAG, "Command byte mismatch: 0x%02X (expected MESH_CMD_PLUGIN_DATA = 0x04)", data[0]);
+    if (data[0] != PLUGIN_CMD_DATA) {
+        ESP_LOGE(TAG, "Command byte mismatch: 0x%02X (expected PLUGIN_CMD_DATA = 0x04)", data[0]);
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint8_t rhythm = data[1];
+    /* Extract length prefix (2 bytes, network byte order) */
+    uint16_t data_len = (data[1] << 8) | data[2];
+
+    /* Verify length matches */
+    if (len != 3 + data_len) {
+        ESP_LOGE(TAG, "Length mismatch: len=%d, expected %d (3 header bytes + %d data bytes)", len, 3 + data_len, data_len);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    /* Extract rhythm and num_rows from data payload */
+    uint8_t rhythm = data[3];
     if (rhythm == 0) {
         ESP_LOGE(TAG, "Invalid rhythm value: %d (must be 1-255)", rhythm);
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint8_t num_rows = data[2];
+    uint8_t num_rows = data[4];
     if (num_rows < 1 || num_rows > 16) {
         ESP_LOGE(TAG, "Invalid sequence length: %d (must be 1-16 rows)", num_rows);
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Calculate expected mesh command size: cmd(1) + rhythm(1) + length(1) + color_data(variable) */
-    uint16_t expected_size = 3 + ((num_rows * 16 / 2) * 3);
-    if (len != expected_size) {
-        ESP_LOGE(TAG, "Invalid sequence command size: %d (expected %d for %d rows)", len, expected_size, num_rows);
+    /* Calculate expected data length: rhythm(1) + num_rows(1) + color_data(variable) */
+    uint16_t expected_data_len = 2 + ((num_rows * 16 / 2) * 3);
+    if (data_len != expected_data_len) {
+        ESP_LOGE(TAG, "Invalid sequence data length: %d (expected %d for %d rows)", data_len, expected_data_len, num_rows);
         return ESP_ERR_INVALID_SIZE;
     }
 
-    uint16_t color_data_len = len - 3;
+    uint16_t color_data_len = data_len - 2;
+
+    /* Validate color_data_len doesn't exceed buffer size */
+    if (color_data_len > SEQUENCE_COLOR_DATA_SIZE) {
+        ESP_LOGE(TAG, "Color data length %d exceeds maximum %d", color_data_len, SEQUENCE_COLOR_DATA_SIZE);
+        return ESP_ERR_INVALID_SIZE;
+    }
 
     sequence_timer_stop();
 
     sequence_rhythm = rhythm;
     sequence_length = num_rows;
     memset(sequence_colors, 0, SEQUENCE_COLOR_DATA_SIZE);
-    memcpy(sequence_colors, &data[3], color_data_len);
+    memcpy(sequence_colors, &data[5], color_data_len);
     sequence_pointer = 0;
 
     esp_err_t err = sequence_timer_start(rhythm);
@@ -569,8 +586,8 @@ static esp_err_t sequence_on_reset(void)
 
 static esp_err_t sequence_on_beat(uint8_t *data, uint16_t len)
 {
-    if (data == NULL || len != 2 || data[0] != 0x08) {  /* MESH_CMD_PLUGIN_BEAT */
-        ESP_LOGE(TAG, "Invalid BEAT command data: data=%p, len=%d", data, len);
+    if (data == NULL || len != 1) {
+        ESP_LOGE(TAG, "Invalid BEAT command data: data=%p, len=%d (expected len=1 for pointer)", data, len);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -581,7 +598,7 @@ static esp_err_t sequence_on_beat(uint8_t *data, uint16_t len)
     }
 
     /* Child node: update pointer from BEAT data */
-    uint8_t pointer = data[1];
+    uint8_t pointer = data[0];
     if (sequence_length == 0) {
         ESP_LOGE(TAG, "No sequence data available for BEAT (length=0)");
         return ESP_ERR_INVALID_STATE;
@@ -749,7 +766,8 @@ void sequence_plugin_register(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register sequence plugin: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "Sequence plugin registered with command ID 0x%02X", assigned_cmd_id);
+        sequence_plugin_id = assigned_cmd_id;
+        ESP_LOGI(TAG, "Sequence plugin registered with plugin ID 0x%02X", sequence_plugin_id);
     }
 }
 
@@ -779,6 +797,12 @@ esp_err_t sequence_plugin_root_store_and_broadcast(uint8_t rhythm, uint8_t num_r
         return ESP_ERR_INVALID_ARG;
     }
 
+    /* Validate color_data_len doesn't exceed buffer size */
+    if (color_data_len > SEQUENCE_COLOR_DATA_SIZE) {
+        ESP_LOGE(TAG, "Color data length %d exceeds maximum %d", color_data_len, SEQUENCE_COLOR_DATA_SIZE);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
     sequence_rhythm = rhythm;
     sequence_length = num_rows;
     memset(sequence_colors, 0, SEQUENCE_COLOR_DATA_SIZE);
@@ -806,14 +830,21 @@ esp_err_t sequence_plugin_root_store_and_broadcast(uint8_t rhythm, uint8_t num_r
     }
 
     uint8_t *tx_buf = mesh_common_get_tx_buf();
-    tx_buf[0] = 0x04;  /* MESH_CMD_PLUGIN_DATA */
-    tx_buf[1] = rhythm;
-    tx_buf[2] = num_rows;
-    memcpy(&tx_buf[3], color_data, color_data_len);
+    tx_buf[0] = sequence_plugin_id;  /* Plugin ID */
+    tx_buf[1] = PLUGIN_CMD_DATA;  /* Command byte */
+
+    /* Calculate data length: rhythm(1) + num_rows(1) + color_data(variable) */
+    uint16_t data_len = 2 + color_data_len;
+    tx_buf[2] = (data_len >> 8) & 0xFF;  /* Length MSB (network byte order) */
+    tx_buf[3] = data_len & 0xFF;  /* Length LSB */
+
+    tx_buf[4] = rhythm;
+    tx_buf[5] = num_rows;
+    memcpy(&tx_buf[6], color_data, color_data_len);
 
     mesh_data_t data;
     data.data = tx_buf;
-    data.size = 3 + color_data_len;
+    data.size = 6 + color_data_len;  /* Plugin ID(1) + CMD(1) + LENGTH(2) + rhythm(1) + num_rows(1) + color_data */
     data.proto = MESH_PROTO_BIN;
     data.tos = MESH_TOS_P2P;
 
@@ -835,10 +866,10 @@ esp_err_t sequence_plugin_root_store_and_broadcast(uint8_t rhythm, uint8_t num_r
     return ESP_OK;
 }
 
-static esp_err_t sequence_broadcast_control(uint8_t cmd)
+static esp_err_t sequence_broadcast_control(uint8_t plugin_cmd)
 {
-    if (cmd != 0x05 && cmd != 0x06 && cmd != 0x07) {  /* MESH_CMD_PLUGIN_START, MESH_CMD_PLUGIN_PAUSE, MESH_CMD_PLUGIN_RESET */
-        ESP_LOGE(TAG, "Invalid control command: 0x%02x", cmd);
+    if (plugin_cmd != PLUGIN_CMD_START && plugin_cmd != PLUGIN_CMD_PAUSE && plugin_cmd != PLUGIN_CMD_RESET) {
+        ESP_LOGE(TAG, "Invalid control command: 0x%02x", plugin_cmd);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -858,11 +889,12 @@ static esp_err_t sequence_broadcast_control(uint8_t cmd)
     }
 
     uint8_t *tx_buf = mesh_common_get_tx_buf();
-    tx_buf[0] = cmd;
+    tx_buf[0] = sequence_plugin_id;  /* Plugin ID */
+    tx_buf[1] = plugin_cmd;  /* Command byte */
 
     mesh_data_t data;
     data.data = tx_buf;
-    data.size = 1;
+    data.size = 2;  /* Plugin ID(1) + CMD(1) */
     data.proto = MESH_PROTO_BIN;
     data.tos = MESH_TOS_P2P;
 
@@ -878,8 +910,8 @@ static esp_err_t sequence_broadcast_control(uint8_t cmd)
         }
     }
 
-    const char *cmd_name = (cmd == 0x05) ? "START" :  /* MESH_CMD_PLUGIN_START */
-                          (cmd == 0x06) ? "PAUSE" : "RESET";  /* MESH_CMD_PLUGIN_PAUSE, MESH_CMD_PLUGIN_RESET */
+    const char *cmd_name = (plugin_cmd == PLUGIN_CMD_START) ? "START" :
+                          (plugin_cmd == PLUGIN_CMD_PAUSE) ? "PAUSE" : "RESET";
     ESP_LOGI(TAG, "%s command broadcast - sent to %d/%d child nodes (success:%d, failed:%d)",
              cmd_name, success_count, child_node_count, success_count, fail_count);
 
@@ -909,12 +941,13 @@ esp_err_t sequence_plugin_root_broadcast_beat(void)
     }
 
     uint8_t *tx_buf = mesh_common_get_tx_buf();
-    tx_buf[0] = 0x08;  /* MESH_CMD_PLUGIN_BEAT */
-    tx_buf[1] = sequence_pointer & 0xFF;
+    tx_buf[0] = sequence_plugin_id;  /* Plugin ID */
+    tx_buf[1] = PLUGIN_CMD_BEAT;  /* Command byte */
+    tx_buf[2] = sequence_pointer & 0xFF;  /* Pointer */
 
     mesh_data_t data;
     data.data = tx_buf;
-    data.size = 2;
+    data.size = 3;  /* Plugin ID(1) + CMD(1) + pointer(1) */
     data.proto = MESH_PROTO_BIN;
     data.tos = MESH_TOS_P2P;
 

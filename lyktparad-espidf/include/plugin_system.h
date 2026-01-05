@@ -24,9 +24,11 @@
  *                Plugin Command ID Range
  *******************************************************/
 
-/* Plugin commands are assigned IDs in the range 0x10-0xEF (224 plugins maximum)
- * Command IDs are assigned automatically during registration, starting from 0x10
+/* Plugin IDs are assigned in the range 0x0B-0xEE (228 plugins maximum)
+ * Plugin IDs are assigned automatically during registration, starting from 0x0B
  * and incrementing sequentially for each registered plugin.
+ * Registration order is deterministic (fixed in plugins.h), ensuring consistency
+ * across all nodes with the same firmware version.
  */
 
 /*******************************************************
@@ -44,13 +46,14 @@ typedef struct {
      * @brief Command handler callback (required)
      *
      * Handle mesh commands for this plugin.
+     * The plugin ID has already been validated and extracted by the plugin system.
+     * This handler receives data starting with the command byte.
      *
-     * @param cmd Command ID (should match plugin's assigned command ID)
-     * @param data Pointer to command data (includes command byte at data[0])
+     * @param data Pointer to command data (data[0] is command byte, e.g., PLUGIN_CMD_DATA)
      * @param len Length of command data in bytes (includes command byte)
      * @return ESP_OK on success, error code on failure
      */
-    esp_err_t (*command_handler)(uint8_t cmd, uint8_t *data, uint16_t len);
+    esp_err_t (*command_handler)(uint8_t *data, uint16_t len);
 
     /**
      * @brief Timer callback (optional, may be NULL)
@@ -232,17 +235,18 @@ typedef struct {
 /**
  * @brief Register a plugin with the plugin system
  *
- * This function registers a plugin and assigns it a unique command ID
- * in the range 0x10-0xEF. Command IDs are assigned sequentially starting
- * from 0x10.
+ * This function registers a plugin and assigns it a unique plugin ID
+ * in the range 0x0B-0xEE. Plugin IDs are assigned sequentially starting
+ * from 0x0B. Registration order is deterministic (fixed in plugins.h),
+ * ensuring consistency across all nodes with the same firmware version.
  *
  * @param info Plugin information structure (must contain valid name and command_handler)
- * @param assigned_cmd_id Output parameter for assigned command ID (non-NULL)
+ * @param assigned_cmd_id Output parameter for assigned plugin ID (non-NULL)
  * @return ESP_OK on success
  * @return ESP_ERR_INVALID_ARG if info, info->name, or assigned_cmd_id is NULL, or if name is empty
  * @return ESP_ERR_INVALID_ARG if command_handler callback is NULL
  * @return ESP_ERR_INVALID_STATE if plugin with same name is already registered
- * @return ESP_ERR_NO_MEM if plugin registry is full or command ID range is exhausted
+ * @return ESP_ERR_NO_MEM if plugin registry is full or plugin ID range is exhausted
  */
 esp_err_t plugin_register(const plugin_info_t *info, uint8_t *assigned_cmd_id);
 
@@ -255,28 +259,43 @@ esp_err_t plugin_register(const plugin_info_t *info, uint8_t *assigned_cmd_id);
 const plugin_info_t *plugin_get_by_name(const char *name);
 
 /**
- * @brief Look up plugin by command ID
+ * @brief Look up plugin by plugin ID
  *
- * @param cmd_id Command ID (must be in plugin range 0x10-0xEF)
- * @return Pointer to plugin info if found, NULL if not found or cmd_id is outside range
+ * @param plugin_id Plugin ID (must be in plugin range 0x0B-0xEE)
+ * @return Pointer to plugin info if found, NULL if not found or plugin_id is outside range
  */
-const plugin_info_t *plugin_get_by_cmd_id(uint8_t cmd_id);
+const plugin_info_t *plugin_get_by_id(uint8_t plugin_id);
+
+/**
+ * @brief Get plugin ID by name
+ *
+ * @param name Plugin name (non-NULL, must be registered)
+ * @param plugin_id Output parameter for plugin ID (non-NULL)
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_ARG if name or plugin_id is NULL
+ * @return ESP_ERR_NOT_FOUND if plugin with name is not registered
+ */
+esp_err_t plugin_get_id_by_name(const char *name, uint8_t *plugin_id);
 
 /**
  * @brief Handle command routing to plugin system
  *
- * This function routes commands in the plugin range (0x10-0xEF) to the
- * appropriate plugin's command_handler callback.
+ * This function routes plugin protocol commands to the appropriate plugin's
+ * command_handler callback. The protocol format is:
+ * [PLUGIN_ID:1] [CMD:1] [LENGTH:2?] [DATA:N]
  *
- * @param cmd Command ID (must be in plugin range 0x10-0xEF)
- * @param data Pointer to command data (includes command byte at data[0], must be non-NULL if len > 0)
- * @param len Length of command data in bytes (includes command byte)
+ * The plugin ID is extracted from the first byte of data, and the command
+ * byte is extracted from the second byte. Commands are routed based on
+ * plugin ID, making the protocol stateless and self-contained.
+ *
+ * @param data Pointer to command data (must start with plugin ID at data[0], must be non-NULL if len > 0)
+ * @param len Length of command data in bytes (must be at least 2 for plugin ID + command byte)
  * @return ESP_OK on success
- * @return ESP_ERR_INVALID_ARG if cmd is outside plugin range or data is NULL when len > 0
- * @return ESP_ERR_NOT_FOUND if no plugin is registered for the given command ID
+ * @return ESP_ERR_INVALID_ARG if data is NULL when len > 0, or len < 2, or plugin ID is outside range (0x0B-0xEE)
+ * @return ESP_ERR_NOT_FOUND if no plugin is registered for the given plugin ID
  * @return Error code from plugin's command_handler callback
  */
-esp_err_t plugin_system_handle_command(uint8_t cmd, uint8_t *data, uint16_t len);
+esp_err_t plugin_system_handle_command(uint8_t *data, uint16_t len);
 
 /**
  * @brief Activate a plugin by name
@@ -343,21 +362,24 @@ bool plugin_is_active(const char *name);
 esp_err_t plugin_get_all_names(const char *names[], uint8_t max_count, uint8_t *count);
 
 /**
- * @brief Handle plugin command routing for MESH_CMD_PLUGIN_* commands
+ * @brief Handle plugin control command routing
  *
- * This function routes core plugin commands (MESH_CMD_PLUGIN_START, MESH_CMD_PLUGIN_PAUSE,
- * MESH_CMD_PLUGIN_RESET, MESH_CMD_PLUGIN_BEAT) to the active plugin's callbacks.
+ * This function routes plugin control commands (START, PAUSE, RESET, BEAT)
+ * using the new plugin protocol format: [PLUGIN_ID:1] [CMD:1] [DATA:N]
  *
- * @param cmd Command ID (MESH_CMD_PLUGIN_START, MESH_CMD_PLUGIN_PAUSE, MESH_CMD_PLUGIN_RESET, or MESH_CMD_PLUGIN_BEAT)
- * @param data Command data (for BEAT command, data[1] contains pointer)
- * @param len Data length (1 for START/PAUSE/RESET, 2 for BEAT)
+ * The plugin ID is extracted from data[0], and the command byte is extracted
+ * from data[1]. When a START command is received, all other plugins are
+ * automatically deactivated to ensure mutual exclusivity.
+ *
+ * @param data Command data (must start with plugin ID at data[0] and command byte at data[1], must be non-NULL)
+ * @param len Data length (must be at least 2 for plugin ID + command byte)
  * @return ESP_OK on success
- * @return ESP_ERR_INVALID_ARG if cmd is not a valid plugin command or data is NULL when len > 0
- * @return ESP_ERR_NOT_FOUND if no plugin is active
- * @return ESP_ERR_INVALID_STATE if active plugin doesn't have the required callback
+ * @return ESP_ERR_INVALID_ARG if data is NULL, len < 2, or plugin ID/command byte is invalid
+ * @return ESP_ERR_NOT_FOUND if no plugin is registered for the given plugin ID
+ * @return ESP_ERR_INVALID_STATE if plugin doesn't have the required callback
  * @return Error code from plugin's callback
  */
-esp_err_t plugin_system_handle_plugin_command(uint8_t cmd, uint8_t *data, uint16_t len);
+esp_err_t plugin_system_handle_plugin_command(uint8_t *data, uint16_t len);
 
 /**
  * @brief Query plugin state

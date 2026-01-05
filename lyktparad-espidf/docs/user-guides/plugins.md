@@ -1,6 +1,6 @@
 # Plugins - User Guide
 
-**Last Updated:** 2025-01-XX
+**Last Updated:** 2025-01-27
 
 ## Table of Contents
 
@@ -26,7 +26,7 @@ Plugins are modular extensions to the mesh network firmware that provide additio
 
 ### How Plugins Work
 
-Plugins register with the system during firmware initialization and receive a unique command ID. When mesh commands are received, the system automatically routes commands to the appropriate plugin based on the command ID.
+Plugins register with the system during firmware initialization and receive a unique plugin ID (0x0B-0xEE). When mesh commands are received, the system automatically routes commands to the appropriate plugin based on the plugin ID in the command. The plugin protocol is self-contained and stateless - each command includes the plugin ID, making commands independent of activation state.
 
 ## Available Plugins
 
@@ -70,10 +70,25 @@ The Sequence plugin provides synchronized color sequence playback across all mes
 
 ### Command Format
 
-Plugins receive commands via the mesh network. Commands are sent as binary data with:
-- Command ID: Plugin's assigned command ID (0x10-0xEF)
-- Command byte: Specific command within the plugin
-- Additional data: Command-specific parameters
+Plugins receive commands via the mesh network using a self-contained protocol format:
+
+```
+[PLUGIN_ID:1] [CMD:1] [LENGTH:2?] [DATA:N]
+```
+
+- **PLUGIN_ID** (1 byte): Plugin's assigned plugin ID (0x0B-0xEE)
+- **CMD** (1 byte): Command type:
+  - `PLUGIN_CMD_START` (0x01): Start plugin playback
+  - `PLUGIN_CMD_PAUSE` (0x02): Pause plugin playback
+  - `PLUGIN_CMD_RESET` (0x03): Reset plugin state
+  - `PLUGIN_CMD_DATA` (0x04): Plugin-specific data (variable length)
+  - `PLUGIN_CMD_BEAT` (0x05): Beat synchronization
+- **LENGTH** (2 bytes, optional): Length prefix for variable-length data (only for DATA commands)
+- **DATA** (N bytes, optional): Command-specific parameters
+
+**Total size**: Maximum 1024 bytes (including all fields)
+
+**Mutual Exclusivity**: When a START command is received for a plugin, the system automatically stops any other running plugin before activating the target plugin.
 
 ### Effects Plugin Usage
 
@@ -299,8 +314,10 @@ The UDP bridge can forward API commands to the mesh network, allowing remote con
 - Unexpected behavior
 
 **Solutions:**
-- Command IDs are assigned automatically - conflicts should not occur
-- If issues persist, check plugin registration order
+- Plugin IDs are assigned automatically - conflicts should not occur
+- Plugin IDs are deterministic based on registration order in firmware
+- If issues persist, verify all nodes have the same firmware version
+- Check plugin registration order matches across all nodes
 - Verify only one plugin with same name is registered
 
 ## Additional Resources

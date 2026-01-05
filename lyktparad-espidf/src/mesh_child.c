@@ -20,13 +20,12 @@
 #include "mesh_child.h"
 #include "mesh_root.h"
 #include "mesh_commands.h"
+#include "plugin_system.h"
 #include "mesh_udp_bridge.h"
 #include "light_neopixel.h"
 #include "light_common_cathode.h"
-#include "plugins/effects/effects_plugin.h"
 #include "config/mesh_config.h"
 #include "mesh_ota.h"
-#include "plugin_system.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
@@ -84,54 +83,36 @@ void esp_mesh_p2p_rx_main(void *arg)
                     ESP_LOGI(MESH_TAG, "[ROOT ACTION] RGB command received from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
                     mesh_root_handle_rgb_command(r, g, b);
                     continue;
-                } else if ((data.size == 1 && (cmd == 0x05 || cmd == 0x06 || cmd == 0x07)) ||  /* MESH_CMD_PLUGIN_START, PAUSE, RESET */
-                           (data.size == 2 && cmd == 0x08) ||  /* MESH_CMD_PLUGIN_BEAT */
-                           (data.size >= 3 && cmd == 0x04)) {  /* MESH_CMD_PLUGIN_DATA */
-                    /* Route plugin control commands through plugin system */
-                    if (cmd == 0x04) {
-                        /* MESH_CMD_PLUGIN_DATA - route to active plugin's command_handler */
-                        const char *active_plugin = plugin_get_active();
-                        if (active_plugin != NULL) {
-                            const plugin_info_t *plugin = plugin_get_by_name(active_plugin);
-                            if (plugin != NULL && plugin->callbacks.command_handler != NULL) {
-                                err = plugin->callbacks.command_handler(0x04, data.data, data.size);
-                                if (err == ESP_OK) {
-                                    ESP_LOGD(mesh_common_get_tag(), "[PLUGIN DATA] Command routed to plugin '%s'", active_plugin);
-                                    continue;
-                                }
-                            }
-                        }
-                        ESP_LOGD(mesh_common_get_tag(), "[PLUGIN DATA] No active plugin for command 0x04");
-                        continue;
-                    } else {
-                        /* MESH_CMD_PLUGIN_START, PAUSE, RESET, BEAT */
-                        err = plugin_system_handle_plugin_command(cmd, data.data, data.size);
+                } else if (data.size >= 2 && cmd >= 0x0B && cmd <= 0xEE) {
+                    /* Route plugin protocol commands: [PLUGIN_ID:1] [CMD:1] [LENGTH:2?] [DATA:N] */
+                    uint8_t plugin_cmd = data.data[1];
+                    if (plugin_cmd == PLUGIN_CMD_START || plugin_cmd == PLUGIN_CMD_PAUSE ||
+                        plugin_cmd == PLUGIN_CMD_RESET || plugin_cmd == PLUGIN_CMD_BEAT) {
+                        /* Plugin control commands (START, PAUSE, RESET, BEAT) */
+                        err = plugin_system_handle_plugin_command(data.data, data.size);
                         if (err == ESP_OK) {
-                            ESP_LOGD(mesh_common_get_tag(), "[PLUGIN CONTROL] Command 0x%02X routed to plugin system", cmd);
+                            ESP_LOGD(mesh_common_get_tag(), "[PLUGIN CONTROL] Plugin ID 0x%02X, command 0x%02X routed", cmd, plugin_cmd);
                             continue;
                         } else if (err == ESP_ERR_NOT_FOUND) {
-                            ESP_LOGD(mesh_common_get_tag(), "[PLUGIN CONTROL] No active plugin for command 0x%02X", cmd);
+                            ESP_LOGD(mesh_common_get_tag(), "[PLUGIN CONTROL] Plugin ID 0x%02X not registered", cmd);
                             continue;
                         } else {
-                            ESP_LOGE(mesh_common_get_tag(), "[PLUGIN CONTROL] Plugin command routing error 0x%02X: 0x%x", cmd, err);
+                            ESP_LOGE(mesh_common_get_tag(), "[PLUGIN CONTROL] Plugin command routing error: 0x%x", err);
                             continue;
                         }
-                    }
-                } else if (cmd >= 0x10 && cmd <= 0xEF) {
-                    /* Route plugin commands (0x10-0xEF) to plugin system */
-                    err = plugin_system_handle_command(cmd, data.data, data.size);
-                    if (err == ESP_OK) {
-                        /* Command handled by plugin, continue */
-                        ESP_LOGD(mesh_common_get_tag(), "[PLUGIN] Command 0x%02X routed to plugin", cmd);
-                        continue;
-                    } else if (err == ESP_ERR_NOT_FOUND) {
-                        /* Not a plugin command, fall through to continue (no core handlers for root) */
-                        ESP_LOGD(mesh_common_get_tag(), "[PLUGIN] Command 0x%02X not registered, ignoring", cmd);
-                        continue;
-                    } else {
-                        /* Plugin error, log and continue */
-                        ESP_LOGE(mesh_common_get_tag(), "[PLUGIN] Command 0x%02X routing error: 0x%x", cmd, err);
-                        continue;
+                    } else if (plugin_cmd == PLUGIN_CMD_DATA) {
+                        /* Plugin data commands */
+                        err = plugin_system_handle_command(data.data, data.size);
+                        if (err == ESP_OK) {
+                            ESP_LOGD(mesh_common_get_tag(), "[PLUGIN DATA] Plugin ID 0x%02X routed", cmd);
+                            continue;
+                        } else if (err == ESP_ERR_NOT_FOUND) {
+                            ESP_LOGD(mesh_common_get_tag(), "[PLUGIN DATA] Plugin ID 0x%02X not registered", cmd);
+                            continue;
+                        } else {
+                            ESP_LOGE(mesh_common_get_tag(), "[PLUGIN DATA] Plugin command routing error: 0x%x", err);
+                            continue;
+                        }
                     }
                 }
             }
@@ -141,20 +122,35 @@ void esp_mesh_p2p_rx_main(void *arg)
         ESP_LOGI(mesh_common_get_tag(), "[RCVD NOT ROOT]");
 
         recv_count++;
-        /* Route plugin commands (0x10-0xEF) to plugin system */
-        if (data.proto == MESH_PROTO_BIN && data.size >= 1 && data.data[0] >= 0x10 && data.data[0] <= 0xEF) {
-            err = plugin_system_handle_command(data.data[0], data.data, data.size);
-            if (err == ESP_OK) {
-                /* Command handled by plugin, continue */
-                ESP_LOGD(mesh_common_get_tag(), "[PLUGIN] Command 0x%02X routed to plugin", data.data[0]);
-                continue;
-            } else if (err == ESP_ERR_NOT_FOUND) {
-                /* Not a plugin command, fall through to core handlers */
-                ESP_LOGD(mesh_common_get_tag(), "[PLUGIN] Command 0x%02X not registered, falling through to core handlers", data.data[0]);
-            } else {
-                /* Plugin error, log and continue */
-                ESP_LOGE(mesh_common_get_tag(), "[PLUGIN] Command 0x%02X routing error: 0x%x", data.data[0], err);
-                continue;
+        /* Route plugin protocol commands: [PLUGIN_ID:1] [CMD:1] [LENGTH:2?] [DATA:N] */
+        if (data.proto == MESH_PROTO_BIN && data.size >= 2 && data.data[0] >= 0x0B && data.data[0] <= 0xEE) {
+            uint8_t plugin_id = data.data[0];
+            uint8_t plugin_cmd = data.data[1];
+            if (plugin_cmd == PLUGIN_CMD_START || plugin_cmd == PLUGIN_CMD_PAUSE ||
+                plugin_cmd == PLUGIN_CMD_RESET || plugin_cmd == PLUGIN_CMD_BEAT) {
+                /* Plugin control commands (START, PAUSE, RESET, BEAT) */
+                err = plugin_system_handle_plugin_command(data.data, data.size);
+                if (err == ESP_OK) {
+                    ESP_LOGD(mesh_common_get_tag(), "[PLUGIN CONTROL] Plugin ID 0x%02X, command 0x%02X routed", plugin_id, plugin_cmd);
+                    continue;
+                } else if (err == ESP_ERR_NOT_FOUND) {
+                    ESP_LOGD(mesh_common_get_tag(), "[PLUGIN CONTROL] Plugin ID 0x%02X not registered", plugin_id);
+                } else {
+                    ESP_LOGE(mesh_common_get_tag(), "[PLUGIN CONTROL] Plugin command routing error: 0x%x", err);
+                    continue;
+                }
+            } else if (plugin_cmd == PLUGIN_CMD_DATA) {
+                /* Plugin data commands */
+                err = plugin_system_handle_command(data.data, data.size);
+                if (err == ESP_OK) {
+                    ESP_LOGD(mesh_common_get_tag(), "[PLUGIN DATA] Plugin ID 0x%02X routed", plugin_id);
+                    continue;
+                } else if (err == ESP_ERR_NOT_FOUND) {
+                    ESP_LOGD(mesh_common_get_tag(), "[PLUGIN DATA] Plugin ID 0x%02X not registered", plugin_id);
+                } else {
+                    ESP_LOGE(mesh_common_get_tag(), "[PLUGIN DATA] Plugin command routing error: 0x%x", err);
+                    continue;
+                }
             }
         }
         /* detect heartbeat: command prefix (0x01) + 4-byte big-endian counter */
@@ -187,18 +183,6 @@ void esp_mesh_p2p_rx_main(void *arg)
                 }
             }
 
-        } else if (data.proto == MESH_PROTO_BIN && data.data[0] == MESH_CMD_EFFECT) {
-            /* Route MESH_CMD_EFFECT to effects plugin (backward compatibility) */
-            const plugin_info_t *effects_plugin = plugin_get_by_name("effects");
-            if (effects_plugin != NULL && effects_plugin->callbacks.command_handler != NULL) {
-                esp_err_t plugin_err = effects_plugin->callbacks.command_handler(MESH_CMD_EFFECT, data.data, data.size);
-                if (plugin_err != ESP_OK) {
-                    ESP_LOGE(MESH_TAG, "[NODE ACTION] Effects plugin command handler returned error: %s", esp_err_to_name(plugin_err));
-                }
-            } else {
-                ESP_LOGE(MESH_TAG, "[NODE ACTION] Effects plugin not found or has no command handler");
-            }
-
         } else if (data.proto == MESH_PROTO_BIN && data.size == 4 && data.data[0] == MESH_CMD_SET_RGB) {
             /* detect RGB command: command prefix (0x03) + 3-byte RGB values */
             uint8_t r = data.data[1];
@@ -217,38 +201,6 @@ void esp_mesh_p2p_rx_main(void *arg)
             err = mesh_light_set_rgb(r, g, b);
             if (err != ESP_OK) {
                 ESP_LOGE(mesh_common_get_tag(), "[RGB] failed to set LED: 0x%x", err);
-            }
-        } else if (data.proto == MESH_PROTO_BIN && data.size >= 3 && data.data[0] == 0x04) {  /* MESH_CMD_PLUGIN_DATA */
-            /* Route MESH_CMD_PLUGIN_DATA to active plugin's command_handler */
-            const char *active_plugin = plugin_get_active();
-            if (active_plugin != NULL) {
-                const plugin_info_t *plugin = plugin_get_by_name(active_plugin);
-                if (plugin != NULL && plugin->callbacks.command_handler != NULL) {
-                    err = plugin->callbacks.command_handler(0x04, data.data, data.size);
-                    if (err != ESP_OK) {
-                        ESP_LOGE(mesh_common_get_tag(), "[PLUGIN DATA] plugin '%s' command handler returned error: 0x%x", active_plugin, err);
-                    }
-                } else {
-                    ESP_LOGE(mesh_common_get_tag(), "[PLUGIN DATA] active plugin '%s' not found or has no command handler", active_plugin);
-                    err = ESP_ERR_NOT_FOUND;
-                }
-            } else {
-                ESP_LOGD(mesh_common_get_tag(), "[PLUGIN DATA] No active plugin for command 0x04");
-                err = ESP_ERR_NOT_FOUND;
-            }
-        } else if (data.proto == MESH_PROTO_BIN &&
-                   ((data.size == 1 && (data.data[0] == 0x05 ||  /* MESH_CMD_PLUGIN_START */
-                                        data.data[0] == 0x06 ||  /* MESH_CMD_PLUGIN_PAUSE */
-                                        data.data[0] == 0x07)) ||  /* MESH_CMD_PLUGIN_RESET */
-                    (data.size == 2 && data.data[0] == 0x08))) {  /* MESH_CMD_PLUGIN_BEAT */
-            /* Route plugin control commands through plugin system */
-            err = plugin_system_handle_plugin_command(data.data[0], data.data, data.size);
-            if (err == ESP_OK) {
-                ESP_LOGD(mesh_common_get_tag(), "[PLUGIN CONTROL] Command 0x%02X routed to plugin system", data.data[0]);
-            } else if (err == ESP_ERR_NOT_FOUND) {
-                ESP_LOGD(mesh_common_get_tag(), "[PLUGIN CONTROL] No active plugin for command 0x%02X", data.data[0]);
-            } else {
-                ESP_LOGE(mesh_common_get_tag(), "[PLUGIN CONTROL] Plugin command routing error 0x%02x: 0x%x", data.data[0], err);
             }
         } else if (data.proto == MESH_PROTO_BIN && data.size >= 1) {
             uint8_t cmd = data.data[0];

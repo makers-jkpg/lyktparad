@@ -1,6 +1,6 @@
 # Plugin System - Developer Guide
 
-**Last Updated:** 2025-01-XX
+**Last Updated:** 2025-01-27
 
 ## Table of Contents
 
@@ -24,9 +24,10 @@ The Plugin System provides a modular architecture for extending the mesh network
 
 ### Key Features
 
-- **Automatic Command ID Assignment**: Plugins receive unique command IDs automatically (0x10-0xEF)
-- **Command Routing**: Mesh commands are automatically routed to the appropriate plugin
-- **Optional Callbacks**: Plugins can provide timer callbacks, initialization, and state queries
+- **Automatic Plugin ID Assignment**: Plugins receive unique plugin IDs automatically (0x0B-0xEE, 228 plugins maximum)
+- **Stateless Protocol**: Commands are self-contained with plugin ID prefix, making routing stateless
+- **Command Routing**: Mesh commands are automatically routed to the appropriate plugin based on plugin ID
+- **Optional Callbacks**: Plugins can provide timer callbacks, initialization, activation/deactivation, and state queries
 - **Web Integration**: Plugins can include HTML, JavaScript, and CSS files for web interfaces
 - **Build System Integration**: Plugin files are automatically discovered and compiled
 
@@ -46,14 +47,16 @@ The Plugin System provides a modular architecture for extending the mesh network
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Mesh Command Handler (mesh_child.c)                   │
+│  Mesh Command Handler (mesh_child.c, mesh_root.c)      │
 │                                                          │
 │  - Receives mesh commands                              │
-│  - Routes core commands (0x01-0x0F) directly           │
-│  - Routes plugin commands (0x10-0xEF) to plugin system │
+│  - Routes core commands (0x01-0x0A) directly         │
+│  - Routes plugin commands (0x0B-0xEE) to plugin system│
+│  - Protocol: [PLUGIN_ID:1] [CMD:1] [LENGTH:2?] [DATA:N]│
 └──────────────────┬──────────────────────────────────────┘
                    │
                    │ plugin_system_handle_command()
+                   │ (extracts plugin ID from data[0])
                    ▼
 ┌─────────────────────────────────────────────────────────┐
 │  Plugin System (plugin_system.c)                        │
@@ -63,39 +66,72 @@ The Plugin System provides a modular architecture for extending the mesh network
 │  │  - Array of registered plugins                     │ │
 │  │  - Each plugin has:                                │ │
 │  │    - Unique name                                   │ │
-│  │    - Assigned command ID (0x10-0xEF)              │ │
+│  │    - Assigned plugin ID (0x0B-0xEE)              │ │
 │  │    - Callback functions                           │ │
 │  └───────────────┬────────────────────────────────────┘ │
 │                   │                                       │
 │                   ▼                                       │
 │  ┌────────────────────────────────────────────────────┐ │
 │  │  Command Router                                    │ │
-│  │  - Look up plugin by command ID                    │ │
-│  │  - Call plugin's command_handler callback         │ │
+│  │  - Extract plugin ID from data[0]                 │ │
+│  │  - Look up plugin by plugin ID                     │ │
+│  │  - Call plugin's command_handler with remaining   │ │
+│  │    data (data[1] onwards, len-1)                    │ │
 │  │  - Return result to caller                         │ │
 │  └────────────────────────────────────────────────────┘ │
 └──────────────────┼──────────────────────────────────────┘
                    │
                    │ command_handler callback
+                   │ (receives: [CMD:1] [LENGTH:2?] [DATA:N])
                    ▼
 ┌─────────────────────────────────────────────────────────┐
 │  Plugin Implementation (e.g., effects, sequence)      │
 │                                                          │
-│  - command_handler: Handle mesh commands               │
-│  - timer_callback: Periodic updates (optional)         │
-│  - init: Plugin initialization (optional)              │
-│  - deinit: Plugin cleanup (optional)                   │
-│  - is_active: Query plugin state (optional)            │
+│  - command_handler: Handle plugin commands             │
+│  - on_start: START command callback (optional)          │
+│  - on_pause: PAUSE command callback (optional)          │
+│  - on_reset: RESET command callback (optional)          │
+│  - on_beat: BEAT command callback (optional)            │
+│  - on_activate: Activation callback (optional)         │
+│  - on_deactivate: Deactivation callback (optional)      │
+│  - timer_callback: Periodic updates (optional)          │
+│  - init: Plugin initialization (optional)               │
+│  - deinit: Plugin cleanup (optional)                    │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ### Command ID Allocation
 
-- **0x01-0x0F**: Core functionality commands (heartbeat, RGB, light control)
-- **0x10-0xEF**: Plugin commands (automatic assignment, 224 plugins maximum)
-- **0xF0-0xFF**: Internal mesh use (OTA, etc.)
+- **0x01-0x0A**: Core functionality commands (heartbeat, RGB, light control)
+- **0x0B-0xEE**: Plugin IDs (automatic assignment, 228 plugins maximum)
+- **0xEF-0xFF**: Internal mesh use (OTA, web server IP broadcast, etc.)
 
-Command IDs are assigned sequentially starting from 0x10 when plugins register.
+Plugin IDs are assigned sequentially starting from 0x0B when plugins register. Registration order is deterministic (fixed in `plugins.h`), ensuring consistency across all nodes with the same firmware version.
+
+### Plugin Protocol Format
+
+The plugin protocol uses a self-contained format where the plugin ID is included in every command:
+
+```
+[PLUGIN_ID:1] [CMD:1] [LENGTH:2?] [DATA:N]
+```
+
+- **PLUGIN_ID** (1 byte): Plugin identifier (0x0B-0xEE)
+- **CMD** (1 byte): Command type:
+  - `PLUGIN_CMD_START` (0x01): Start plugin playback
+  - `PLUGIN_CMD_PAUSE` (0x02): Pause plugin playback
+  - `PLUGIN_CMD_RESET` (0x03): Reset plugin state
+  - `PLUGIN_CMD_DATA` (0x04): Plugin-specific data command (variable length)
+  - `PLUGIN_CMD_BEAT` (0x05): Beat synchronization
+- **LENGTH** (2 bytes, optional): Length prefix for variable-length data (network byte order, only for DATA commands)
+- **DATA** (N bytes, optional): Command-specific data
+- **Total size**: Maximum 1024 bytes (including all fields)
+
+**Fixed-size commands** (START, PAUSE, RESET, BEAT): 2 bytes total (PLUGIN_ID + CMD)
+
+**Variable-size commands** (DATA): 4 bytes header (PLUGIN_ID + CMD + LENGTH) + data
+
+**Mutual Exclusivity**: When a START command is received for a plugin, the system automatically stops any other running plugin before activating the target plugin.
 
 ## Creating a Plugin
 
@@ -188,9 +224,15 @@ void my_plugin_plugin_register(void)
 {
     plugin_info_t info = {
         .name = "my_plugin",
-        .command_id = 0,  /* Will be assigned automatically */
+        .command_id = 0,  /* Will be assigned automatically as plugin ID */
         .callbacks = {
-            .command_handler = my_plugin_command_handler,
+            .command_handler = my_plugin_command_handler,  /* Required */
+            .on_start = my_plugin_on_start,  /* Optional */
+            .on_pause = my_plugin_on_pause,  /* Optional */
+            .on_reset = my_plugin_on_reset,  /* Optional */
+            .on_beat = my_plugin_on_beat,  /* Optional */
+            .on_activate = my_plugin_on_activate,  /* Optional */
+            .on_deactivate = my_plugin_on_deactivate,  /* Optional */
             .timer_callback = my_plugin_timer_callback,  /* Optional */
             .init = my_plugin_init,  /* Optional */
             .deinit = my_plugin_deinit,  /* Optional */
@@ -199,12 +241,13 @@ void my_plugin_plugin_register(void)
         .user_data = NULL,  /* Optional */
     };
 
-    uint8_t assigned_cmd_id;
-    esp_err_t err = plugin_register(&info, &assigned_cmd_id);
+    uint8_t assigned_plugin_id;
+    esp_err_t err = plugin_register(&info, &assigned_plugin_id);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register plugin: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "Plugin registered with command ID 0x%02X", assigned_cmd_id);
+        ESP_LOGI(TAG, "Plugin registered with plugin ID 0x%02X", assigned_plugin_id);
+        /* Store assigned_plugin_id if needed for command broadcasting */
     }
 }
 ```
@@ -214,57 +257,67 @@ void my_plugin_plugin_register(void)
 ### Command Handler Signature
 
 ```c
-esp_err_t my_plugin_command_handler(uint8_t cmd, uint8_t *data, uint16_t len);
+esp_err_t my_plugin_command_handler(uint8_t *data, uint16_t len);
 ```
 
 **Parameters:**
-- `cmd`: Command ID (should match plugin's assigned command ID)
-- `data`: Pointer to command data (includes command byte at `data[0]`)
-- `len`: Length of command data in bytes (includes command byte)
+- `data`: Pointer to command data (command byte at `data[0]`, plugin ID already extracted by system)
+- `len`: Length of command data in bytes (does not include plugin ID)
 
 **Returns:**
 - `ESP_OK` on success
 - Error code on failure
 
+**Important**: The plugin system extracts the plugin ID from the first byte of the received command and routes to your plugin. Your command handler receives only the remaining data starting from the command byte (`data[0]` = command byte, `data[1]` onwards = command data).
+
 ### Command Handler Implementation
 
-The command handler is called when a mesh command with your plugin's command ID is received. You should:
+The command handler is called when a mesh command with your plugin's plugin ID is received. The plugin system has already:
+1. Extracted the plugin ID from `data[0]` of the original command
+2. Looked up your plugin by plugin ID
+3. Passed the remaining data (starting from command byte) to your handler
 
-1. Validate the command ID matches your plugin's assigned ID
-2. Validate the data length is appropriate
-3. Parse the command data
+You should:
+
+1. Validate the data length is appropriate
+2. Parse the command byte from `data[0]`
+3. Parse any additional command data
 4. Execute the command logic
 5. Return appropriate error codes
 
 Example:
 
 ```c
-static esp_err_t my_plugin_command_handler(uint8_t cmd, uint8_t *data, uint16_t len)
+static esp_err_t my_plugin_command_handler(uint8_t *data, uint16_t len)
 {
-    /* Validate command ID */
-    if (cmd != my_plugin_cmd_id) {
-        ESP_LOGE(TAG, "Invalid command ID: 0x%02X", cmd);
-        return ESP_ERR_INVALID_ARG;
-    }
-
     /* Validate data */
     if (data == NULL || len < 1) {
         ESP_LOGE(TAG, "Invalid command data");
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Parse command data */
+    /* Parse command byte (data[0] is the command byte, not plugin ID) */
     uint8_t command_byte = data[0];
-    if (len > 1) {
-        /* Process additional data */
-    }
 
     /* Execute command logic */
     switch (command_byte) {
-        case MY_PLUGIN_CMD_DO_SOMETHING:
-            return my_plugin_do_something();
+        case PLUGIN_CMD_DATA:
+            /* Handle DATA command with variable-length payload */
+            if (len < 3) {
+                ESP_LOGE(TAG, "DATA command too short: len=%d", len);
+                return ESP_ERR_INVALID_ARG;
+            }
+            /* Extract length prefix (network byte order) */
+            uint16_t data_len = (data[1] << 8) | data[2];
+            if (len < 3 + data_len) {
+                ESP_LOGE(TAG, "DATA command incomplete: expected %d bytes, got %d", 3 + data_len, len);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            /* Process data starting from data[3] */
+            return my_plugin_handle_data(&data[3], data_len);
+
         default:
-            ESP_LOGE(TAG, "Unknown command: 0x%02X", command_byte);
+            ESP_LOGE(TAG, "Unknown command byte: 0x%02X", command_byte);
             return ESP_ERR_NOT_SUPPORTED;
     }
 }
@@ -272,14 +325,28 @@ static esp_err_t my_plugin_command_handler(uint8_t cmd, uint8_t *data, uint16_t 
 
 ### Command Data Format
 
-Command data includes the command byte at `data[0]`. The command handler receives the full data buffer including the command byte.
+The command handler receives data in the format `[CMD:1] [LENGTH:2?] [DATA:N]`:
 
-For example, if a command is sent with:
-- Command ID: 0x10 (your plugin's assigned ID)
-- Command byte: 0x01 (specific command within your plugin)
-- Additional data: 0x02, 0x03
+- **For fixed-size commands** (START, PAUSE, RESET, BEAT): `len = 1`, `data[0]` = command byte
+- **For variable-size commands** (DATA): `len >= 3`, `data[0]` = `PLUGIN_CMD_DATA` (0x04), `data[1-2]` = length prefix (network byte order), `data[3]` onwards = actual data
 
-Then `data[0]` = 0x01, `data[1]` = 0x02, `data[2]` = 0x03, and `len` = 3.
+**Example DATA command:**
+If a DATA command is sent with:
+- Plugin ID: 0x0B (your plugin's assigned ID)
+- Command byte: `PLUGIN_CMD_DATA` (0x04)
+- Length: 0x0005 (5 bytes)
+- Data: 0x01, 0x02, 0x03, 0x04, 0x05
+
+Then your command handler receives:
+- `data[0]` = 0x04 (`PLUGIN_CMD_DATA`)
+- `data[1]` = 0x00 (length high byte)
+- `data[2]` = 0x05 (length low byte)
+- `data[3]` = 0x01
+- `data[4]` = 0x02
+- `data[5]` = 0x03
+- `data[6]` = 0x04
+- `data[7]` = 0x05
+- `len` = 8
 
 ## Timer Callbacks
 
@@ -356,9 +423,15 @@ void my_plugin_plugin_register(void)
 {
     plugin_info_t info = {
         .name = "my_plugin",
-        .command_id = 0,  /* Will be assigned automatically */
+        .command_id = 0,  /* Will be assigned automatically as plugin ID */
         .callbacks = {
             .command_handler = my_plugin_command_handler,  /* Required */
+            .on_start = NULL,  /* Optional - called when START command received */
+            .on_pause = NULL,  /* Optional - called when PAUSE command received */
+            .on_reset = NULL,  /* Optional - called when RESET command received */
+            .on_beat = NULL,  /* Optional - called when BEAT command received */
+            .on_activate = NULL,  /* Optional - called when plugin activated */
+            .on_deactivate = NULL,  /* Optional - called when plugin deactivated */
             .timer_callback = my_plugin_timer_callback,     /* Optional */
             .init = my_plugin_init,                        /* Optional */
             .deinit = my_plugin_deinit,                    /* Optional */
@@ -367,13 +440,13 @@ void my_plugin_plugin_register(void)
         .user_data = NULL,  /* Optional */
     };
 
-    uint8_t assigned_cmd_id;
-    esp_err_t err = plugin_register(&info, &assigned_cmd_id);
+    uint8_t assigned_plugin_id;
+    esp_err_t err = plugin_register(&info, &assigned_plugin_id);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register plugin: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "Plugin registered with command ID 0x%02X", assigned_cmd_id);
-        /* Store assigned_cmd_id if needed for command validation */
+        ESP_LOGI(TAG, "Plugin registered with plugin ID 0x%02X", assigned_plugin_id);
+        /* Store assigned_plugin_id if needed for command broadcasting */
     }
 }
 ```
@@ -390,7 +463,16 @@ void my_plugin_plugin_register(void)
 - `ESP_OK`: Registration successful
 - `ESP_ERR_INVALID_ARG`: Invalid parameters (NULL name, NULL command_handler, etc.)
 - `ESP_ERR_INVALID_STATE`: Plugin with same name already registered
-- `ESP_ERR_NO_MEM`: Plugin registry full or command ID range exhausted
+- `ESP_ERR_NO_MEM`: Plugin registry full or plugin ID range exhausted (0x0B-0xEE)
+
+### Plugin ID Consistency
+
+Plugin IDs are assigned deterministically based on registration order in `plugins.h`. This ensures:
+- All nodes with the same firmware version have identical plugin IDs
+- Plugin IDs are consistent across the mesh network
+- Commands can be routed correctly without activation state synchronization
+
+**Important**: If you change the registration order in `plugins.h`, plugin IDs will change, potentially breaking compatibility with existing commands. Always maintain a consistent registration order across firmware versions.
 
 ### Adding Plugin to plugins.h
 
@@ -581,10 +663,12 @@ You don't need to modify `CMakeLists.txt` or any build configuration files. The 
 
 ### Command Handling
 
-- Always validate command ID matches your plugin's assigned ID
-- Validate data length before accessing data
+- The plugin system handles plugin ID extraction and routing - your command handler receives data starting from the command byte
+- Always validate data length before accessing data
+- For DATA commands, extract length prefix from `data[1-2]` (network byte order)
 - Return appropriate error codes
 - Log errors for debugging
+- Use `PLUGIN_CMD_*` constants from `mesh_commands.h` for command bytes
 
 ### State Management
 
@@ -651,9 +735,12 @@ void my_plugin_plugin_register(void);
 
 static const char *TAG = "my_plugin";
 
-static esp_err_t my_plugin_command_handler(uint8_t cmd, uint8_t *data, uint16_t len)
+static esp_err_t my_plugin_command_handler(uint8_t *data, uint16_t len)
 {
-    ESP_LOGI(TAG, "Command received: cmd=0x%02X, len=%d", cmd, len);
+    if (data == NULL || len < 1) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ESP_LOGI(TAG, "Command received: cmd=0x%02X, len=%d", data[0], len);
     return ESP_OK;
 }
 
@@ -661,9 +748,15 @@ void my_plugin_plugin_register(void)
 {
     plugin_info_t info = {
         .name = "my_plugin",
-        .command_id = 0,
+        .command_id = 0,  /* Assigned automatically */
         .callbacks = {
             .command_handler = my_plugin_command_handler,
+            .on_start = NULL,
+            .on_pause = NULL,
+            .on_reset = NULL,
+            .on_beat = NULL,
+            .on_activate = NULL,
+            .on_deactivate = NULL,
             .timer_callback = NULL,
             .init = NULL,
             .deinit = NULL,
@@ -672,8 +765,8 @@ void my_plugin_plugin_register(void)
         .user_data = NULL,
     };
 
-    uint8_t assigned_cmd_id;
-    plugin_register(&info, &assigned_cmd_id);
+    uint8_t assigned_plugin_id;
+    plugin_register(&info, &assigned_plugin_id);
 }
 ```
 

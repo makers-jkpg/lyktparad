@@ -25,6 +25,8 @@
 #include "mesh_commands.h"
 #include "light_neopixel.h"
 #include "plugins/effects/effects_plugin.h"
+#include "plugin_system.h"
+#include "mesh_commands.h"
 #include "light_common_cathode.h"
 #include "config/mesh_config.h"
 #include "mesh_ota.h"
@@ -217,34 +219,56 @@ esp_err_t mesh_send_fade_effect()
     int route_table_size = 0;
     int i;
 
+    /* Get effects plugin ID */
+    uint8_t effects_plugin_id;
+    esp_err_t plugin_id_err = plugin_get_id_by_name("effects", &effects_plugin_id);
+    if (plugin_id_err != ESP_OK) {
+        ESP_LOGE(MESH_TAG, "Failed to get effects plugin ID: %s", esp_err_to_name(plugin_id_err));
+        return plugin_id_err;
+    }
+
     esp_err_t err;
     mesh_data_t data;
     uint8_t *tx_buf = mesh_common_get_tx_buf();
 
-    struct effect_params_fade_t *fade_params = (struct effect_params_fade_t *)tx_buf;
-    fade_params->base.command = MESH_CMD_EFFECT;
-    fade_params->base.effect_id = EFFECT_FADE;
-    fade_params->base.start_delay_ms = 0;  /* will be set per-node below */
-    fade_params->r_on = 0;
-    fade_params->g_on = 0;
-    fade_params->b_on = 0;
-    fade_params->r_off = 255;
-    fade_params->g_off = 0;
-    fade_params->b_off = 0;
-    fade_params->fade_in_ms = 100;
-    fade_params->fade_out_ms = 100;
-    fade_params->duration_ms = 100;
-    fade_params->repeat_count = 1;
+    /* Construct command with new protocol: [PLUGIN_ID:1] [CMD:1] [LENGTH:2] [effect_params:N] */
+    tx_buf[0] = effects_plugin_id;  /* Plugin ID */
+    tx_buf[1] = PLUGIN_CMD_DATA;  /* Command byte */
+
+    /* Prepare effect parameters */
+    struct effect_params_fade_t fade_params_local;
+    fade_params_local.base.effect_id = EFFECT_FADE;
+    fade_params_local.base.start_delay_ms = 0;  /* will be set per-node below */
+    fade_params_local.r_on = 0;
+    fade_params_local.g_on = 0;
+    fade_params_local.b_on = 0;
+    fade_params_local.r_off = 255;
+    fade_params_local.g_off = 0;
+    fade_params_local.b_off = 0;
+    fade_params_local.fade_in_ms = 100;
+    fade_params_local.fade_out_ms = 100;
+    fade_params_local.duration_ms = 100;
+    fade_params_local.repeat_count = 1;
+
+    /* Write length prefix (2 bytes, network byte order) */
+    uint16_t effect_data_len = sizeof(struct effect_params_fade_t);
+    tx_buf[2] = (effect_data_len >> 8) & 0xFF;  /* Length MSB */
+    tx_buf[3] = effect_data_len & 0xFF;  /* Length LSB */
+
+    /* Copy effect parameters to tx_buf[4] onwards */
+    memcpy(&tx_buf[4], &fade_params_local, effect_data_len);
 
     data.data = tx_buf;
-    data.size = sizeof(struct effect_params_fade_t);
+    data.size = 4 + effect_data_len;  /* Plugin ID(1) + CMD(1) + LENGTH(2) + effect_params */
     data.proto = MESH_PROTO_BIN;
     data.tos = MESH_TOS_P2P;
 
     esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
 
     for (i = 0; i < route_table_size; i++) {
-        fade_params->base.start_delay_ms = i * 100;  /* stagger start delay by 50ms per node */
+        /* Update start_delay_ms in the copied effect params */
+        struct effect_params_fade_t *fade_params_in_buf = (struct effect_params_fade_t *)&tx_buf[4];
+        fade_params_in_buf->base.start_delay_ms = i * 100;  /* stagger start delay by 100ms per node */
         err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
         if (err) {
             ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
@@ -264,33 +288,55 @@ esp_err_t mesh_send_strobe_effect()
     int route_table_size = 0;
     int i;
 
+    /* Get effects plugin ID */
+    uint8_t effects_plugin_id;
+    esp_err_t plugin_id_err = plugin_get_id_by_name("effects", &effects_plugin_id);
+    if (plugin_id_err != ESP_OK) {
+        ESP_LOGE(MESH_TAG, "Failed to get effects plugin ID: %s", esp_err_to_name(plugin_id_err));
+        return plugin_id_err;
+    }
+
     esp_err_t err;
     mesh_data_t data;
     uint8_t *tx_buf = mesh_common_get_tx_buf();
 
-    struct effect_params_strobe_t *strobe_params = (struct effect_params_strobe_t *)tx_buf;
-    strobe_params->base.command = MESH_CMD_EFFECT;
-    strobe_params->base.effect_id = EFFECT_STROBE;
-    strobe_params->base.start_delay_ms = 0;  /* will be set per-node below */
-    strobe_params->r_on = 255;
-    strobe_params->g_on = 255;
-    strobe_params->b_on = 255;
-    strobe_params->r_off = 0;
-    strobe_params->g_off = 0;
-    strobe_params->b_off = 0;
-    strobe_params->duration_on = 10;
-    strobe_params->duration_off = 100;
-    strobe_params->repeat_count = 1;
+    /* Construct command with new protocol: [PLUGIN_ID:1] [CMD:1] [LENGTH:2] [effect_params:N] */
+    tx_buf[0] = effects_plugin_id;  /* Plugin ID */
+    tx_buf[1] = PLUGIN_CMD_DATA;  /* Command byte */
+
+    /* Prepare effect parameters */
+    struct effect_params_strobe_t strobe_params_local;
+    strobe_params_local.base.effect_id = EFFECT_STROBE;
+    strobe_params_local.base.start_delay_ms = 0;  /* will be set per-node below */
+    strobe_params_local.r_on = 255;
+    strobe_params_local.g_on = 255;
+    strobe_params_local.b_on = 255;
+    strobe_params_local.r_off = 0;
+    strobe_params_local.g_off = 0;
+    strobe_params_local.b_off = 0;
+    strobe_params_local.duration_on = 10;
+    strobe_params_local.duration_off = 100;
+    strobe_params_local.repeat_count = 1;
+
+    /* Write length prefix (2 bytes, network byte order) */
+    uint16_t effect_data_len = sizeof(struct effect_params_strobe_t);
+    tx_buf[2] = (effect_data_len >> 8) & 0xFF;  /* Length MSB */
+    tx_buf[3] = effect_data_len & 0xFF;  /* Length LSB */
+
+    /* Copy effect parameters to tx_buf[4] onwards */
+    memcpy(&tx_buf[4], &strobe_params_local, effect_data_len);
 
     data.data = tx_buf;
-    data.size = sizeof(struct effect_params_strobe_t);
+    data.size = 4 + effect_data_len;  /* Plugin ID(1) + CMD(1) + LENGTH(2) + effect_params */
     data.proto = MESH_PROTO_BIN;
     data.tos = MESH_TOS_P2P;
 
     esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
 
     for (i = 0; i < route_table_size; i++) {
-        strobe_params->base.start_delay_ms = i * 100;  /* stagger start delay by 50ms per node */
+        /* Update start_delay_ms in the copied effect params */
+        struct effect_params_strobe_t *strobe_params_in_buf = (struct effect_params_strobe_t *)&tx_buf[4];
+        strobe_params_in_buf->base.start_delay_ms = i * 100;  /* stagger start delay by 100ms per node */
         err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
         if (err) {
             ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));

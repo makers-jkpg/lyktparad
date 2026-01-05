@@ -25,6 +25,9 @@
 
 static const char *TAG = "effects_plugin";
 
+/* Plugin ID storage (assigned during registration) */
+static uint8_t effects_plugin_id = 0;
+
 /* State variables */
 static struct effect_params_strobe_t *current_strobe_params = NULL;
 static struct effect_params_fade_t *current_fade_params = NULL;
@@ -391,7 +394,7 @@ static void play_effect(struct effect_params_t *params)
  *                Plugin Callbacks
  *******************************************************/
 
-static esp_err_t effects_command_handler(uint8_t cmd, uint8_t *data, uint16_t len)
+static esp_err_t effects_command_handler(uint8_t *data, uint16_t len)
 {
     /* Validate data */
     if (data == NULL || len < 2) {
@@ -399,26 +402,33 @@ static esp_err_t effects_command_handler(uint8_t cmd, uint8_t *data, uint16_t le
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Check if effects plugin is active */
-    if (!plugin_is_active("effects")) {
-        ESP_LOGD(TAG, "Command received but effects plugin is not active");
-        return ESP_ERR_INVALID_STATE;
-    }
+    /* Extract command byte from data[0] */
+    uint8_t cmd = data[0];
 
-    /* Validate command */
-    if (cmd != MESH_CMD_EFFECT) {
-        ESP_LOGE(TAG, "Invalid command ID: 0x%02X (expected MESH_CMD_EFFECT)", cmd);
+    /* Effects plugin uses PLUGIN_CMD_DATA for effect commands */
+    if (cmd != PLUGIN_CMD_DATA) {
+        ESP_LOGE(TAG, "Invalid command byte: 0x%02X (expected PLUGIN_CMD_DATA = 0x04)", cmd);
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Verify command byte */
-    if (data[0] != MESH_CMD_EFFECT) {
-        ESP_LOGE(TAG, "Command byte mismatch: 0x%02X (expected MESH_CMD_EFFECT)", data[0]);
+    /* Parse effect parameters from data[1] onwards (skip plugin ID and command byte) */
+    /* Note: Effect commands include length prefix, so data[1-2] is length, data[3+] is effect params */
+    if (len < 5) {
+        ESP_LOGE(TAG, "Invalid effect command length: %d (need at least 5 bytes: CMD + LENGTH + effect_id)", len);
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Parse effect parameters */
-    struct effect_params_t *effect_params = (struct effect_params_t *)data;
+    /* Extract length prefix (2 bytes, network byte order) */
+    uint16_t data_len = (data[1] << 8) | data[2];
+
+    /* Verify length matches */
+    if (len != 3 + data_len) {
+        ESP_LOGE(TAG, "Length mismatch: len=%d, expected %d (3 header bytes + %d data bytes)", len, 3 + data_len, data_len);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    /* Parse effect parameters from data[3] onwards */
+    struct effect_params_t *effect_params = (struct effect_params_t *)&data[3];
 
     /* Call play_effect */
     play_effect(effect_params);
@@ -498,6 +508,7 @@ void effects_plugin_register(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register effects plugin: %s", esp_err_to_name(err));
     } else {
-        ESP_LOGI(TAG, "Effects plugin registered with command ID 0x%02X", assigned_cmd_id);
+        effects_plugin_id = assigned_cmd_id;
+        ESP_LOGI(TAG, "Effects plugin registered with plugin ID 0x%02X", effects_plugin_id);
     }
 }
