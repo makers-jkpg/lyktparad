@@ -294,10 +294,15 @@ bool plugin_is_active(const char *name)
     return (strcmp(active_plugin_name, name) == 0);
 }
 
-esp_err_t plugin_get_all_names(const char *names[], uint8_t *count)
+esp_err_t plugin_get_all_names(const char *names[], uint8_t max_count, uint8_t *count)
 {
     if (names == NULL || count == NULL) {
         return ESP_ERR_INVALID_ARG;
+    }
+
+    if (max_count < plugin_count) {
+        ESP_LOGE(TAG, "plugin_get_all_names failed: max_count (%d) is less than plugin_count (%d)", max_count, plugin_count);
+        return ESP_ERR_INVALID_SIZE;
     }
 
     *count = plugin_count;

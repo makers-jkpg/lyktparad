@@ -3076,7 +3076,7 @@ static esp_err_t handle_api_plugins_list(uint8_t *response_out, size_t *response
 
     const char *names[16]; /* MAX_PLUGINS = 16 */
     uint8_t count = 0;
-    esp_err_t err = plugin_get_all_names(names, &count);
+    esp_err_t err = plugin_get_all_names(names, 16, &count);
     if (err != ESP_OK) {
         if (max_response_size < 1) {
             return ESP_ERR_INVALID_SIZE;

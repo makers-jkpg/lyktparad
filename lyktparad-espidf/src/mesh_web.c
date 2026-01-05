@@ -899,7 +899,7 @@ static esp_err_t api_plugins_list_handler(httpd_req_t *req)
 {
     const char *names[16]; /* MAX_PLUGINS = 16 */
     uint8_t count = 0;
-    esp_err_t err = plugin_get_all_names(names, &count);
+    esp_err_t err = plugin_get_all_names(names, 16, &count);
 
     if (err != ESP_OK) {
         httpd_resp_set_status(req, "500 Internal Server Error");

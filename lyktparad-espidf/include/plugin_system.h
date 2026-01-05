@@ -261,11 +261,13 @@ bool plugin_is_active(const char *name);
 /**
  * @brief Get all registered plugin names
  *
- * @param names Output array of plugin names (must be large enough for MAX_PLUGINS)
+ * @param names Output array of plugin names (must be large enough for max_count)
+ * @param max_count Maximum number of plugin names that can be stored in names array
  * @param count Output parameter for number of plugins (non-NULL)
  * @return ESP_OK on success
  * @return ESP_ERR_INVALID_ARG if names or count is NULL
+ * @return ESP_ERR_INVALID_SIZE if max_count is less than the number of registered plugins
  */
-esp_err_t plugin_get_all_names(const char *names[], uint8_t *count);
+esp_err_t plugin_get_all_names(const char *names[], uint8_t max_count, uint8_t *count);
 
 #endif /* __PLUGIN_SYSTEM_H__ */
