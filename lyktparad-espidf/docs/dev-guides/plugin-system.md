@@ -704,13 +704,13 @@ Plugin source files (`.c` and `.h`) are automatically:
 - Compiled with the rest of the firmware
 - Linked into the final binary
 
-### Web File Embedding
+### External Webserver File Copying
 
 Plugin web files (HTML/JS/CSS) are automatically:
-- Converted to C string literals at build time
-- Embedded in generated header files
-- Included in the firmware build
-- Copied to external webserver directory
+- Copied to external webserver directory during build
+- NOT embedded in firmware (only source files are compiled)
+- Served by the external webserver at `/plugins/<plugin-name>/`
+- NOT accessible from the embedded webserver (which only serves a simple plugin control page)
 
 ### No Manual Configuration
 

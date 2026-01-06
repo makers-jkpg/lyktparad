@@ -169,13 +169,14 @@ To enable common-cathode RGB LED support, uncomment `#define RGB_ENABLE` in `inc
 
 ### Web Interface
 
-The root node hosts a web server accessible at `http://<root-node-ip>/`:
+The root node hosts an embedded web server accessible at `http://<root-node-ip>/` that provides basic plugin control:
 
-- **Node Count**: Displays the number of nodes in the mesh network
-- **Heartbeat Counter**: Live updates showing heartbeat messages sent
-- **Color Display**: Shows current LED color (or default blue if not set)
-- **Color Picker**: Click the color box to open a color wheel
-- **Apply Color**: Sends the selected RGB color to all mesh nodes
+- **Plugin Selection**: Dropdown menu to select from available plugins
+- **Control Buttons**: Play (activate), Pause, and Rewind (reset) buttons
+- **Active Plugin Display**: Shows which plugin is currently active
+- **Status Messages**: Success/error feedback for operations
+
+**Note**: For advanced features like grid control, color picker, and sequence editing, use the external webserver (see [External Web Server User Guide](docs/user-guides/external-webb.md)).
 
 ### LED Visual Indicators
 
