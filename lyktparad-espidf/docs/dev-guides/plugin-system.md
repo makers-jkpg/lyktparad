@@ -531,79 +531,51 @@ static inline void plugins_init(void)
 
 ## Web Integration
 
-### Plugin Selection System
+### Embedded Webserver Interface
 
-The web interface includes a dropdown menu at the top right that allows users to select which plugin's HTML to display. Only one plugin's HTML is visible at a time, with all other plugins hidden by default.
+The embedded webserver on the root node serves a simple static HTML page that provides basic plugin control. This interface includes:
+- Plugin selection dropdown
+- Play, Pause, and Rewind control buttons
+- Active plugin status display
+- Status message feedback
 
-**Key Features:**
-- Dropdown automatically lists all registered plugins
-- Plugin names are formatted from directory names (e.g., "effects" → "Effects")
-- Selection persists across page reloads using localStorage
-- Default selection is the first plugin if no saved selection exists
+**Note**: The embedded webserver does not serve plugin-specific HTML files. For plugins with custom interfaces, use the external webserver.
 
-**HTML Structure:**
-Plugin HTML sections are automatically wrapped in `<section>` tags with:
-- Class: `plugin-section plugin-{plugin_name}`
-- Data attribute: `data-plugin-name="{plugin_name}"`
+### External Webserver Plugin Files
 
-Example generated HTML:
-```html
-<section class="plugin-section plugin-effects" data-plugin-name="effects">
-    <!-- Your plugin HTML content here -->
-</section>
-```
+Plugins can include HTML, JavaScript, and CSS files that are served by the external webserver (Node.js). These files are automatically copied to the external webserver during the build process.
 
-**CSS Classes:**
-- `.plugin-section`: Hidden by default (`display: none`)
-- `.plugin-section.active`: Visible when selected (`display: block`)
+**File Locations:**
+- HTML: `src/plugins/<plugin-name>/<plugin-name>.html` or `index.html`
+- JavaScript: `src/plugins/<plugin-name>/js/<plugin-name>.js`
+- CSS: `src/plugins/<plugin-name>/css/<plugin-name>.css`
 
-**JavaScript API:**
-The plugin selection system is handled automatically. Your plugin JavaScript doesn't need to manage visibility - it's handled by the system.
+**Served URLs:**
+- HTML: `/plugins/<plugin-name>/<plugin-name>.html` or `/plugins/<plugin-name>/index.html`
+- JavaScript: `/plugins/<plugin-name>/js/<plugin-name>.js`
+- CSS: `/plugins/<plugin-name>/css/<plugin-name>.css`
 
-### HTML Files
-
-Plugins can include HTML files that are automatically integrated into the web interface. HTML files should contain HTML fragments (not full pages) that will be inserted into the main page.
-
-**Important:** Your HTML will be wrapped in a `<section>` tag automatically, so you don't need to include one yourself unless you need nested sections.
-
-**Basic UI for Plugins Without HTML:**
-
-If a plugin does not provide an HTML file, the system automatically generates a basic control UI. This basic UI provides:
-- Plugin name header
-- Status indicator (Active/Inactive)
-- Four control buttons: START, STOP, PAUSE, RESET
-- Error/success feedback messages
-
-The basic UI is automatically generated during the HTML generation process and only appears for plugins that don't have custom HTML files. Plugins with HTML files will use their custom interface instead.
-
-**Basic UI Behavior:**
-- START button: Activates the plugin via `/api/plugin/activate`
-- PAUSE button: Sends PAUSE command via `/api/plugin/pause`
-- RESET button: Sends RESET command via `/api/plugin/reset`
-- STOP button: Calls plugin's `on_pause` callback (if available) for graceful stop, then deactivates the plugin via `/api/plugin/stop`
-
-The basic UI automatically polls plugin status every 2 seconds to update the status indicator.
-
-Example `my_plugin.html`:
+**Example Plugin HTML:**
 
 ```html
-<h2>My Plugin</h2>
-<button id="my-plugin-button">Do Something</button>
-<div id="my-plugin-content">
-    <!-- Your plugin content here -->
-</div>
-```
-
-The build system will automatically wrap this in:
-```html
-<section class="plugin-section plugin-my_plugin" data-plugin-name="my_plugin">
+<!DOCTYPE html>
+<html>
+<head>
+    <title>My Plugin</title>
+    <link rel="stylesheet" href="/plugins/my_plugin/css/my_plugin.css">
+</head>
+<body>
     <h2>My Plugin</h2>
     <button id="my-plugin-button">Do Something</button>
     <div id="my-plugin-content">
         <!-- Your plugin content here -->
     </div>
-</section>
+    <script src="/plugins/my_plugin/js/my_plugin.js"></script>
+</body>
+</html>
 ```
+
+**Note**: Plugin HTML files for the external webserver should be complete HTML pages, not fragments. They are served as standalone pages.
 
 ### JavaScript Files
 
@@ -676,8 +648,10 @@ Example `css/my_plugin.css`:
 
 The build system automatically:
 - Discovers plugin HTML/JS/CSS files
-- Embeds them in firmware for embedded webserver
-- Copies them to external webserver directory
+- Copies them to external webserver directory during build
+- Does NOT embed plugin HTML/JS/CSS files in firmware (only source files are compiled)
+
+**Note**: The embedded webserver uses a simple static HTML page for plugin control. Plugin-specific HTML files are only served by the external webserver.
 
 No manual build configuration is required.
 

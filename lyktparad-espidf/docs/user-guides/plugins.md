@@ -148,84 +148,47 @@ On child nodes:
 
 ### Accessing the Web Interface
 
-Plugins with web interfaces are accessible through:
-- **Embedded Webserver**: Connect to the root node's IP address (if root node)
-- **External Webserver**: Access via the Node.js server (if running)
+The embedded webserver on the root node provides a simple plugin control interface accessible at the root node's IP address. The external webserver (Node.js) may provide additional features for plugins with custom HTML interfaces.
 
-### Plugin Selection
+### Embedded Webserver Interface
 
-The web interface includes a dropdown menu at the top right of the page that allows you to select which plugin's interface to view. Only one plugin's interface is visible at a time.
+The embedded webserver serves a simple static HTML page that provides basic plugin control functionality:
 
-**Using the Dropdown:**
-1. Click the dropdown menu at the top right of the page
-2. Select the plugin you want to view from the list
-3. The selected plugin's interface will be displayed
-4. Your selection is saved and will persist across page reloads
-
-**Page Layout:**
-- **Header (Top 150px)**: Fixed header showing "MAKERS JÖNKÖPING LJUSPARAD 2026" title and the plugin dropdown
-- **Content Area**: Takes up the remaining viewport height, showing the selected plugin's interface
-
-**Plugin Visibility:**
-- Only the selected plugin's HTML is visible
-- Other plugins are hidden automatically
-- The dropdown shows all available plugins with formatted names (e.g., "Effects", "Sequence")
-
-### Basic Plugin UI
-
-Plugins that don't provide custom HTML files automatically receive a basic control interface. This basic UI allows you to control plugins that don't need complex interfaces but still support basic operations.
-
-**Basic UI Features:**
-- **Plugin Name Display**: Shows the formatted plugin name at the top
-- **Status Indicator**: Displays whether the plugin is currently Active or Inactive
+**Features:**
+- **Plugin Selection Dropdown**: Lists all available plugins
+- **Active Plugin Display**: Shows which plugin is currently active
 - **Control Buttons**:
-  - **START**: Activates the plugin and begins its operation
-  - **PAUSE**: Temporarily pauses the plugin's operation (plugin remains active)
-  - **RESET**: Resets the plugin's internal state
-  - **STOP**: Gracefully stops the plugin (calls pause callback if available) and deactivates it
-- **Feedback Messages**: Shows success/error messages for each operation
+  - **Play**: Activates the selected plugin (equivalent to START)
+  - **Pause**: Temporarily pauses the plugin's operation
+  - **Rewind**: Resets the plugin's internal state
+- **Status Messages**: Shows success/error feedback for operations
+- **Auto-refresh**: Active plugin status is polled every 2 seconds
 
-**Using Basic UI:**
-1. Select a plugin from the dropdown that doesn't have a custom interface
-2. The basic UI will appear with control buttons
-3. Click START to activate the plugin
-4. Use PAUSE to temporarily pause, RESET to reset state, or STOP to deactivate
-5. The status indicator updates automatically to show the current state
+**Using the Interface:**
+1. Connect to the root node's IP address in your web browser
+2. Select a plugin from the dropdown menu
+3. Click **Play** to activate the plugin
+4. Use **Pause** to pause, or **Rewind** to reset the plugin state
+5. The active plugin indicator updates automatically
 
-**Note**: Plugins with custom HTML files will show their custom interface instead of the basic UI. The basic UI is only provided for plugins that don't need complex interfaces.
+**Note**: The embedded webserver provides a simple control interface. For plugins with custom HTML interfaces, use the external webserver which serves plugin-specific HTML files.
 
-### Sequence Plugin Web Interface
+### External Webserver Plugin Interfaces
 
-The Sequence plugin provides a full web interface for creating and controlling sequences.
+Plugins with custom HTML files are served by the external webserver (Node.js). These interfaces provide full-featured control and configuration for plugins that require complex UIs.
 
-#### Grid Editor
+**Accessing Plugin Interfaces:**
+- Plugin HTML files are served at `/plugins/<plugin-name>/<plugin-name>.html` or `/plugins/<plugin-name>/index.html`
+- JavaScript and CSS files are served from `/plugins/<plugin-name>/js/` and `/plugins/<plugin-name>/css/` respectively
 
-- **16x16 Color Grid**: Click squares to set colors
-- **Color Picker**: Select colors for grid squares
-- **Row Management**: Add or remove rows (1-16 rows)
-- **Visual Preview**: See sequence as you design it
+**Sequence Plugin Interface:**
+The Sequence plugin provides a full web interface accessible via the external webserver:
+- **Grid Editor**: 16x16 color grid for sequence design
+- **Tempo Controls**: Adjust playback speed
+- **Playback Controls**: Start, stop, and reset
+- **Export/Import**: CSV file support
 
-#### Tempo Controls
-
-- **Tempo Slider**: Adjust playback speed (1-255)
-- **Tempo Display**: Shows current tempo value
-- **Real-time Updates**: Tempo changes apply immediately
-
-#### Playback Controls
-
-- **Start Button**: Begin sequence playback
-- **Stop Button**: Stop sequence playback
-- **Reset Button**: Reset to beginning
-- **Status Display**: Shows current playback state
-
-#### Export/Import
-
-- **Export**: Download sequence as CSV file
-- **Import**: Upload sequence from CSV file
-- **Format**: CSV format with color data
-
-### Effects Plugin
-
+**Effects Plugin:**
 The Effects plugin does not currently provide a web interface. Effects are controlled via mesh commands or API calls.
 
 ## API Integration
@@ -325,15 +288,16 @@ The UDP bridge can forward API commands to the mesh network, allowing remote con
 ### Web Interface Not Loading
 
 **Symptoms:**
-- Plugin web interface doesn't appear
-- JavaScript errors in browser console
-- CSS styles not applied
+- Embedded webserver page doesn't load
+- Plugin list is empty
+- Control buttons don't work
 
 **Solutions:**
-- Check that plugin HTML/JS/CSS files exist
-- Verify webserver is running (embedded or external)
+- Verify root node has obtained an IP address
+- Check that webserver is running (check serial logs)
+- Verify you're accessing the root node (not a child node)
 - Check browser console for errors
-- Clear browser cache and reload
+- For external webserver plugin interfaces: Verify external server is running and plugin files are copied
 
 ### Sequence Not Synchronized
 

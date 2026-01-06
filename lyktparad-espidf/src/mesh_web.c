@@ -16,10 +16,274 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include "generated_html.h"
 
 static const char *WEB_TAG = "mesh_web";
 static httpd_handle_t server_handle = NULL;
+
+/* Simple HTML page with plugin selection and control buttons */
+static const char simple_html_page[] =
+"<!DOCTYPE html>\n"
+"<html lang=\"en\">\n"
+"<head>\n"
+"    <meta charset=\"UTF-8\">\n"
+"    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+"    <title>Plugin Control</title>\n"
+"    <style>\n"
+"        * { margin: 0; padding: 0; box-sizing: border-box; }\n"
+"        body {\n"
+"            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;\n"
+"            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n"
+"            min-height: 100vh;\n"
+"            display: flex;\n"
+"            justify-content: center;\n"
+"            align-items: center;\n"
+"            padding: 20px;\n"
+"        }\n"
+"        .container {\n"
+"            background: white;\n"
+"            border-radius: 16px;\n"
+"            box-shadow: 0 20px 60px rgba(0,0,0,0.3);\n"
+"            padding: 40px;\n"
+"            max-width: 500px;\n"
+"            width: 100%;\n"
+"        }\n"
+"        h1 {\n"
+"            color: #333;\n"
+"            margin-bottom: 30px;\n"
+"            text-align: center;\n"
+"            font-size: 28px;\n"
+"        }\n"
+"        .plugin-select {\n"
+"            margin-bottom: 30px;\n"
+"        }\n"
+"        label {\n"
+"            display: block;\n"
+"            color: #555;\n"
+"            margin-bottom: 8px;\n"
+"            font-weight: 500;\n"
+"        }\n"
+"        select {\n"
+"            width: 100%;\n"
+"            padding: 12px;\n"
+"            border: 2px solid #e0e0e0;\n"
+"            border-radius: 8px;\n"
+"            font-size: 16px;\n"
+"            background: white;\n"
+"            cursor: pointer;\n"
+"            transition: border-color 0.3s;\n"
+"        }\n"
+"        select:hover { border-color: #667eea; }\n"
+"        select:focus { outline: none; border-color: #667eea; }\n"
+"        .button-group {\n"
+"            display: flex;\n"
+"            gap: 12px;\n"
+"            margin-bottom: 20px;\n"
+"        }\n"
+"        button {\n"
+"            flex: 1;\n"
+"            padding: 14px 24px;\n"
+"            border: none;\n"
+"            border-radius: 8px;\n"
+"            font-size: 16px;\n"
+"            font-weight: 600;\n"
+"            cursor: pointer;\n"
+"            transition: all 0.3s;\n"
+"            text-transform: uppercase;\n"
+"            letter-spacing: 0.5px;\n"
+"        }\n"
+"        button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }\n"
+"        button:active { transform: translateY(0); }\n"
+"        button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }\n"
+"        .btn-play {\n"
+"            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n"
+"            color: white;\n"
+"        }\n"
+"        .btn-pause {\n"
+"            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);\n"
+"            color: white;\n"
+"        }\n"
+"        .btn-rewind {\n"
+"            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);\n"
+"            color: white;\n"
+"        }\n"
+"        .status {\n"
+"            padding: 12px;\n"
+"            border-radius: 8px;\n"
+"            margin-top: 20px;\n"
+"            text-align: center;\n"
+"            font-size: 14px;\n"
+"            min-height: 40px;\n"
+"            display: flex;\n"
+"            align-items: center;\n"
+"            justify-content: center;\n"
+"        }\n"
+"        .status.success { background: #d4edda; color: #155724; }\n"
+"        .status.error { background: #f8d7da; color: #721c24; }\n"
+"        .status.info { background: #d1ecf1; color: #0c5460; }\n"
+"        .active-plugin {\n"
+"            margin-top: 20px;\n"
+"            padding: 12px;\n"
+"            background: #f8f9fa;\n"
+"            border-radius: 8px;\n"
+"            text-align: center;\n"
+"            color: #666;\n"
+"            font-size: 14px;\n"
+"        }\n"
+"        .active-plugin strong { color: #667eea; }\n"
+"    </style>\n"
+"</head>\n"
+"<body>\n"
+"    <div class=\"container\">\n"
+"        <h1>Plugin Control</h1>\n"
+"        <div class=\"plugin-select\">\n"
+"            <label for=\"pluginSelect\">Select Plugin:</label>\n"
+"            <select id=\"pluginSelect\"></select>\n"
+"        </div>\n"
+"        <div class=\"button-group\">\n"
+"            <button class=\"btn-play\" id=\"playBtn\" onclick=\"handlePlay()\">Play</button>\n"
+"            <button class=\"btn-pause\" id=\"pauseBtn\" onclick=\"handlePause()\">Pause</button>\n"
+"            <button class=\"btn-rewind\" id=\"rewindBtn\" onclick=\"handleRewind()\">Rewind</button>\n"
+"        </div>\n"
+"        <div class=\"active-plugin\" id=\"activePlugin\">No active plugin</div>\n"
+"        <div class=\"status\" id=\"status\" style=\"display: none;\"></div>\n"
+"    </div>\n"
+"    <script>\n"
+"        let plugins = [];\n"
+"        let activePlugin = null;\n"
+"\n"
+"        async function loadPlugins() {\n"
+"            try {\n"
+"                const response = await fetch('/api/plugins');\n"
+"                const data = await response.json();\n"
+"                plugins = data.plugins || [];\n"
+"                const select = document.getElementById('pluginSelect');\n"
+"                select.innerHTML = '<option value=\"\">-- Select Plugin --</option>';\n"
+"                plugins.forEach(plugin => {\n"
+"                    const option = document.createElement('option');\n"
+"                    option.value = plugin;\n"
+"                    option.textContent = plugin;\n"
+"                    select.appendChild(option);\n"
+"                });\n"
+"            } catch (error) {\n"
+"                showStatus('Error loading plugins: ' + error.message, 'error');\n"
+"            }\n"
+"        }\n"
+"\n"
+"        async function loadActivePlugin() {\n"
+"            try {\n"
+"                const response = await fetch('/api/plugin/active');\n"
+"                const data = await response.json();\n"
+"                activePlugin = data.active;\n"
+"                const activeDiv = document.getElementById('activePlugin');\n"
+"                if (activePlugin) {\n"
+"                    activeDiv.innerHTML = '';\n"
+"                    const strong = document.createElement('strong');\n"
+"                    strong.textContent = 'Active: ';\n"
+"                    activeDiv.appendChild(strong);\n"
+"                    activeDiv.appendChild(document.createTextNode(activePlugin));\n"
+"                    const select = document.getElementById('pluginSelect');\n"
+"                    select.value = activePlugin;\n"
+"                } else {\n"
+"                    activeDiv.textContent = 'No active plugin';\n"
+"                }\n"
+"            } catch (error) {\n"
+"                console.error('Error loading active plugin:', error);\n"
+"            }\n"
+"        }\n"
+"\n"
+"        async function handlePlay() {\n"
+"            const select = document.getElementById('pluginSelect');\n"
+"            const pluginName = select.value;\n"
+"            if (!pluginName) {\n"
+"                showStatus('Please select a plugin first', 'error');\n"
+"                return;\n"
+"            }\n"
+"            try {\n"
+"                const response = await fetch('/api/plugin/activate', {\n"
+"                    method: 'POST',\n"
+"                    headers: { 'Content-Type': 'application/json' },\n"
+"                    body: JSON.stringify({ name: pluginName })\n"
+"                });\n"
+"                const data = await response.json();\n"
+"                if (data.success) {\n"
+"                    showStatus('Plugin activated: ' + pluginName, 'success');\n"
+"                    await loadActivePlugin();\n"
+"                } else {\n"
+"                    showStatus('Error: ' + (data.error || 'Activation failed'), 'error');\n"
+"                }\n"
+"            } catch (error) {\n"
+"                showStatus('Error: ' + error.message, 'error');\n"
+"            }\n"
+"        }\n"
+"\n"
+"        async function handlePause() {\n"
+"            const select = document.getElementById('pluginSelect');\n"
+"            const pluginName = select.value;\n"
+"            if (!pluginName) {\n"
+"                showStatus('Please select a plugin first', 'error');\n"
+"                return;\n"
+"            }\n"
+"            try {\n"
+"                const response = await fetch('/api/plugin/pause', {\n"
+"                    method: 'POST',\n"
+"                    headers: { 'Content-Type': 'application/json' },\n"
+"                    body: JSON.stringify({ name: pluginName })\n"
+"                });\n"
+"                const data = await response.json();\n"
+"                if (data.success) {\n"
+"                    showStatus('Plugin paused: ' + pluginName, 'info');\n"
+"                    await loadActivePlugin();\n"
+"                } else {\n"
+"                    showStatus('Error: ' + (data.error || 'Pause failed'), 'error');\n"
+"                }\n"
+"            } catch (error) {\n"
+"                showStatus('Error: ' + error.message, 'error');\n"
+"            }\n"
+"        }\n"
+"\n"
+"        async function handleRewind() {\n"
+"            const select = document.getElementById('pluginSelect');\n"
+"            const pluginName = select.value;\n"
+"            if (!pluginName) {\n"
+"                showStatus('Please select a plugin first', 'error');\n"
+"                return;\n"
+"            }\n"
+"            try {\n"
+"                const response = await fetch('/api/plugin/reset', {\n"
+"                    method: 'POST',\n"
+"                    headers: { 'Content-Type': 'application/json' },\n"
+"                    body: JSON.stringify({ name: pluginName })\n"
+"                });\n"
+"                const data = await response.json();\n"
+"                if (data.success) {\n"
+"                    showStatus('Plugin reset: ' + pluginName, 'info');\n"
+"                    await loadActivePlugin();\n"
+"                } else {\n"
+"                    showStatus('Error: ' + (data.error || 'Reset failed'), 'error');\n"
+"                }\n"
+"            } catch (error) {\n"
+"                showStatus('Error: ' + error.message, 'error');\n"
+"            }\n"
+"        }\n"
+"\n"
+"        function showStatus(message, type) {\n"
+"            const statusDiv = document.getElementById('status');\n"
+"            statusDiv.textContent = message;\n"
+"            statusDiv.className = 'status ' + type;\n"
+"            statusDiv.style.display = 'flex';\n"
+"            setTimeout(() => {\n"
+"                statusDiv.style.display = 'none';\n"
+"            }, 3000);\n"
+"        }\n"
+"\n"
+"        // Load plugins and active plugin on page load\n"
+"        loadPlugins();\n"
+"        loadActivePlugin();\n"
+"        // Poll for active plugin changes every 2 seconds\n"
+"        setInterval(loadActivePlugin, 2000);\n"
+"    </script>\n"
+"</body>\n"
+"</html>\n";
 
 /* Forward declarations */
 static void mesh_web_diagnostic_task(void *pvParameters);
@@ -49,9 +313,6 @@ static esp_err_t api_plugin_pause_handler(httpd_req_t *req);
 static esp_err_t api_plugin_reset_handler(httpd_req_t *req);
 static esp_err_t api_plugins_list_handler(httpd_req_t *req);
 static esp_err_t index_handler(httpd_req_t *req);
-
-/* HTML page is now generated from template and plugins - see generated_html.h */
-/* The html_page variable is defined in generated_html.h */
 
 /* API: GET /api/nodes - Returns number of nodes in mesh */
 static esp_err_t api_nodes_handler(httpd_req_t *req)
@@ -1180,52 +1441,12 @@ static esp_err_t api_plugins_list_handler(httpd_req_t *req)
     return httpd_resp_send(req, response, -1);
 }
 
-/* GET / - Serves main HTML page */
+/* GET / - Serves simple HTML page with plugin selection and control */
 static esp_err_t index_handler(httpd_req_t *req)
 {
     ESP_LOGI(WEB_TAG, "index_handler called - URI: %s", req->uri);
-    // #region agent log
-    size_t html_len = strlen(html_page);
-    FILE *log_file = fopen("c:\\Users\\micro\\code\\Makers\\lyktparad\\.cursor\\debug.log", "a");
-    if (log_file) {
-        fprintf(log_file, "{\"id\":\"log_%lu\",\"timestamp\":%lu,\"location\":\"mesh_web.c:1184\",\"message\":\"index_handler called\",\"data\":{\"html_page_ptr\":\"%p\",\"html_page_len\":%zu,\"uri\":\"%s\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"C\"}\n",
-                (unsigned long)esp_timer_get_time() / 1000, (unsigned long)esp_timer_get_time() / 1000,
-                (void*)html_page, html_len, req->uri);
-        fclose(log_file);
-    }
-    // #endregion
-
-    // #region agent log
-    if (html_len == 0) {
-        log_file = fopen("c:\\Users\\micro\\code\\Makers\\lyktparad\\.cursor\\debug.log", "a");
-        if (log_file) {
-            fprintf(log_file, "{\"id\":\"log_%lu\",\"timestamp\":%lu,\"location\":\"mesh_web.c:1196\",\"message\":\"html_page is empty\",\"data\":{},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\"}\n",
-                    (unsigned long)esp_timer_get_time() / 1000, (unsigned long)esp_timer_get_time() / 1000);
-            fclose(log_file);
-        }
-        ESP_LOGE(WEB_TAG, "html_page is empty!");
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_set_type(req, "text/html");
-        return httpd_resp_send(req, "<html><body><h1>Error: HTML page is empty</h1></body></html>", -1);
-    }
-    // #endregion
-
     httpd_resp_set_type(req, "text/html");
-
-    // #region agent log
-    esp_err_t send_result = httpd_resp_send(req, html_page, HTTPD_RESP_USE_STRLEN);
-    log_file = fopen("c:\\Users\\micro\\code\\Makers\\lyktparad\\.cursor\\debug.log", "a");
-    if (log_file) {
-        fprintf(log_file, "{\"id\":\"log_%lu\",\"timestamp\":%lu,\"location\":\"mesh_web.c:1225\",\"message\":\"httpd_resp_send result\",\"data\":{\"result\":\"0x%x\",\"html_len\":%zu},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"D\"}\n",
-                (unsigned long)esp_timer_get_time() / 1000, (unsigned long)esp_timer_get_time() / 1000,
-                send_result, html_len);
-        fclose(log_file);
-    }
-    if (send_result != ESP_OK) {
-        ESP_LOGE(WEB_TAG, "httpd_resp_send failed: 0x%x", send_result);
-    }
-    return send_result;
-    // #endregion
+    return httpd_resp_send(req, simple_html_page, HTTPD_RESP_USE_STRLEN);
 }
 
 /* Start HTTP web server */
@@ -1641,36 +1862,13 @@ esp_err_t mesh_web_server_start(void)
             .handler   = index_handler,
             .user_ctx  = NULL
         };
-        // #region agent log
-        FILE *log_file = fopen("c:\\Users\\micro\\code\\Makers\\lyktparad\\.cursor\\debug.log", "a");
-        if (log_file) {
-            fprintf(log_file, "{\"id\":\"log_%lu\",\"timestamp\":%lu,\"location\":\"mesh_web.c:1603\",\"message\":\"Registering index URI\",\"data\":{\"html_page_ptr\":\"%p\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"E\"}\n",
-                    (unsigned long)esp_timer_get_time() / 1000, (unsigned long)esp_timer_get_time() / 1000,
-                    (void*)html_page);
-            fclose(log_file);
-        }
-        // #endregion
         reg_err = httpd_register_uri_handler(server_handle, &index_uri);
         if (reg_err != ESP_OK) {
-            // #region agent log
-            if (log_file) {
-                fprintf(log_file, "{\"id\":\"log_%lu\",\"timestamp\":%lu,\"location\":\"mesh_web.c:1605\",\"message\":\"Failed to register index URI\",\"data\":{\"error\":\"0x%x\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"C\"}\n",
-                        (unsigned long)esp_timer_get_time() / 1000, (unsigned long)esp_timer_get_time() / 1000, reg_err);
-                fclose(log_file);
-            }
-            // #endregion
             ESP_LOGE(WEB_TAG, "Failed to register index URI: 0x%x", reg_err);
             httpd_stop(server_handle);
             server_handle = NULL;
             return ESP_FAIL;
         }
-        // #region agent log
-        if (log_file) {
-            fprintf(log_file, "{\"id\":\"log_%lu\",\"timestamp\":%lu,\"location\":\"mesh_web.c:1612\",\"message\":\"Index URI registered successfully\",\"data\":{},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"C\"}\n",
-                    (unsigned long)esp_timer_get_time() / 1000, (unsigned long)esp_timer_get_time() / 1000);
-            fclose(log_file);
-        }
-        // #endregion
 
         ESP_LOGI(WEB_TAG, "Web server started successfully");
 

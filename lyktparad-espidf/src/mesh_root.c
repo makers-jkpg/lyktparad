@@ -604,7 +604,7 @@ static void mesh_root_event_callback(void *arg, esp_event_base_t event_base,
  * UDP broadcast listener runs in background as a runtime fallback.
  * Discovery does not affect web server operation (embedded server always works).
  */
-static void discovery_task(void *pvParameters)
+__attribute__((unused)) static void discovery_task(void *pvParameters)
 {
     char server_ip[16] = {0};
     uint16_t server_port = 0;
