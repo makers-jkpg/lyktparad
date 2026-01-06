@@ -4,10 +4,15 @@
 #include "mesh_commands.h"
 #include "mesh_ota.h"
 #include "mesh_version.h"
+#include "mesh_common.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_mesh.h"
 #include "esp_timer.h"
+#include "esp_netif.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -17,6 +22,7 @@ static const char *WEB_TAG = "mesh_web";
 static httpd_handle_t server_handle = NULL;
 
 /* Forward declarations */
+static void mesh_web_diagnostic_task(void *pvParameters);
 static esp_err_t api_nodes_handler(httpd_req_t *req);
 static esp_err_t api_color_get_handler(httpd_req_t *req);
 static esp_err_t api_color_post_handler(httpd_req_t *req);
@@ -1177,8 +1183,49 @@ static esp_err_t api_plugins_list_handler(httpd_req_t *req)
 /* GET / - Serves main HTML page */
 static esp_err_t index_handler(httpd_req_t *req)
 {
+    ESP_LOGI(WEB_TAG, "index_handler called - URI: %s", req->uri);
+    // #region agent log
+    size_t html_len = strlen(html_page);
+    FILE *log_file = fopen("c:\\Users\\micro\\code\\Makers\\lyktparad\\.cursor\\debug.log", "a");
+    if (log_file) {
+        fprintf(log_file, "{\"id\":\"log_%lu\",\"timestamp\":%lu,\"location\":\"mesh_web.c:1184\",\"message\":\"index_handler called\",\"data\":{\"html_page_ptr\":\"%p\",\"html_page_len\":%zu,\"uri\":\"%s\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"C\"}\n",
+                (unsigned long)esp_timer_get_time() / 1000, (unsigned long)esp_timer_get_time() / 1000,
+                (void*)html_page, html_len, req->uri);
+        fclose(log_file);
+    }
+    // #endregion
+
+    // #region agent log
+    if (html_len == 0) {
+        log_file = fopen("c:\\Users\\micro\\code\\Makers\\lyktparad\\.cursor\\debug.log", "a");
+        if (log_file) {
+            fprintf(log_file, "{\"id\":\"log_%lu\",\"timestamp\":%lu,\"location\":\"mesh_web.c:1196\",\"message\":\"html_page is empty\",\"data\":{},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"B\"}\n",
+                    (unsigned long)esp_timer_get_time() / 1000, (unsigned long)esp_timer_get_time() / 1000);
+            fclose(log_file);
+        }
+        ESP_LOGE(WEB_TAG, "html_page is empty!");
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "text/html");
+        return httpd_resp_send(req, "<html><body><h1>Error: HTML page is empty</h1></body></html>", -1);
+    }
+    // #endregion
+
     httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, html_page, HTTPD_RESP_USE_STRLEN);
+
+    // #region agent log
+    esp_err_t send_result = httpd_resp_send(req, html_page, HTTPD_RESP_USE_STRLEN);
+    log_file = fopen("c:\\Users\\micro\\code\\Makers\\lyktparad\\.cursor\\debug.log", "a");
+    if (log_file) {
+        fprintf(log_file, "{\"id\":\"log_%lu\",\"timestamp\":%lu,\"location\":\"mesh_web.c:1225\",\"message\":\"httpd_resp_send result\",\"data\":{\"result\":\"0x%x\",\"html_len\":%zu},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"D\"}\n",
+                (unsigned long)esp_timer_get_time() / 1000, (unsigned long)esp_timer_get_time() / 1000,
+                send_result, html_len);
+        fclose(log_file);
+    }
+    if (send_result != ESP_OK) {
+        ESP_LOGE(WEB_TAG, "httpd_resp_send failed: 0x%x", send_result);
+    }
+    return send_result;
+    // #endregion
 }
 
 /* Start HTTP web server */
@@ -1196,14 +1243,46 @@ esp_err_t mesh_web_server_start(void)
         return ESP_OK;
     }
 
+    // #region agent log
+    esp_netif_t *netif_sta = mesh_common_get_netif_sta();
+    esp_netif_ip_info_t ip_info;
+    esp_err_t ip_info_err = ESP_FAIL;
+    bool netif_up = false;
+    if (netif_sta != NULL) {
+        ip_info_err = esp_netif_get_ip_info(netif_sta, &ip_info);
+        netif_up = esp_netif_is_netif_up(netif_sta);
+    }
+    ESP_LOGI(WEB_TAG, "[DEBUG HYP-1] Before httpd_start - netif_sta:%p, netif_up:%d, ip_info_err:0x%x, ip:" IPSTR,
+             netif_sta, netif_up ? 1 : 0, ip_info_err, IP2STR(&ip_info.ip));
+    // #endregion
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 25;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, sequence_start, sequence_stop, sequence_reset, sequence_status, ota_download, ota_status, ota_cancel, ota_version, ota_distribute, ota_distribution_status, ota_distribution_progress, ota_distribution_cancel, ota_reboot, plugin_activate, plugin_deactivate, plugin_active, plugins_list, index = 23 handlers */
+    config.max_uri_handlers = 30;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, sequence_start, sequence_stop, sequence_reset, sequence_status, ota_download, ota_status, ota_cancel, ota_version, ota_distribute, ota_distribution_status, ota_distribution_progress, ota_distribution_cancel, ota_reboot, plugin_activate, plugin_deactivate, plugin_active, plugin_stop, plugin_pause, plugin_reset, plugins_list, index = 26 handlers (30 for future expansion) */
     config.stack_size = 8192;
     config.server_port = 80;
+    config.max_open_sockets = 4;  /* Reduced to 4 (3 internal + 1 connection) to leave sockets for UDP listeners and mDNS */
+    config.lru_purge_enable = true;  /* Enable automatic cleanup of closed connections to prevent resource leaks */
+
+    // #region agent log
+    ESP_LOGI(WEB_TAG, "[DEBUG HYP-2] HTTP config - max_uri_handlers:%d, stack_size:%d, port:%d, max_open_sockets:%d, backlog_conn:%d",
+             config.max_uri_handlers, config.stack_size, config.server_port, config.max_open_sockets, config.backlog_conn);
+    // #endregion
 
     ESP_LOGI(WEB_TAG, "Starting web server on port %d", config.server_port);
 
-    if (httpd_start(&server_handle, &config) == ESP_OK) {
+    esp_err_t httpd_start_err = httpd_start(&server_handle, &config);
+    // #region agent log
+    ESP_LOGI(WEB_TAG, "[DEBUG HYP-3] httpd_start result:0x%x, server_handle:%p", httpd_start_err, server_handle);
+    if (netif_sta != NULL) {
+        ip_info_err = esp_netif_get_ip_info(netif_sta, &ip_info);
+        netif_up = esp_netif_is_netif_up(netif_sta);
+        size_t free_heap = esp_get_free_heap_size();
+        ESP_LOGI(WEB_TAG, "[DEBUG HYP-3] After httpd_start - netif_up:%d, ip_info_err:0x%x, ip:" IPSTR ", free_heap:%zu",
+                 netif_up ? 1 : 0, ip_info_err, IP2STR(&ip_info.ip), free_heap);
+    }
+    // #endregion
+
+    if (httpd_start_err == ESP_OK) {
         esp_err_t reg_err;
         /* Register URI handlers */
         httpd_uri_t nodes_uri = {
@@ -1562,20 +1641,94 @@ esp_err_t mesh_web_server_start(void)
             .handler   = index_handler,
             .user_ctx  = NULL
         };
+        // #region agent log
+        FILE *log_file = fopen("c:\\Users\\micro\\code\\Makers\\lyktparad\\.cursor\\debug.log", "a");
+        if (log_file) {
+            fprintf(log_file, "{\"id\":\"log_%lu\",\"timestamp\":%lu,\"location\":\"mesh_web.c:1603\",\"message\":\"Registering index URI\",\"data\":{\"html_page_ptr\":\"%p\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"E\"}\n",
+                    (unsigned long)esp_timer_get_time() / 1000, (unsigned long)esp_timer_get_time() / 1000,
+                    (void*)html_page);
+            fclose(log_file);
+        }
+        // #endregion
         reg_err = httpd_register_uri_handler(server_handle, &index_uri);
         if (reg_err != ESP_OK) {
+            // #region agent log
+            if (log_file) {
+                fprintf(log_file, "{\"id\":\"log_%lu\",\"timestamp\":%lu,\"location\":\"mesh_web.c:1605\",\"message\":\"Failed to register index URI\",\"data\":{\"error\":\"0x%x\"},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"C\"}\n",
+                        (unsigned long)esp_timer_get_time() / 1000, (unsigned long)esp_timer_get_time() / 1000, reg_err);
+                fclose(log_file);
+            }
+            // #endregion
             ESP_LOGE(WEB_TAG, "Failed to register index URI: 0x%x", reg_err);
             httpd_stop(server_handle);
             server_handle = NULL;
             return ESP_FAIL;
         }
+        // #region agent log
+        if (log_file) {
+            fprintf(log_file, "{\"id\":\"log_%lu\",\"timestamp\":%lu,\"location\":\"mesh_web.c:1612\",\"message\":\"Index URI registered successfully\",\"data\":{},\"sessionId\":\"debug-session\",\"runId\":\"run1\",\"hypothesisId\":\"C\"}\n",
+                    (unsigned long)esp_timer_get_time() / 1000, (unsigned long)esp_timer_get_time() / 1000);
+            fclose(log_file);
+        }
+        // #endregion
 
         ESP_LOGI(WEB_TAG, "Web server started successfully");
+
+        // #region agent log
+        /* Start periodic diagnostic task to monitor network state */
+        static bool diagnostic_task_started = false;
+        if (!diagnostic_task_started) {
+            diagnostic_task_started = true;
+            xTaskCreate(mesh_web_diagnostic_task, "web_diag", 2048, NULL, 1, NULL);
+        }
+        // #endregion
+
         return ESP_OK;
     }
 
     ESP_LOGE(WEB_TAG, "Error starting web server");
     return ESP_FAIL;
+}
+
+/* Forward declaration */
+static void mesh_web_diagnostic_task(void *pvParameters);
+
+/**
+ * @brief Diagnostic task to monitor network interface and HTTP server state
+ *
+ * This task periodically checks network interface state and logs diagnostic
+ * information to help identify connection issues.
+ */
+static void mesh_web_diagnostic_task(void *pvParameters)
+{
+    ESP_LOGI(WEB_TAG, "[DIAG] Diagnostic task started");
+
+    while (server_handle != NULL && esp_mesh_is_root()) {
+        // #region agent log
+        esp_netif_t *netif_sta = mesh_common_get_netif_sta();
+        if (netif_sta != NULL) {
+            esp_netif_ip_info_t ip_info;
+            esp_err_t ip_err = esp_netif_get_ip_info(netif_sta, &ip_info);
+            bool is_up = esp_netif_is_netif_up(netif_sta);
+
+            ESP_LOGI(WEB_TAG, "[DIAG] Network state - netif_sta:%p, is_up:%d, ip_err:0x%x, ip:" IPSTR,
+                     netif_sta, is_up ? 1 : 0, ip_err, IP2STR(&ip_info.ip));
+        } else {
+            ESP_LOGW(WEB_TAG, "[DIAG] Network state - netif_sta is NULL");
+        }
+
+        if (server_handle != NULL) {
+            size_t free_heap = esp_get_free_heap_size();
+            ESP_LOGI(WEB_TAG, "[DIAG] Server state - handle:%p, free_heap:%zu bytes",
+                     server_handle, free_heap);
+        }
+        // #endregion
+
+        vTaskDelay(pdMS_TO_TICKS(5000)); /* Check every 5 seconds */
+    }
+
+    ESP_LOGI(WEB_TAG, "[DIAG] Diagnostic task exiting");
+    vTaskDelete(NULL);
 }
 
 /* Stop HTTP web server */

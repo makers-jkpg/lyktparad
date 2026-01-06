@@ -132,4 +132,27 @@
  */
 // #define ROOT_STATUS_LED_GPIO      3  // Optional: GPIO pin for root status LED (disabled by default)
 
+/*******************************************************
+ *                External Web Server Configuration
+ *******************************************************/
+
+/* ONLY_ONBOARD_HTTP - Completely disable external webserver functionality
+ *
+ * When defined, all external webserver functionality is disabled at compile time:
+ * - No mDNS initialization or discovery
+ * - No UDP broadcast listener
+ * - No UDP API listener
+ * - No discovery task
+ * - No registration attempts
+ * - All external server code paths are conditionally compiled out
+ *
+ * This reduces socket usage and ensures the embedded HTTP server always has
+ * sufficient resources. Use this flag when you only need the onboard HTTP server
+ * and want to minimize resource usage.
+ *
+ * Default: Undefined (external webserver functionality enabled)
+ * To enable: Uncomment the line below
+ */
+// #define ONLY_ONBOARD_HTTP  // Disable external webserver functionality (onboard HTTP only)
+
 #endif /* __MESH_DEVICE_CONFIG_H__ */

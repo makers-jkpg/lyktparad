@@ -17,6 +17,7 @@
 #include "mesh_common.h"
 #include "mesh_version.h"
 #include "config/mesh_config.h"
+#include "config/mesh_device_config.h"
 #include "plugin_system.h"
 #include "mesh_ota.h"
 #include "light_neopixel.h"
@@ -451,6 +452,11 @@ static esp_err_t mesh_udp_bridge_wait_for_registration_ack(uint32_t timeout_ms, 
 
 esp_err_t mesh_udp_bridge_register(void)
 {
+#ifdef ONLY_ONBOARD_HTTP
+    ESP_LOGD(TAG, "ONLY_ONBOARD_HTTP enabled - registration disabled");
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+
     /* Check if external server is discovered (via set_registration or cached) */
     if (!s_server_registered) {
         /* Try to use cached server address as fallback */
@@ -642,6 +648,11 @@ void mesh_udp_bridge_set_registration(bool registered, const uint8_t *server_ip,
  */
 esp_err_t mesh_udp_bridge_mdns_init(void)
 {
+#ifdef ONLY_ONBOARD_HTTP
+    ESP_LOGD(TAG, "ONLY_ONBOARD_HTTP enabled - mDNS initialization disabled");
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+
 #if MDNS_AVAILABLE
     if (s_mdns_initialized) {
         return ESP_OK;  /* Already initialized */
@@ -689,6 +700,11 @@ esp_err_t mesh_udp_bridge_mdns_init(void)
  */
 esp_err_t mesh_udp_bridge_discover_server(uint32_t timeout_ms, char *server_ip, uint16_t *server_port)
 {
+#ifdef ONLY_ONBOARD_HTTP
+    ESP_LOGD(TAG, "ONLY_ONBOARD_HTTP enabled - server discovery disabled");
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+
     if (server_ip == NULL || server_port == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -1992,6 +2008,11 @@ static void mesh_udp_bridge_broadcast_listener_task(void *pvParameters)
  */
 void mesh_udp_bridge_broadcast_listener_start(void)
 {
+#ifdef ONLY_ONBOARD_HTTP
+    ESP_LOGD(TAG, "ONLY_ONBOARD_HTTP enabled - broadcast listener disabled");
+    return;
+#endif
+
     /* Check if task already running */
     if (s_broadcast_listener_running && s_broadcast_listener_task_handle != NULL) {
         ESP_LOGD(TAG, "Broadcast listener task already running");
@@ -3720,6 +3741,11 @@ static void mesh_udp_bridge_api_listener_task(void *pvParameters)
  */
 void mesh_udp_bridge_api_listener_start(void)
 {
+#ifdef ONLY_ONBOARD_HTTP
+    ESP_LOGD(TAG, "ONLY_ONBOARD_HTTP enabled - API listener disabled");
+    return;
+#endif
+
     /* Check if task already running */
     if (s_api_listener_running && s_api_listener_task_handle != NULL) {
         ESP_LOGD(TAG, "API listener task already running");

@@ -29,6 +29,7 @@
 #include "mesh_commands.h"
 #include "light_common_cathode.h"
 #include "config/mesh_config.h"
+#include "config/mesh_device_config.h"
 #include "mesh_ota.h"
 #include "mesh_udp_bridge.h"
 #ifdef ROOT_STATUS_LED_GPIO
@@ -720,6 +721,7 @@ static void mesh_root_ip_callback(void *arg, esp_event_base_t event_base,
     } else {
         ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Web server started successfully");
 
+#ifndef ONLY_ONBOARD_HTTP
         /* Start UDP broadcast listener (runtime fallback discovery mechanism) */
         /* mDNS discovery is the primary method and is tried first via discovery_task. */
         /* UDP broadcast listener runs in the background and is used as a runtime fallback */
@@ -738,6 +740,9 @@ static void mesh_root_ip_callback(void *arg, esp_event_base_t event_base,
         } else {
             ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Discovery task started");
         }
+#else
+        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] ONLY_ONBOARD_HTTP enabled - external webserver functionality disabled");
+#endif /* ONLY_ONBOARD_HTTP */
     }
 }
 

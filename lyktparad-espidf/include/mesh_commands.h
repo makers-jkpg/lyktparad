@@ -34,14 +34,6 @@
 #define  PLUGIN_CMD_DATA         (0x04)  /* Plugin data command: variable length */
 #define  PLUGIN_CMD_BEAT         (0x05)  /* Plugin beat synchronization */
 
-/* Legacy commands - deprecated, use plugin protocol instead */
-#define  MESH_CMD_PLUGIN_DATA    (0x04)  /* DEPRECATED: Use plugin protocol with PLUGIN_CMD_DATA */
-#define  MESH_CMD_PLUGIN_START   (0x05)  /* DEPRECATED: Use plugin protocol with PLUGIN_CMD_START */
-#define  MESH_CMD_PLUGIN_PAUSE   (0x06)  /* DEPRECATED: Use plugin protocol with PLUGIN_CMD_PAUSE */
-#define  MESH_CMD_PLUGIN_RESET   (0x07)  /* DEPRECATED: Use plugin protocol with PLUGIN_CMD_RESET */
-#define  MESH_CMD_PLUGIN_BEAT    (0x08)  /* DEPRECATED: Use plugin protocol with PLUGIN_CMD_BEAT */
-#define  MESH_CMD_EFFECT         (0x09)  /* DEPRECATED: Use plugin protocol with plugin-assigned ID */
-
 /*******************************************************
  *                Command ID Allocation
  *******************************************************/

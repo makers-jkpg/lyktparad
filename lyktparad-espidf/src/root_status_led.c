@@ -13,10 +13,11 @@
  * CONDITIONS OF ANY KIND, either express or implied.
  */
 
+#include "config/mesh_device_config.h"
+
 #ifdef ROOT_STATUS_LED_GPIO
 
 #include "root_status_led.h"
-#include "config/mesh_device_config.h"
 #include "mesh_common.h"
 #include "esp_mesh.h"
 #include "driver/gpio.h"

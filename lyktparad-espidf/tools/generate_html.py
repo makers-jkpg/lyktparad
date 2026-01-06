@@ -152,14 +152,16 @@ def generate_dropdown_html(plugins):
         return ""
 
     options = []
-    options.append('<option value="">Select Plugin...</option>')
+    # No default "Select Plugin..." option - first plugin will be selected by default
 
     for plugin in plugins:
         display_name = format_plugin_display_name(plugin['name'])
         # Escape HTML special characters in plugin name
         plugin_name_escaped = plugin['name'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
         display_name_escaped = display_name.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        options.append(f'<option value="{plugin_name_escaped}">{display_name_escaped}</option>')
+        # Mark first plugin as selected by default
+        selected_attr = ' selected' if len(options) == 0 else ''
+        options.append(f'<option value="{plugin_name_escaped}"{selected_attr}>{display_name_escaped}</option>')
 
     # Return just the select element - container div is in template
     dropdown_html = f'''<select id="plugin-selector" class="plugin-selector" aria-label="Select plugin">
@@ -256,6 +258,11 @@ def generate_layout_css():
 
 .plugin-section.active {
     display: block;
+}
+
+/* Hide mesh-control-section by default - will be shown when sequence plugin is selected */
+#mesh-control-section {
+    display: none;
 }
 
 /* Responsive design */
@@ -734,7 +741,7 @@ def generate_selection_js(plugins):
         return ""
 
     # Create list of plugin names for JavaScript
-    plugin_names_js = ', '.join(f'"{plugin["name"].replace("\\", "\\\\").replace('"', '\\"')}"' for plugin in plugins)
+    plugin_names_js = ', '.join('"' + plugin["name"].replace("\\", "\\\\").replace('"', '\\"') + '"' for plugin in plugins)
 
     js = f'''
 (function() {{
@@ -757,8 +764,11 @@ def generate_selection_js(plugins):
                 // localStorage not available, ignore
             }}
 
-            // Set initial selection
-            var initialSelection = savedSelection || (plugins.length > 0 ? plugins[0] : '');
+            // Set initial selection - default to first plugin if no saved selection
+            var initialSelection = savedSelection;
+            if (!initialSelection || !this.isValidPlugin(initialSelection)) {{
+                initialSelection = plugins.length > 0 ? plugins[0] : '';
+            }}
             if (initialSelection && this.isValidPlugin(initialSelection)) {{
                 selector.value = initialSelection;
                 this.selectPlugin(initialSelection);
@@ -861,6 +871,16 @@ def generate_selection_js(plugins):
                 section.style.display = 'none';
             }});
 
+            // Show/hide mesh-control-section based on selected plugin
+            var meshControlSection = document.getElementById('mesh-control-section');
+            if (meshControlSection) {{
+                if (pluginName === 'sequence') {{
+                    meshControlSection.style.display = 'block';
+                }} else {{
+                    meshControlSection.style.display = 'none';
+                }}
+            }}
+
             // Show selected plugin section
             // Note: pluginName is unescaped (from select value), but data-plugin-name
             // attribute may be HTML-escaped. Use getAttribute() which returns unescaped value.
@@ -887,6 +907,729 @@ def generate_selection_js(plugins):
         PluginSelector.init();
     }}
 }})();
+'''
+    return js
+
+
+def generate_mesh_control_css():
+    """
+    Generate CSS for mesh-control-section elements (grid, controls, etc.).
+
+    Returns CSS string for:
+    - .node-count, .node-count-label, .node-count-value
+    - .grid-section, .grid-container, .grid-label, .grid-square
+    - .row-count-control
+    - .rhythm-control, .rhythm-label, .rhythm-input-container
+    - .sync-button-container, .sequence-control-container
+    - .export-import-container
+    """
+    css = '''
+/* Mesh Control Styles */
+.node-count {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+.node-count-label {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 8px;
+}
+
+.node-count-value {
+    font-size: 48px;
+    font-weight: bold;
+    color: #667eea;
+    font-family: 'Courier New', monospace;
+}
+
+.grid-section {
+    margin-bottom: 30px;
+}
+
+/* Grid styles */
+.grid-container {
+    display: grid;
+    grid-template-columns: auto repeat(16, 1fr);
+    grid-template-rows: auto repeat(16, 1fr);
+    gap: 2px;
+    max-width: 100%;
+    margin: 0 auto;
+    padding: 10px;
+}
+
+.grid-label {
+    font-weight: bold;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    user-select: none;
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 12px;
+    color: #333;
+    background: #f5f5f5;
+    border-radius: 4px;
+}
+
+.grid-label:hover {
+    background: #e0e0e0;
+}
+
+.grid-label-z {
+    grid-column: 1;
+    grid-row: 1;
+}
+
+.grid-label-col {
+    grid-row: 1;
+}
+
+.grid-label-row {
+    grid-column: 1;
+}
+
+.grid-square {
+    aspect-ratio: 1;
+    border: 1px solid #ddd;
+    cursor: pointer;
+    transition: background-color 0.2s, border 0.2s;
+    min-width: 44px;
+    min-height: 44px;
+}
+
+.grid-square:hover {
+    border: 2px solid #667eea;
+}
+
+.grid-square:active {
+    transform: scale(0.95);
+}
+
+.grid-square.current {
+    border: 2px solid white;
+    box-shadow: 0 0 0 2px black, 0 0 8px rgba(0, 0, 0, 0.5);
+    z-index: 10;
+    transition: all 0.1s ease;
+}
+
+/* Form controls */
+.row-count-control {
+    margin-bottom: 20px;
+    text-align: center;
+}
+
+.row-count-control label {
+    display: block;
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 8px;
+}
+
+.row-count-control select {
+    padding: 8px 12px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-size: 16px;
+    background: white;
+    cursor: pointer;
+    min-width: 120px;
+}
+
+.row-count-control select:hover {
+    border-color: #667eea;
+}
+
+.row-count-control select:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+/* Rhythm control styles */
+.rhythm-control {
+    margin-top: 20px;
+    text-align: center;
+}
+
+.rhythm-label {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 8px;
+}
+
+.rhythm-input-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+#tempoDecrease, #tempoIncrease {
+    background: #667eea;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    min-height: 44px;
+    min-width: 60px;
+}
+
+#tempoDecrease:hover, #tempoIncrease:hover {
+    background: #5568d3;
+}
+
+#tempoDecrease:active, #tempoIncrease:active {
+    background: #4457b8;
+}
+
+#tempoDecrease:disabled, #tempoIncrease:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#tempoDecrease:disabled:hover, #tempoIncrease:disabled:hover {
+    background: #667eea;
+}
+
+#rhythmDisplay {
+    font-size: 18px;
+    color: #667eea;
+    font-weight: bold;
+    min-width: 80px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Sync button styles */
+.sync-button-container {
+    text-align: center;
+    margin-top: 20px;
+}
+
+#syncButton {
+    background: #667eea;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    width: 100%;
+    max-width: 250px;
+    min-height: 44px;
+}
+
+#syncButton:hover {
+    background: #5568d3;
+}
+
+#syncButton:active {
+    background: #4457b8;
+}
+
+#syncButton:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#syncFeedback {
+    margin-top: 10px;
+    font-size: 14px;
+    text-align: center;
+}
+
+.sync-feedback-success {
+    color: #27ae60;
+}
+
+.sync-feedback-error {
+    color: #e74c3c;
+}
+
+/* Sequence control buttons */
+.sequence-control-container {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 20px;
+}
+
+#startButton, #stopButton, #resetButton {
+    background: #667eea;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    min-height: 44px;
+    flex: 1;
+    max-width: 150px;
+}
+
+#startButton:hover, #stopButton:hover, #resetButton:hover {
+    background: #5568d3;
+}
+
+#startButton:active, #stopButton:active, #resetButton:active {
+    background: #4457b8;
+}
+
+#startButton:disabled, #stopButton:disabled, #resetButton:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#sequenceControlFeedback {
+    margin-top: 10px;
+    font-size: 14px;
+    text-align: center;
+}
+
+.sequence-control-feedback-success {
+    color: #27ae60;
+}
+
+.sequence-control-feedback-error {
+    color: #e74c3c;
+}
+
+/* Export/Import styles */
+.export-import-container {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 10px;
+}
+
+#exportButton, #importButton {
+    background: #667eea;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    min-height: 44px;
+}
+
+#exportButton:hover, #importButton:hover {
+    background: #5568d3;
+}
+
+#exportButton:active, #importButton:active {
+    background: #4457b8;
+}
+
+#exportContainer, #importContainer {
+    margin-top: 20px;
+    text-align: center;
+}
+
+#exportTextarea, #importTextarea {
+    width: 100%;
+    max-width: 600px;
+    padding: 12px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    resize: vertical;
+    margin-bottom: 10px;
+}
+
+#importTextarea {
+    min-height: 120px;
+}
+
+.export-import-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 10px;
+}
+
+#copyExportButton, #confirmImportButton, #cancelImportButton {
+    background: #27ae60;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+#copyExportButton:hover, #confirmImportButton:hover {
+    background: #229954;
+}
+
+#cancelImportButton {
+    background: #e74c3c;
+}
+
+#cancelImportButton:hover {
+    background: #c0392b;
+}
+
+#exportFeedback, #importFeedback {
+    margin-top: 10px;
+    font-size: 14px;
+    text-align: center;
+}
+
+#colorPicker {
+    display: none;
+}
+'''
+    return css
+
+
+def generate_mesh_control_js():
+    """
+    Generate JavaScript for mesh-control-section (grid initialization and sequence controls).
+
+    Returns JavaScript string with:
+    - Grid initialization (16x16 grid)
+    - Grid rendering
+    - Color picker handling
+    - Sequence control button handlers
+    - API integration
+    """
+    js = '''
+/* Mesh Control JavaScript */
+(function() {
+    'use strict';
+
+    // Global variables
+    var gridData = new Uint8Array(768);  // 256 squares * 3 channels
+    var tempo = 250;
+    var numRows = 4;
+    var selectedRow = null;
+    var selectedCol = null;
+    var selectedAction = null;
+
+    // Initialize grid structure
+    function initializeGrid() {
+        var gridContainer = document.getElementById('gridContainer');
+        if (!gridContainer) {
+            return;
+        }
+
+        // Clear existing content
+        gridContainer.innerHTML = '';
+
+        // Add Z label (top-left corner)
+        var zLabel = document.createElement('div');
+        zLabel.className = 'grid-label grid-label-z';
+        zLabel.textContent = 'Z';
+        zLabel.setAttribute('data-action', 'all');
+        gridContainer.appendChild(zLabel);
+
+        // Add column labels (0-9, A-F)
+        for (var col = 0; col < 16; col++) {
+            var colLabel = document.createElement('div');
+            colLabel.className = 'grid-label grid-label-col';
+            colLabel.setAttribute('data-col', col);
+            if (col < 10) {
+                colLabel.textContent = col.toString();
+            } else {
+                colLabel.textContent = String.fromCharCode(65 + col - 10);  // A-F
+            }
+            gridContainer.appendChild(colLabel);
+        }
+
+        // Add row labels and squares
+        for (var row = 0; row < 16; row++) {
+            // Row label
+            var rowLabel = document.createElement('div');
+            rowLabel.className = 'grid-label grid-label-row';
+            rowLabel.setAttribute('data-row', row);
+            if (row < 10) {
+                rowLabel.textContent = row.toString();
+            } else {
+                rowLabel.textContent = String.fromCharCode(65 + row - 10);  // A-F
+            }
+            gridContainer.appendChild(rowLabel);
+
+            // Grid squares for this row
+            for (var col = 0; col < 16; col++) {
+                var square = document.createElement('div');
+                square.className = 'grid-square';
+                square.setAttribute('data-row', row);
+                square.setAttribute('data-col', col);
+                gridContainer.appendChild(square);
+            }
+        }
+
+        // Update grid rows visibility
+        updateGridRows();
+    }
+
+    // Update grid rows visibility based on numRows
+    function updateGridRows() {
+        var gridContainer = document.getElementById('gridContainer');
+        if (gridContainer) {
+            gridContainer.style.gridTemplateRows = 'auto repeat(' + numRows + ', 1fr)';
+        }
+        for (var row = 0; row < 16; row++) {
+            var rowElements = document.querySelectorAll('[data-row="' + row + '"]');
+            if (row < numRows) {
+                rowElements.forEach(function(el) {
+                    el.style.display = '';
+                });
+            } else {
+                rowElements.forEach(function(el) {
+                    el.style.display = 'none';
+                });
+            }
+        }
+        renderGrid();
+    }
+
+    // Render grid with current colors
+    function renderGrid() {
+        var squares = document.querySelectorAll('.grid-square');
+        squares.forEach(function(square) {
+            var row = parseInt(square.getAttribute('data-row'));
+            var col = parseInt(square.getAttribute('data-col'));
+            var color = getSquareColor(row, col);
+            var r8 = color.r * 17;
+            var g8 = color.g * 17;
+            var b8 = color.b * 17;
+            square.style.backgroundColor = 'rgb(' + r8 + ', ' + g8 + ', ' + b8 + ')';
+        });
+    }
+
+    // Get square color from gridData
+    function getSquareColor(row, col) {
+        var idx = (row * 16 + col) * 3;
+        return {
+            r: gridData[idx] || 0,
+            g: gridData[idx + 1] || 0,
+            b: gridData[idx + 2] || 0
+        };
+    }
+
+    // Set square color in gridData
+    function setSquareColor(row, col, r, g, b) {
+        var idx = (row * 16 + col) * 3;
+        gridData[idx] = r;
+        gridData[idx + 1] = g;
+        gridData[idx + 2] = b;
+        renderGrid();
+    }
+
+    // RGB to hex conversion
+    function rgbToHex(r, g, b) {
+        return '#' + [r, g, b].map(function(x) {
+            var hex = x.toString(16);
+            return hex.length === 1 ? '0' + hex : hex;
+        }).join('');
+    }
+
+    // Hex to RGB conversion
+    function hexToRgb(hex) {
+        var result = /^#?([a-f\\\\d]{2})([a-f\\\\d]{2})([a-f\\\\d]{2})$/i.exec(hex);
+        return result ? {
+            r: parseInt(result[1], 16),
+            g: parseInt(result[2], 16),
+            b: parseInt(result[3], 16)
+        } : null;
+    }
+
+    // Quantize color to 4-bit (0-15)
+    function quantizeColor(r, g, b) {
+        return {
+            r: Math.max(0, Math.min(15, Math.floor(r / 16))),
+            g: Math.max(0, Math.min(15, Math.floor(g / 16))),
+            b: Math.max(0, Math.min(15, Math.floor(b / 16)))
+        };
+    }
+
+    // Show color picker
+    function showColorPicker(row, col, action) {
+        selectedRow = row;
+        selectedCol = col;
+        selectedAction = action;
+        var currentColor = {r: 0, g: 0, b: 0};
+        if (action === 'square') {
+            currentColor = getSquareColor(row, col);
+        } else if (action === 'row') {
+            currentColor = getSquareColor(row, 0);
+        } else if (action === 'col') {
+            currentColor = getSquareColor(0, col);
+        } else if (action === 'all') {
+            currentColor = getSquareColor(0, 0);
+        }
+        var r8 = currentColor.r * 17;
+        var g8 = currentColor.g * 17;
+        var b8 = currentColor.b * 17;
+        var colorPicker = document.getElementById('colorPicker');
+        if (colorPicker) {
+            colorPicker.value = rgbToHex(r8, g8, b8);
+            colorPicker.click();
+        }
+    }
+
+    // Set color based on selected action
+    function applyColor(r, g, b) {
+        var quantized = quantizeColor(r, g, b);
+        if (selectedAction === 'square') {
+            setSquareColor(selectedRow, selectedCol, quantized.r, quantized.g, quantized.b);
+        } else if (selectedAction === 'row') {
+            for (var col = 0; col < 16; col++) {
+                setSquareColor(selectedRow, col, quantized.r, quantized.g, quantized.b);
+            }
+        } else if (selectedAction === 'col') {
+            for (var row = 0; row < 16; row++) {
+                setSquareColor(row, selectedCol, quantized.r, quantized.g, quantized.b);
+            }
+        } else if (selectedAction === 'all') {
+            for (var row = 0; row < 16; row++) {
+                for (var col = 0; col < 16; col++) {
+                    setSquareColor(row, col, quantized.r, quantized.g, quantized.b);
+                }
+            }
+        }
+    }
+
+    // Update node count
+    function updateNodeCount() {
+        fetch('/api/nodes')
+            .then(function(response) {
+                return response.json();
+            })
+            .then(function(data) {
+                var nodeCountEl = document.getElementById('nodeCount');
+                if (nodeCountEl) {
+                    nodeCountEl.textContent = data.nodes || 0;
+                }
+            })
+            .catch(function(err) {
+                console.error('Node count update error:', err);
+            });
+    }
+
+    // Initialize on DOM ready
+    function initMeshControl() {
+        // Only initialize if mesh-control-section is visible
+        var meshControlSection = document.getElementById('mesh-control-section');
+        if (!meshControlSection || meshControlSection.style.display === 'none') {
+            return;
+        }
+
+        // Initialize grid
+        initializeGrid();
+
+        // Set up grid click handlers
+        var gridContainer = document.getElementById('gridContainer');
+        if (gridContainer) {
+            gridContainer.addEventListener('click', function(e) {
+                var target = e.target;
+                if (target.classList.contains('grid-square')) {
+                    var row = parseInt(target.getAttribute('data-row'));
+                    var col = parseInt(target.getAttribute('data-col'));
+                    showColorPicker(row, col, 'square');
+                } else if (target.classList.contains('grid-label-row')) {
+                    var row = parseInt(target.getAttribute('data-row'));
+                    showColorPicker(row, null, 'row');
+                } else if (target.classList.contains('grid-label-col')) {
+                    var col = parseInt(target.getAttribute('data-col'));
+                    showColorPicker(null, col, 'col');
+                } else if (target.classList.contains('grid-label-z')) {
+                    showColorPicker(null, null, 'all');
+                }
+            });
+        }
+
+        // Color picker change handler
+        var colorPicker = document.getElementById('colorPicker');
+        if (colorPicker) {
+            colorPicker.addEventListener('change', function(e) {
+                var rgb = hexToRgb(e.target.value);
+                if (rgb) {
+                    applyColor(rgb.r, rgb.g, rgb.b);
+                }
+            });
+        }
+
+        // Row count selector change handler
+        var rowCountSelect = document.getElementById('rowCountSelect');
+        if (rowCountSelect) {
+            rowCountSelect.addEventListener('change', function(e) {
+                numRows = parseInt(e.target.value);
+                updateGridRows();
+            });
+        }
+
+        // Update node count
+        updateNodeCount();
+        setInterval(updateNodeCount, 5000);
+    }
+
+    // Initialize when DOM is ready and sequence is selected
+    function checkAndInit() {
+        var meshControlSection = document.getElementById('mesh-control-section');
+        if (meshControlSection && meshControlSection.style.display !== 'none') {
+            initMeshControl();
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(checkAndInit, 100);
+        });
+    } else {
+        setTimeout(checkAndInit, 100);
+    }
+
+    // Monitor for mesh-control-section visibility changes
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
+                var meshControlSection = document.getElementById('mesh-control-section');
+                if (meshControlSection && meshControlSection.style.display === 'block') {
+                    var gridContainer = document.getElementById('gridContainer');
+                    if (gridContainer && gridContainer.children.length === 0) {
+                        initMeshControl();
+                    }
+                }
+            }
+        });
+    });
+
+    // Start observing when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            var meshControlSection = document.getElementById('mesh-control-section');
+            if (meshControlSection) {
+                observer.observe(meshControlSection, { attributes: true, attributeFilter: ['style'] });
+            }
+        });
+    } else {
+        var meshControlSection = document.getElementById('mesh-control-section');
+        if (meshControlSection) {
+            observer.observe(meshControlSection, { attributes: true, attributeFilter: ['style'] });
+        }
+    }
+})();
 '''
     return js
 
@@ -982,12 +1725,20 @@ def generate_html_for_embedded(template_file, plugins_dir, output_file):
     if '{{PLUGIN_DROPDOWN}}' in html_content:
         html_content = html_content.replace('{{PLUGIN_DROPDOWN}}', dropdown_html)
 
+    # Generate mesh-control CSS and JS
+    mesh_control_css = generate_mesh_control_css()
+    mesh_control_js = generate_mesh_control_js()
+
     # Replace {{PLUGIN_LAYOUT_CSS}} placeholder (insert in <style> tag)
     if '{{PLUGIN_LAYOUT_CSS}}' in html_content:
         html_content = html_content.replace('{{PLUGIN_LAYOUT_CSS}}', layout_css)
     elif layout_css:
         # If no placeholder, insert before </style>
         html_content = re.sub(r'(</style>)', layout_css + r'\n\1', html_content, count=1)
+
+    # Insert mesh-control CSS before </style>
+    if mesh_control_css:
+        html_content = re.sub(r'(</style>)', mesh_control_css + r'\n\1', html_content, count=1)
 
     # Replace {{PLUGIN_CSS}} placeholder (insert before </style>)
     if '{{PLUGIN_CSS}}' in html_content:
@@ -1024,6 +1775,10 @@ def generate_html_for_embedded(template_file, plugins_dir, output_file):
         # If no placeholder, insert before </script>
         js_insert = '\n'.join(plugin_js_content)
         html_content = re.sub(r'(</script>)', js_insert + r'\n\1', html_content, count=1)
+
+    # Insert mesh-control JS before </script>
+    if mesh_control_js:
+        html_content = re.sub(r'(</script>)', mesh_control_js + r'\n\1', html_content, count=1)
 
     # Escape for C string literal
     escaped_content = escape_c_string(html_content)
