@@ -22,10 +22,6 @@
 #include "mesh_commands.h"
 #include "plugin_system.h"
 #include "mesh_udp_bridge.h"
-#include "plugins/sequence/sequence_plugin.h"
-#include "plugins/rgb_effect/rgb_effect_plugin.h"
-#include "plugins/effect_fade/effect_fade_plugin.h"
-#include "plugins/effect_strobe/effect_strobe_plugin.h"
 #include "light_neopixel.h"
 #include "light_common_cathode.h"
 #include "config/mesh_config.h"
@@ -229,36 +225,10 @@ void esp_mesh_p2p_rx_main(void *arg)
             /* Synchronize core local heartbeat counter with received counter (must happen before plugin handlers) */
             mesh_common_set_local_heartbeat_counter(counter);
 
-            /* Route heartbeat to sequence plugin if active */
-            if (plugin_is_active("sequence")) {
-                esp_err_t heartbeat_err = sequence_plugin_handle_heartbeat(pointer, counter);
-                if (heartbeat_err != ESP_OK && heartbeat_err != ESP_ERR_INVALID_STATE) {
-                    ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] Sequence plugin heartbeat handler error: 0x%x", heartbeat_err);
-                }
-            }
-
-            /* Route heartbeat to rgb_effect plugin if active */
-            if (plugin_is_active("rgb_effect")) {
-                esp_err_t heartbeat_err = rgb_effect_plugin_handle_heartbeat(pointer, counter);
-                if (heartbeat_err != ESP_OK) {
-                    ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] RGB effect plugin heartbeat handler error: 0x%x", heartbeat_err);
-                }
-            }
-
-            /* Route heartbeat to fade plugin if active */
-            if (plugin_is_active("effect_fade")) {
-                esp_err_t heartbeat_err = effect_fade_plugin_handle_heartbeat(pointer, counter);
-                if (heartbeat_err != ESP_OK) {
-                    ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] Fade plugin heartbeat handler error: 0x%x", heartbeat_err);
-                }
-            }
-
-            /* Route heartbeat to strobe plugin if active */
-            if (plugin_is_active("effect_strobe")) {
-                esp_err_t heartbeat_err = effect_strobe_plugin_handle_heartbeat(pointer, counter);
-                if (heartbeat_err != ESP_OK) {
-                    ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] Strobe plugin heartbeat handler error: 0x%x", heartbeat_err);
-                }
+            /* Process heartbeat for all active plugins */
+            esp_err_t heartbeat_err = plugin_system_call_heartbeat_handlers(pointer, counter);
+            if (heartbeat_err != ESP_OK) {
+                ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] Plugin heartbeat handler error: 0x%x", heartbeat_err);
             }
 
             /* Reset state query response flag (allows node to respond to next state query) */

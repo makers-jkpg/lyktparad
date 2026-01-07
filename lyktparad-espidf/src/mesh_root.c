@@ -27,10 +27,7 @@
 #include "light_neopixel.h"
 #include "plugin_system.h"
 #include "light_common_cathode.h"
-#include "plugins/sequence/sequence_plugin.h"
-#include "plugins/rgb_effect/rgb_effect_plugin.h"
-#include "plugins/effect_fade/effect_fade_plugin.h"
-#include "plugins/effect_strobe/effect_strobe_plugin.h"
+#include "plugins/sequence/sequence_plugin.h"  /* Only for sequence_plugin_get_pointer_for_heartbeat() */
 #include "config/mesh_config.h"
 #include "config/mesh_device_config.h"
 #include "mesh_ota.h"
@@ -490,16 +487,17 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
 }
 
 /**
- * @brief Ensure at least one plugin is active, activating rgb_effect as default if needed
+ * @brief Ensure at least one plugin is active, activating default plugin if needed
  *
  * This function checks if any plugin is currently active. If no plugin is active,
- * it automatically activates the rgb_effect plugin as the default fallback.
+ * it automatically activates the default plugin (first plugin with is_default=true).
  *
  * This ensures the system always has a valid, controllable state and prevents
  * undefined LED behavior when no plugin is active.
  *
  * @return ESP_OK on success
  * @return ESP_ERR_INVALID_STATE if not root node
+ * @return ESP_ERR_NOT_FOUND if no default plugin is registered
  * @return Error code from plugin_activate() if default activation fails
  */
 esp_err_t mesh_root_ensure_active_plugin(void)
@@ -515,16 +513,23 @@ esp_err_t mesh_root_ensure_active_plugin(void)
         return ESP_OK;
     }
 
-    /* No plugin active - activate rgb_effect as default */
-    ESP_LOGI(MESH_TAG, "No active plugin found, activating default plugin 'rgb_effect'");
-    esp_err_t err = plugin_activate("rgb_effect");
+    /* Get default plugin name */
+    const char *default_plugin = plugin_system_get_default_plugin_name();
+    if (default_plugin == NULL) {
+        ESP_LOGE(MESH_TAG, "No active plugin found and no default plugin registered");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* No plugin active - activate default plugin */
+    ESP_LOGI(MESH_TAG, "No active plugin found, activating default plugin '%s'", default_plugin);
+    esp_err_t err = plugin_activate(default_plugin);
     if (err != ESP_OK) {
-        ESP_LOGE(MESH_TAG, "Failed to activate default plugin 'rgb_effect': %s",
-                 esp_err_to_name(err));
+        ESP_LOGE(MESH_TAG, "Failed to activate default plugin '%s': %s",
+                 default_plugin, esp_err_to_name(err));
         return err;
     }
 
-    ESP_LOGI(MESH_TAG, "Default plugin 'rgb_effect' activated successfully");
+    ESP_LOGI(MESH_TAG, "Default plugin '%s' activated successfully", default_plugin);
     return ESP_OK;
 }
 
@@ -656,28 +661,10 @@ static void heartbeat_timer_cb(void *arg)
     }
     ESP_LOGI(mesh_common_get_tag(), "[ROOT HEARTBEAT] sent - routing table size: %d (child nodes: %d)", route_table_size, child_node_count);
 
-    /* Process heartbeat for rgb_effect plugin if active (root node processes its own heartbeat) */
-    if (plugin_is_active("rgb_effect")) {
-        esp_err_t heartbeat_err = rgb_effect_plugin_handle_heartbeat(pointer, counter);
-        if (heartbeat_err != ESP_OK) {
-            ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] RGB effect plugin heartbeat handler error: 0x%x", heartbeat_err);
-        }
-    }
-
-    /* Process heartbeat for fade plugin if active (root node processes its own heartbeat) */
-    if (plugin_is_active("effect_fade")) {
-        esp_err_t heartbeat_err = effect_fade_plugin_handle_heartbeat(pointer, counter);
-        if (heartbeat_err != ESP_OK) {
-            ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] Fade plugin heartbeat handler error: 0x%x", heartbeat_err);
-        }
-    }
-
-    /* Process heartbeat for strobe plugin if active (root node processes its own heartbeat) */
-    if (plugin_is_active("effect_strobe")) {
-        esp_err_t heartbeat_err = effect_strobe_plugin_handle_heartbeat(pointer, counter);
-        if (heartbeat_err != ESP_OK) {
-            ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] Strobe plugin heartbeat handler error: 0x%x", heartbeat_err);
-        }
+    /* Process heartbeat for all active plugins (root node processes its own heartbeat) */
+    esp_err_t heartbeat_err = plugin_system_call_heartbeat_handlers(pointer, counter);
+    if (heartbeat_err != ESP_OK) {
+        ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] Plugin heartbeat handler error: 0x%x", heartbeat_err);
     }
 
     // #region agent log

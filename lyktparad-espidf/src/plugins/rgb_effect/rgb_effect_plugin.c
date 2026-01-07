@@ -209,10 +209,12 @@ void rgb_effect_plugin_register(void)
 {
     plugin_info_t info = {
         .name = "rgb_effect",
+        .is_default = true,  /* rgb_effect is the default plugin */
         .command_id = 0, /* Will be assigned by plugin system */
         .callbacks = {
             .command_handler = rgb_effect_command_handler,
             .timer_callback = NULL,  /* No timer callback - uses core heartbeat counter */
+            .heartbeat_handler = rgb_effect_plugin_handle_heartbeat,
             .init = rgb_effect_init,
             .deinit = rgb_effect_deinit,
             .is_active = rgb_effect_is_active,

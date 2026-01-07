@@ -403,10 +403,12 @@ void effect_strobe_plugin_register(void)
 {
     plugin_info_t info = {
         .name = "effect_strobe",
+        .is_default = false,  /* effect_strobe is not the default plugin */
         .command_id = 0, /* Will be assigned by plugin system */
         .callbacks = {
             .command_handler = strobe_command_handler,
             .timer_callback = strobe_timer_callback,
+            .heartbeat_handler = effect_strobe_plugin_handle_heartbeat,
             .init = strobe_init,
             .deinit = strobe_deinit,
             .is_active = strobe_is_active,

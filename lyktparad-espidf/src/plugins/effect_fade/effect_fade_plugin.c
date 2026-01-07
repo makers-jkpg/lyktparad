@@ -426,10 +426,12 @@ void effect_fade_plugin_register(void)
 {
     plugin_info_t info = {
         .name = "effect_fade",
+        .is_default = false,  /* effect_fade is not the default plugin */
         .command_id = 0, /* Will be assigned by plugin system */
         .callbacks = {
             .command_handler = fade_command_handler,
             .timer_callback = fade_timer_callback,
+            .heartbeat_handler = effect_fade_plugin_handle_heartbeat,
             .init = fade_init,
             .deinit = fade_deinit,
             .is_active = fade_is_active,

@@ -48,6 +48,9 @@ static uint8_t next_plugin_id = PLUGIN_ID_MIN;
 /* Active plugin tracking - only one plugin can be active at a time (mutual exclusivity) */
 static const char *active_plugin_name = NULL;
 
+/* Default plugin tracking - first plugin with is_default=true is registered as default */
+static const char *default_plugin_name = NULL;
+
 esp_err_t plugin_register(const plugin_info_t *info, uint8_t *assigned_cmd_id)
 {
     /* Validate input parameters */
@@ -111,6 +114,19 @@ esp_err_t plugin_register(const plugin_info_t *info, uint8_t *assigned_cmd_id)
 
     /* Add plugin to registry (after successful init) */
     plugin_registry[plugin_count] = plugin_copy;
+
+    /* Handle default plugin registration */
+    if (plugin_copy.is_default) {
+        if (default_plugin_name == NULL) {
+            /* First plugin with is_default=true - register as default */
+            default_plugin_name = plugin_copy.name;
+            ESP_LOGI(TAG, "Plugin '%s' registered as default plugin", plugin_copy.name);
+        } else {
+            /* Additional plugin with is_default=true - ignore and log warning */
+            ESP_LOGW(TAG, "Plugin '%s' has is_default=true but default plugin '%s' already registered, ignoring", 
+                     plugin_copy.name, default_plugin_name);
+        }
+    }
 
     /* Set output parameter */
     *assigned_cmd_id = next_plugin_id;
@@ -895,4 +911,48 @@ esp_err_t plugin_get_helper(const char *plugin_name, uint32_t helper_type, void 
     }
 
     return plugin->callbacks.get_helper(helper_type, params, result);
+}
+
+const char *plugin_system_get_default_plugin_name(void)
+{
+    return default_plugin_name;
+}
+
+esp_err_t plugin_system_call_heartbeat_handlers(uint8_t pointer, uint8_t counter)
+{
+    esp_err_t overall_err = ESP_OK;
+    bool any_handler_called = false;
+
+    /* Iterate through all registered plugins */
+    for (uint8_t i = 0; i < plugin_count; i++) {
+        const plugin_info_t *plugin = &plugin_registry[i];
+
+        /* Check if plugin is active */
+        if (!plugin_is_active(plugin->name)) {
+            continue;
+        }
+
+        /* Check if plugin has heartbeat handler callback */
+        if (plugin->callbacks.heartbeat_handler == NULL) {
+            continue;
+        }
+
+        /* Call heartbeat handler */
+        esp_err_t handler_err = plugin->callbacks.heartbeat_handler(pointer, counter);
+        if (handler_err != ESP_OK) {
+            ESP_LOGW(TAG, "Plugin '%s' heartbeat handler returned error: %s", 
+                     plugin->name, esp_err_to_name(handler_err));
+            /* Continue with other plugins even if one fails */
+            overall_err = handler_err;  /* Store last error, but continue */
+        } else {
+            any_handler_called = true;
+        }
+    }
+
+    /* Return success if at least one handler was called successfully, or if no handlers were registered */
+    if (any_handler_called || overall_err == ESP_OK) {
+        return ESP_OK;
+    }
+
+    return overall_err;
 }

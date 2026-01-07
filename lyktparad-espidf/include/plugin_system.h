@@ -67,6 +67,18 @@ typedef struct {
     void (*timer_callback)(void *arg);
 
     /**
+     * @brief Heartbeat handler callback (optional, may be NULL)
+     *
+     * Called when MESH_CMD_HEARTBEAT is received (child nodes) or sent (root nodes).
+     * Plugins can use this to synchronize their state with the mesh heartbeat counter.
+     *
+     * @param pointer Sequence pointer from heartbeat payload (0-255)
+     * @param counter Heartbeat counter from heartbeat payload (0-255, wraps)
+     * @return ESP_OK on success, error code on failure
+     */
+    esp_err_t (*heartbeat_handler)(uint8_t pointer, uint8_t counter);
+
+    /**
      * @brief Plugin initialization callback (optional, may be NULL)
      *
      * Called during plugin registration to initialize plugin state.
@@ -204,6 +216,15 @@ typedef struct {
      * with the same name is already registered.
      */
     const char *name;
+
+    /**
+     * @brief Default plugin flag
+     *
+     * If true, this plugin will be used as the default fallback plugin.
+     * Only the first plugin with is_default=true will be registered as default.
+     * Additional plugins with is_default=true will be ignored (warning logged).
+     */
+    bool is_default;
 
     /**
      * @brief Assigned command ID (set by registration system)
@@ -478,5 +499,29 @@ esp_err_t plugin_execute_operation(const char *plugin_name, uint32_t operation_t
  * @return Error code from plugin's get_helper callback
  */
 esp_err_t plugin_get_helper(const char *plugin_name, uint32_t helper_type, void *params, void *result);
+
+/**
+ * @brief Get the name of the default plugin
+ *
+ * Returns the name of the first registered plugin with is_default=true.
+ * Only one plugin can be the default plugin (the first one registered with is_default=true).
+ *
+ * @return Pointer to default plugin name, or NULL if no default plugin is registered
+ */
+const char *plugin_system_get_default_plugin_name(void);
+
+/**
+ * @brief Call heartbeat handlers for all active plugins
+ *
+ * Iterates through all registered plugins and calls their heartbeat_handler callback
+ * if the plugin is active and the callback is not NULL. This function is called by
+ * core mesh files when processing heartbeat commands.
+ *
+ * @param pointer Sequence pointer from heartbeat payload (0-255)
+ * @param counter Heartbeat counter from heartbeat payload (0-255, wraps)
+ * @return ESP_OK on success
+ * @return Error code if critical error occurs (individual plugin errors are logged but don't stop processing)
+ */
+esp_err_t plugin_system_call_heartbeat_handlers(uint8_t pointer, uint8_t counter);
 
 #endif /* __PLUGIN_SYSTEM_H__ */

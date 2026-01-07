@@ -654,10 +654,12 @@ void sequence_plugin_register(void)
 {
     plugin_info_t info = {
         .name = "sequence",
+        .is_default = false,  /* sequence is not the default plugin */
         .command_id = 0, /* Will be assigned by plugin system */
         .callbacks = {
             .command_handler = sequence_command_handler,
             .timer_callback = sequence_timer_cb,
+            .heartbeat_handler = sequence_plugin_handle_heartbeat,
             .init = sequence_init,
             .deinit = sequence_deinit,
             .is_active = sequence_is_active,
