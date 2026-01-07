@@ -32,7 +32,7 @@ static uint8_t effects_plugin_id = 0;
 static struct effect_params_strobe_t *current_strobe_params = NULL;
 static struct effect_params_fade_t *current_fade_params = NULL;
 static esp_timer_handle_t effect_timer = NULL;
-static uint8_t current_effect_id = 0;
+static uint8_t current_effect_id = EFFECT_NONE;
 static bool effect_running = false;
 static bool strobe_is_on = false;
 static uint8_t strobe_repeat_remaining = 0;
@@ -106,7 +106,7 @@ static esp_err_t effect_timer_stop(void)
         current_fade_params = NULL;
     }
 
-    current_effect_id = 0;
+    current_effect_id = EFFECT_NONE;
     effect_running = false;
     strobe_is_on = false;
     strobe_repeat_remaining = 0;
@@ -319,7 +319,7 @@ static void play_effect(struct effect_params_t *params)
                 free(current_strobe_params);
                 current_strobe_params = NULL;
                 effect_running = false;
-                current_effect_id = 0;
+                current_effect_id = EFFECT_NONE;
                 return;
             }
 
@@ -366,7 +366,7 @@ static void play_effect(struct effect_params_t *params)
                 free(current_fade_params);
                 current_fade_params = NULL;
                 effect_running = false;
-                current_effect_id = 0;
+                current_effect_id = EFFECT_NONE;
                 return;
             }
 
@@ -471,7 +471,7 @@ static esp_err_t effects_on_deactivate(void)
 
     /* Clear effect state */
     effect_running = false;
-    current_effect_id = 0;
+    current_effect_id = EFFECT_NONE;
     strobe_is_on = false;
     strobe_repeat_remaining = 0;
     fade_phase = 0;

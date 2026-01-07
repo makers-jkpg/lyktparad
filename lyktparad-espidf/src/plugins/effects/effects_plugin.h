@@ -23,8 +23,9 @@
  *                Effect Definitions
  *******************************************************/
 
-#define EFFECT_STROBE 1
-#define EFFECT_FADE   2
+#define EFFECT_NONE    0
+#define EFFECT_STROBE  1
+#define EFFECT_FADE    2
 
 /*******************************************************
  *                Data Structures
