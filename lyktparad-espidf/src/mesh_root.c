@@ -29,6 +29,8 @@
 #include "light_common_cathode.h"
 #include "plugins/sequence/sequence_plugin.h"
 #include "plugins/rgb_effect/rgb_effect_plugin.h"
+#include "plugins/effect_fade/effect_fade_plugin.h"
+#include "plugins/effect_strobe/effect_strobe_plugin.h"
 #include "config/mesh_config.h"
 #include "config/mesh_device_config.h"
 #include "mesh_ota.h"
@@ -273,7 +275,7 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
     if (child_node_count == 0) {
         ESP_LOGI(MESH_TAG, "[ROOT SETUP] No child nodes, starting with default state (counter=0, no plugin)");
         root_setup_in_progress = false;
-        
+
         /* Ensure at least one plugin is active when starting with no child nodes */
         esp_err_t ensure_err = mesh_root_ensure_active_plugin();
         if (ensure_err != ESP_OK) {
@@ -281,7 +283,7 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
                      esp_err_to_name(ensure_err));
             /* Continue even if default activation fails */
         }
-        
+
         return ESP_OK;
     }
 
@@ -379,7 +381,7 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
     if (response_count == 0) {
         ESP_LOGW(MESH_TAG, "[ROOT SETUP] No responses received, using default state");
         root_setup_in_progress = false;
-        
+
         /* Ensure at least one plugin is active when no responses received */
         esp_err_t ensure_err = mesh_root_ensure_active_plugin();
         if (ensure_err != ESP_OK) {
@@ -387,7 +389,7 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
                      esp_err_to_name(ensure_err));
             /* Continue even if default activation fails */
         }
-        
+
         return ESP_OK;
     }
 
@@ -659,6 +661,22 @@ static void heartbeat_timer_cb(void *arg)
         esp_err_t heartbeat_err = rgb_effect_plugin_handle_heartbeat(pointer, counter);
         if (heartbeat_err != ESP_OK) {
             ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] RGB effect plugin heartbeat handler error: 0x%x", heartbeat_err);
+        }
+    }
+
+    /* Process heartbeat for fade plugin if active (root node processes its own heartbeat) */
+    if (plugin_is_active("effect_fade")) {
+        esp_err_t heartbeat_err = effect_fade_plugin_handle_heartbeat(pointer, counter);
+        if (heartbeat_err != ESP_OK) {
+            ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] Fade plugin heartbeat handler error: 0x%x", heartbeat_err);
+        }
+    }
+
+    /* Process heartbeat for strobe plugin if active (root node processes its own heartbeat) */
+    if (plugin_is_active("effect_strobe")) {
+        esp_err_t heartbeat_err = effect_strobe_plugin_handle_heartbeat(pointer, counter);
+        if (heartbeat_err != ESP_OK) {
+            ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] Strobe plugin heartbeat handler error: 0x%x", heartbeat_err);
         }
     }
 

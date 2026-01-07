@@ -60,6 +60,52 @@ static esp_err_t fade_start(void);
 static esp_err_t fade_stop(void);
 
 /*******************************************************
+ *                Heartbeat Handler
+ *******************************************************/
+
+/**
+ * @brief Handle heartbeat from root node for fade effect synchronization
+ *
+ * This function processes heartbeat messages to synchronize the fade effect
+ * cycle across all mesh nodes. It corrects drift by resetting the cycle start time
+ * when the counter changes, ensuring perfect synchronization.
+ *
+ * The heartbeat handler only corrects synchronization - the local heartbeat timer
+ * continues to drive the main timing. This ensures graceful degradation during
+ * mesh disconnection.
+ *
+ * @param pointer Heartbeat pointer (unused for this plugin, for sequence plugin compatibility)
+ * @param counter Heartbeat counter value (0-255, wraps)
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t effect_fade_plugin_handle_heartbeat(uint8_t pointer, uint8_t counter)
+{
+    (void)pointer;  /* Pointer is unused for this plugin, kept for sequence plugin compatibility */
+
+    /* Only process heartbeat if plugin is active */
+    if (!plugin_is_active("effect_fade")) {
+        ESP_LOGD(TAG, "Heartbeat received but fade plugin not active, ignoring");
+        return ESP_OK;
+    }
+
+    /* Read current local heartbeat counter (should match received counter after mesh_common_set_local_heartbeat_counter()) */
+    uint8_t current_counter = mesh_common_get_local_heartbeat_counter();
+
+    /* Check if counter has changed (indicating mesh synchronization or new cycle) */
+    /* Counter normally increments by 1 each heartbeat interval, but may jump when synchronized */
+    if (current_counter != fade_last_counter) {
+        /* Counter changed - reset cycle start time to synchronize with mesh (correct drift) */
+        fade_cycle_start_us = esp_timer_get_time();
+        fade_last_counter = current_counter;
+        ESP_LOGD(TAG, "Heartbeat received - counter: %u, cycle start time reset for synchronization", current_counter);
+    } else {
+        ESP_LOGD(TAG, "Heartbeat received - counter: %u (no change, already synchronized)", current_counter);
+    }
+
+    return ESP_OK;
+}
+
+/*******************************************************
  *                Helper Functions
  *******************************************************/
 

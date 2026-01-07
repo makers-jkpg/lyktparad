@@ -29,19 +29,21 @@ static const char *TAG = "effect_strobe_plugin";
 /* Plugin ID storage (assigned during registration) */
 static uint8_t strobe_plugin_id = 0;
 
-/* Hardcoded default strobe parameters - 4 strobes per heartbeat interval (1000ms) */
-/* Each strobe = 250ms (125ms on, 125ms off) */
+/* Strobe parameters - calculated from heartbeat interval */
+/* 4 strobes per heartbeat cycle: strobe_period = MESH_CONFIG_HEARTBEAT_INTERVAL / 4 */
+/* Each strobe: on/off durations = strobe_period / 2 = MESH_CONFIG_HEARTBEAT_INTERVAL / 8 */
 static const struct {
     uint8_t r_on, g_on, b_on;
     uint8_t r_off, g_off, b_off;
-    uint16_t duration_on_ms;
-    uint16_t duration_off_ms;
 } strobe_defaults = {
     .r_on = 255, .g_on = 255, .b_on = 255,  /* White */
     .r_off = 0, .g_off = 0, .b_off = 0,      /* Black */
-    .duration_on_ms = 125,  /* 125ms on per strobe */
-    .duration_off_ms = 125  /* 125ms off per strobe (total strobe = 250ms, 4 strobes = 1000ms) */
 };
+
+/* Calculate strobe timing from heartbeat interval */
+#define STROBE_PERIOD_MS (MESH_CONFIG_HEARTBEAT_INTERVAL / 4)  /* 4 strobes per heartbeat cycle */
+#define STROBE_DURATION_ON_MS (MESH_CONFIG_HEARTBEAT_INTERVAL / 8)  /* Half of strobe period */
+#define STROBE_DURATION_OFF_MS (MESH_CONFIG_HEARTBEAT_INTERVAL / 8)  /* Half of strobe period */
 
 /* State variables */
 static esp_timer_handle_t strobe_timer = NULL;
@@ -57,6 +59,52 @@ static esp_err_t strobe_timer_start(void);
 static esp_err_t strobe_timer_stop(void);
 static esp_err_t strobe_start(void);
 static esp_err_t strobe_stop(void);
+
+/*******************************************************
+ *                Heartbeat Handler
+ *******************************************************/
+
+/**
+ * @brief Handle heartbeat from root node for strobe effect synchronization
+ *
+ * This function processes heartbeat messages to synchronize the strobe effect
+ * cycle across all mesh nodes. It corrects drift by resetting the cycle start time
+ * when the counter changes, ensuring perfect synchronization.
+ *
+ * The heartbeat handler only corrects synchronization - the local heartbeat timer
+ * continues to drive the main timing. This ensures graceful degradation during
+ * mesh disconnection.
+ *
+ * @param pointer Heartbeat pointer (unused for this plugin, for sequence plugin compatibility)
+ * @param counter Heartbeat counter value (0-255, wraps)
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t effect_strobe_plugin_handle_heartbeat(uint8_t pointer, uint8_t counter)
+{
+    (void)pointer;  /* Pointer is unused for this plugin, kept for sequence plugin compatibility */
+
+    /* Only process heartbeat if plugin is active */
+    if (!plugin_is_active("effect_strobe")) {
+        ESP_LOGD(TAG, "Heartbeat received but strobe plugin not active, ignoring");
+        return ESP_OK;
+    }
+
+    /* Read current local heartbeat counter (should match received counter after mesh_common_set_local_heartbeat_counter()) */
+    uint8_t current_counter = mesh_common_get_local_heartbeat_counter();
+
+    /* Check if counter has changed (indicating mesh synchronization or new cycle) */
+    /* Counter normally increments by 1 each heartbeat interval, but may jump when synchronized */
+    if (current_counter != strobe_last_counter) {
+        /* Counter changed - reset cycle start time to synchronize with mesh (correct drift) */
+        strobe_cycle_start_us = esp_timer_get_time();
+        strobe_last_counter = current_counter;
+        ESP_LOGD(TAG, "Heartbeat received - counter: %u, cycle start time reset for synchronization", current_counter);
+    } else {
+        ESP_LOGD(TAG, "Heartbeat received - counter: %u (no change, already synchronized)", current_counter);
+    }
+
+    return ESP_OK;
+}
 
 /*******************************************************
  *                Timer Management
@@ -135,8 +183,9 @@ static esp_err_t strobe_timer_stop(void)
  *
  * This callback fires every strobe_update_interval_ms (20ms) when the plugin is active.
  * It reads the synchronized local heartbeat counter to determine the strobe cycle progress.
- * Each complete strobe cycle (4 strobes) takes exactly 1 heartbeat interval (1000ms).
- * Each strobe = 250ms (125ms on, 125ms off).
+ * Each complete strobe cycle (4 strobes) takes exactly 1 heartbeat interval (MESH_CONFIG_HEARTBEAT_INTERVAL).
+ * Each strobe period = MESH_CONFIG_HEARTBEAT_INTERVAL / 4.
+ * Each strobe on/off duration = MESH_CONFIG_HEARTBEAT_INTERVAL / 8.
  * The counter is used to synchronize cycles across all nodes, while the timer provides smooth updates.
  */
 static void strobe_timer_callback(void *arg)
@@ -184,11 +233,11 @@ static void strobe_timer_callback(void *arg)
     }
 
     /* Calculate position within strobe cycle */
-    uint32_t strobe_duration_ms = strobe_defaults.duration_on_ms + strobe_defaults.duration_off_ms; /* 250ms per strobe */
-    uint32_t strobe_position_ms = cycle_progress_ms % strobe_duration_ms; /* Position within current strobe (0-250ms) */
+    uint32_t strobe_duration_ms = STROBE_DURATION_ON_MS + STROBE_DURATION_OFF_MS; /* STROBE_PERIOD_MS per strobe */
+    uint32_t strobe_position_ms = cycle_progress_ms % strobe_duration_ms; /* Position within current strobe */
 
     /* Determine if strobe is on or off based on position within strobe */
-    bool strobe_is_on = (strobe_position_ms < strobe_defaults.duration_on_ms);
+    bool strobe_is_on = (strobe_position_ms < STROBE_DURATION_ON_MS);
 
     /* Update RGB LED based on strobe state */
     if (strobe_is_on) {
@@ -226,7 +275,7 @@ static esp_err_t strobe_start(void)
     ESP_LOGI(TAG, "Strobe effect started: on(%d,%d,%d) off(%d,%d,%d) on_ms=%u off_ms=%u (4 strobes per %ums)",
              strobe_defaults.r_on, strobe_defaults.g_on, strobe_defaults.b_on,
              strobe_defaults.r_off, strobe_defaults.g_off, strobe_defaults.b_off,
-             strobe_defaults.duration_on_ms, strobe_defaults.duration_off_ms,
+             STROBE_DURATION_ON_MS, STROBE_DURATION_OFF_MS,
              MESH_CONFIG_HEARTBEAT_INTERVAL);
     return ESP_OK;
 }

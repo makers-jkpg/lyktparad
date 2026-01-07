@@ -38,4 +38,25 @@
  */
 void effect_fade_plugin_register(void);
 
+/*******************************************************
+ *                Heartbeat Handler
+ *******************************************************/
+
+/**
+ * @brief Handle heartbeat from root node for fade effect synchronization
+ *
+ * This function processes heartbeat messages to synchronize the fade effect
+ * cycle across all mesh nodes. It corrects drift by resetting the cycle start time
+ * when the counter changes, ensuring perfect synchronization.
+ *
+ * The heartbeat handler only corrects synchronization - the local heartbeat timer
+ * continues to drive the main timing. This ensures graceful degradation during
+ * mesh disconnection.
+ *
+ * @param pointer Heartbeat pointer (unused for this plugin, for sequence plugin compatibility)
+ * @param counter Heartbeat counter value (0-255, wraps)
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t effect_fade_plugin_handle_heartbeat(uint8_t pointer, uint8_t counter);
+
 #endif /* __EFFECT_FADE_PLUGIN_H__ */
