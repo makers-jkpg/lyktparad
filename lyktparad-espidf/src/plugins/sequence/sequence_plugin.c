@@ -110,6 +110,7 @@ static uint8_t sequence_length = 16;  /* Sequence length in rows (1-16), default
 static uint16_t sequence_pointer = 0;  /* Current position in sequence (0-255) */
 static esp_timer_handle_t sequence_timer = NULL;  /* Timer handle for sequence playback */
 static bool sequence_active = false;  /* Playback state */
+static uint8_t beat_counter = 0;  /* BEAT command counter (0-255, wraps around) */
 
 /* Forward declarations */
 static void sequence_timer_cb(void *arg);
@@ -511,8 +512,8 @@ static esp_err_t sequence_on_reset(void)
 
 static esp_err_t sequence_on_beat(uint8_t *data, uint16_t len)
 {
-    if (data == NULL || len != 1) {
-        ESP_LOGE(TAG, "Invalid BEAT command data: data=%p, len=%d (expected len=1 for pointer)", data, len);
+    if (data == NULL || len != 2) {
+        ESP_LOGE(TAG, "Invalid BEAT command data: data=%p, len=%d (expected len=2 for pointer + counter)", data, len);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -524,6 +525,7 @@ static esp_err_t sequence_on_beat(uint8_t *data, uint16_t len)
 
     /* Child node: update pointer from BEAT data */
     uint8_t pointer = data[0];
+    uint8_t counter = data[1];
     if (sequence_length == 0) {
         ESP_LOGE(TAG, "No sequence data available for BEAT (length=0)");
         return ESP_ERR_INVALID_STATE;
@@ -537,7 +539,7 @@ static esp_err_t sequence_on_beat(uint8_t *data, uint16_t len)
     }
 
     sequence_pointer = pointer;
-    ESP_LOGD(TAG, "BEAT received - pointer updated to %d", sequence_pointer);
+    ESP_LOGD(TAG, "BEAT received - pointer updated to %d, counter: %d", sequence_pointer, counter);
 
     return ESP_OK;
 }
@@ -869,10 +871,13 @@ esp_err_t sequence_plugin_root_broadcast_beat(void)
     tx_buf[0] = sequence_plugin_id;  /* Plugin ID */
     tx_buf[1] = PLUGIN_CMD_BEAT;  /* Command byte */
     tx_buf[2] = sequence_pointer & 0xFF;  /* Pointer */
+    uint8_t counter_sent = beat_counter;  /* Save counter value for logging */
+    tx_buf[3] = beat_counter;  /* Counter (0-255) */
+    beat_counter = (beat_counter + 1) % 256;  /* Increment and wrap counter */
 
     mesh_data_t data;
     data.data = tx_buf;
-    data.size = 3;  /* Plugin ID(1) + CMD(1) + pointer(1) */
+    data.size = 4;  /* Plugin ID(1) + CMD(1) + pointer(1) + counter(1) */
     data.proto = MESH_PROTO_BIN;
     data.tos = MESH_TOS_P2P;
 
@@ -888,8 +893,8 @@ esp_err_t sequence_plugin_root_broadcast_beat(void)
         }
     }
 
-    ESP_LOGI(TAG, "BEAT command broadcast - pointer:%d, sent to %d/%d child nodes (success:%d, failed:%d)",
-             sequence_pointer, success_count, child_node_count, success_count, fail_count);
+    ESP_LOGI(TAG, "BEAT command broadcast - pointer:%d, counter:%d, sent to %d/%d child nodes (success:%d, failed:%d)",
+             sequence_pointer, counter_sent, success_count, child_node_count, success_count, fail_count);
 
     return ESP_OK;
 }

@@ -59,12 +59,12 @@ static void strobe_set_rgb(uint8_t r, uint8_t g, uint8_t b);
 
 /**
  * @brief Set RGB LED color on all available LED systems
- * 
+ *
  * This function detects which RGB LED systems are enabled at compile-time
  * and sets the color on all available systems:
  * - Neopixel (always available via plugin_light_set_rgb)
  * - Common-cathode/anode RGB LED (if RGB_ENABLE is defined, via plugin_set_rgb_led)
- * 
+ *
  * @param r Red component (0-255)
  * @param g Green component (0-255)
  * @param b Blue component (0-255)
@@ -73,7 +73,7 @@ static void strobe_set_rgb(uint8_t r, uint8_t g, uint8_t b)
 {
     /* Neopixel is always available */
     plugin_light_set_rgb(r, g, b);
-    
+
 #ifdef RGB_ENABLE
     /* Common-cathode/anode RGB LED is available if RGB_ENABLE is defined */
     plugin_set_rgb_led((int)r, (int)g, (int)b);

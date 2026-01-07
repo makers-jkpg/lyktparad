@@ -61,7 +61,7 @@
  *   - LENGTH: Optional 2-byte length prefix for variable-length data (network byte order, only for DATA commands)
  *   - DATA: Optional command-specific data
  *   - Total size: Maximum 1024 bytes (including all fields)
- *   - Fixed-size commands: START, PAUSE, RESET, BEAT (2 bytes: PLUGIN_ID + CMD)
+ *   - Fixed-size commands: START, PAUSE, RESET (2 bytes: PLUGIN_ID + CMD), BEAT (4 bytes: PLUGIN_ID + CMD + POINTER + COUNTER)
  *   - Variable-size commands: DATA (4 bytes header: PLUGIN_ID + CMD + LENGTH + data)
  *
  * 0xEF-0xFF: Reserved (internal mesh use)

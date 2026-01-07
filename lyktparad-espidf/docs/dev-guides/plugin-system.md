@@ -129,9 +129,18 @@ The plugin protocol uses a self-contained format where the plugin ID is included
 - **DATA** (N bytes, optional): Command-specific data
 - **Total size**: Maximum 1024 bytes (including all fields)
 
-**Fixed-size commands** (START, PAUSE, RESET, BEAT): 2 bytes total (PLUGIN_ID + CMD)
+**Fixed-size commands**: 
+- START, PAUSE, RESET: 2 bytes total (PLUGIN_ID + CMD)
+- BEAT: 4 bytes total (PLUGIN_ID + CMD + POINTER + COUNTER)
+  - POINTER (1 byte): Current position pointer (0-255)
+  - COUNTER (1 byte): Synchronization counter (0-255, wraps around, maintained by root node)
 
 **Variable-size commands** (DATA): 4 bytes header (PLUGIN_ID + CMD + LENGTH) + data
+
+**BEAT Command Details**:
+- The BEAT command includes both a pointer and a counter for synchronization
+- The counter increments on the root node (0-255, wraps to 0) and is broadcast to child nodes
+- The `on_beat` callback receives `data[0]` = pointer, `data[1]` = counter, with `len = 2`
 
 **Mutual Exclusivity**: When a START command is received for a plugin, the system automatically stops any other running plugin before activating the target plugin.
 
@@ -469,7 +478,7 @@ void my_plugin_plugin_register(void)
             .on_start = NULL,  /* Optional - called when START command received */
             .on_pause = NULL,  /* Optional - called when PAUSE command received */
             .on_reset = NULL,  /* Optional - called when RESET command received */
-            .on_beat = NULL,  /* Optional - called when BEAT command received */
+            .on_beat = NULL,  /* Optional - called when BEAT command received (receives data[0]=pointer, data[1]=counter, len=2) */
             .on_activate = NULL,  /* Optional - called when plugin activated */
             .on_deactivate = NULL,  /* Optional - called when plugin deactivated */
             .timer_callback = my_plugin_timer_callback,     /* Optional */

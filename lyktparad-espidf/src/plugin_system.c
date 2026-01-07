@@ -485,11 +485,11 @@ esp_err_t plugin_system_handle_plugin_command(uint8_t *data, uint16_t len)
                 ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_beat callback", plugin->name);
                 return ESP_ERR_INVALID_STATE;
             }
-            if (len < 3) {
-                ESP_LOGE(TAG, "Plugin command routing failed: BEAT command requires len>=3, got %d", len);
+            if (len < 4) {
+                ESP_LOGE(TAG, "Plugin command routing failed: BEAT command requires len>=4, got %d", len);
                 return ESP_ERR_INVALID_ARG;
             }
-            /* Pass remaining data (skip plugin ID and command bytes) to on_beat */
+            /* Pass remaining data (skip plugin ID and command bytes) to on_beat: pointer + counter */
             err = plugin->callbacks.on_beat(&data[2], len - 2);
             break;
 

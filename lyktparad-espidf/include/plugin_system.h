@@ -144,8 +144,8 @@ typedef struct {
      *
      * Called when PLUGIN_CMD_BEAT (0x05) is received via plugin protocol.
      *
-     * @param data Command data (data[0] = PLUGIN_CMD_BEAT, data[1] onwards = beat data)
-     * @param len Data length (includes command byte)
+     * @param data Command data (data[0] = pointer, data[1] = counter (0-255))
+     * @param len Data length (expected 2: pointer + counter)
      * @return ESP_OK on success, error code on failure
      */
     esp_err_t (*on_beat)(uint8_t *data, uint16_t len);
