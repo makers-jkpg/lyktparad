@@ -76,11 +76,23 @@ function handleApiError(error, feedbackElement, retryCallback) {
 // API functions
 function updateNodeCount() {
   fetch('/api/nodes')
-    .then(response => response.json())
+    .then(response => {
+      if (!response.ok) {
+        throw new Error('HTTP error: ' + response.status);
+      }
+      return response.json();
+    })
     .then(data => {
+      if (typeof data.nodes !== 'number') {
+        throw new Error('Invalid response: nodes is not a number');
+      }
       const nodeCount = document.getElementById('nodeCount');
       if (nodeCount) {
         nodeCount.textContent = data.nodes;
+      }
+      const infoNodeCount = document.getElementById('infoNodeCount');
+      if (infoNodeCount) {
+        infoNodeCount.textContent = data.nodes;
       }
     })
     .catch(err => {
@@ -1015,6 +1027,10 @@ function switchTab(tabName) {
   if (targetContent) {
     targetContent.classList.add('active');
     targetContent.removeAttribute('hidden');
+    // Update node count immediately when switching to Info tab
+    if (tabName === 'info') {
+      updateNodeCount();
+    }
   } else {
     console.warn(`Tab content not found for tab: ${tabName}`);
   }
