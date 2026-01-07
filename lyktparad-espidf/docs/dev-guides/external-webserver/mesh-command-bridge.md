@@ -43,7 +43,7 @@ The Mesh Command Bridge enables transparent forwarding of all mesh commands from
 ```
 ┌─────────────────────────────────────┐
 │  Mesh Command Sender                │
-│  (mesh_root.c, mode_sequence_root.c,│
+│  (mesh_root.c, sequence_plugin.c,  │
 │   mesh_ota.c)                       │
 │                                     │
 │  mesh_send_with_bridge() call       │
@@ -84,12 +84,12 @@ The Mesh Command Bridge enables transparent forwarding of all mesh commands from
 
 **Integration Points**:
 - `mesh_root.c` - Heartbeat and RGB command sending
-- `mode_sequence_root.c` - Sequence, beat, and control command sending
+- `sequence_plugin.c` - Sequence and control command sending (via plugin system)
 - `mesh_ota.c` - All OTA command sending
 
 ### Command Flow
 
-1. **Command Origin**: Mesh commands originate from various modules (mesh_root.c, mode_sequence_root.c, mesh_ota.c)
+1. **Command Origin**: Mesh commands originate from various modules (mesh_root.c, sequence_plugin.c, mesh_ota.c)
 
 2. **Wrapper Call**: All mesh sends go through `mesh_send_with_bridge()` wrapper function
 
@@ -338,25 +338,24 @@ The checksum is stored in network byte order (big-endian) at the end of the pack
 - Payload: 3 bytes (R, G, B values)
 - Trigger: HTTP POST to `/api/color` endpoint
 
-### mode_sequence_root.c
+### sequence_plugin.c
 
-**Sequence Command** (line ~319):
-- Function: `mode_sequence_root_broadcast_sequence()`
-- Command: `MESH_CMD_SEQUENCE` (0x04)
-- Payload: Variable length (rhythm: 1 + num_rows: 1 + color_data: N)
+**Sequence Command** (via plugin system):
+- Function: `sequence_plugin_root_store_and_broadcast()`
+- Command: Plugin command (plugin ID + `PLUGIN_CMD_DATA`)
+- Payload: Variable length (plugin ID: 1 + CMD: 1 + LENGTH: 2 + rhythm: 1 + num_rows: 1 + color_data: N)
 - Trigger: HTTP POST to `/api/sequence` endpoint
 
-**Sequence Beat Command** (line ~378):
-- Function: `mode_sequence_root_broadcast_beat()`
-- Command: `MESH_CMD_SEQUENCE_BEAT` (0x08)
-- Payload: 1 byte (pointer position)
-- Frequency: At row boundaries during playback
+**Sequence Synchronization**:
+- Sequence pointer included in heartbeat payload (not separate BEAT command)
+- Function: `sequence_plugin_get_pointer_for_heartbeat()`
+- Frequency: Based on heartbeat interval
 
-**Sequence Control Commands** (line ~433):
-- Function: `mode_sequence_root_broadcast_control()`
-- Commands: `MESH_CMD_SEQUENCE_START` (0x05), `MESH_CMD_SEQUENCE_STOP` (0x06), `MESH_CMD_SEQUENCE_RESET` (0x07)
-- Payload: None (1 byte command only)
-- Trigger: HTTP POST to `/api/sequence/start`, `/api/sequence/stop`, `/api/sequence/reset`
+**Sequence Control Commands** (via plugin system):
+- Functions: `sequence_plugin_root_start()`, `sequence_plugin_root_pause()`, `sequence_plugin_root_reset()`
+- Commands: Plugin commands (plugin ID + `PLUGIN_CMD_START`, `PLUGIN_CMD_PAUSE`, `PLUGIN_CMD_RESET`)
+- Payload: Plugin ID + command byte
+- Trigger: HTTP POST to `/api/sequence/start`, `/api/sequence/pause`, `/api/sequence/reset`
 
 ### mesh_ota.c
 

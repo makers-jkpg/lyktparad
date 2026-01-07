@@ -1196,7 +1196,7 @@ When registration is lost or root node role changes:
 
 API commands are processed by calling existing mesh operation functions:
 - Color commands: `mesh_root_handle_rgb_command()`
-- Sequence commands: `mode_sequence_root_*()` functions
+- Sequence commands: `sequence_plugin_root_*()` functions
 - OTA commands: `mesh_ota_*()` functions
 - Node list: `esp_mesh_get_routing_table()`
 

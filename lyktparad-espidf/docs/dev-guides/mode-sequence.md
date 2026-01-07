@@ -29,60 +29,51 @@ Sequence mode enables synchronized playback of color sequences across all nodes 
 
 **Packed color format**: Two squares are packed into 3 bytes, reducing storage requirements by 50% compared to storing RGB values separately.
 
-**BEAT synchronization**: Root node sends BEAT messages at row boundaries to correct timer drift while allowing nodes to play independently if BEAT messages are lost.
+**Heartbeat synchronization**: Root node includes sequence pointer in heartbeat messages to correct timer drift while allowing nodes to play independently if heartbeat messages are lost.
 
-**Module separation**: Root and child node functionality is separated into different modules (`mode_sequence_root.c` and `mode_sequence_node.c`) for clear separation of concerns.
+**Plugin architecture**: Sequence functionality is implemented as a plugin (`sequence_plugin.c`) that handles both root and child node logic through the plugin system.
 
 ## Architecture
 
 ### File Structure
 
-The sequence mode implementation consists of three main files:
+The sequence mode implementation consists of the following files:
 
-- **`src/mode_sequence_root.c`**: Root node implementation
-  - HTTP endpoint integration
+- **`src/plugins/sequence/sequence_plugin.c`**: Plugin implementation
+  - Handles both root and child node logic
   - Sequence storage and broadcasting
   - Playback timer management
-  - BEAT message generation
+  - Heartbeat synchronization integration
+  - Plugin system integration
 
-- **`src/mode_sequence_node.c`**: Child node implementation
-  - Mesh command reception and processing
-  - Playback timer management
-  - BEAT message handling
-
-- **`include/node_sequence.h`**: Shared API definitions
-  - Function declarations
-  - Helper functions for size calculations
+- **`src/plugins/sequence/sequence_plugin.h`**: Plugin API definitions
+  - Function declarations for API handlers
+  - Plugin registration function
   - Constants and data structures
 
 ### Module Responsibilities
 
-**Root Node** (`mode_sequence_root.c`):
-- Receives sequence data via HTTP POST `/api/sequence`
+**Plugin Implementation** (`sequence_plugin.c`):
+- Handles both root and child node logic through plugin callbacks
+- Receives sequence data via HTTP POST `/api/sequence` (root node)
 - Stores sequence data locally
-- Broadcasts sequence to all child nodes via mesh network
-- Manages root node playback timer
-- Generates and broadcasts BEAT messages at row boundaries
-- Provides pointer query endpoint (`GET /api/sequence/pointer`)
-- Internal function `mode_sequence_root_broadcast_control()` used by start/stop/reset functions
+- Broadcasts sequence to all child nodes via mesh network (root node)
+- Manages playback timer for both root and child nodes
+- Integrates with heartbeat system for synchronization
+- Provides pointer query endpoint (`GET /api/sequence/pointer`) (root node)
+- Processes plugin commands (PLUGIN_CMD_DATA, PLUGIN_CMD_START, etc.)
+- Handles heartbeat synchronization (child nodes)
 
-**Child Node** (`mode_sequence_node.c`):
-- Receives sequence commands from mesh network
-- Stores sequence data locally
-- Manages child node playback timer
-- Handles control commands (START/STOP/RESET/BEAT)
-- Processes BEAT messages for drift correction
+**Plugin System Integration**:
+- Plugin registered with plugin system during initialization
+- Commands routed through plugin system
+- Lifecycle managed by plugin system (activate/deactivate)
+- Control commands (START/PAUSE/RESET) handled via plugin callbacks
 
 **Shared Functionality**:
-- Color extraction algorithm (same in both modules)
-- Size calculation helpers (in header file)
+- Color extraction algorithm
+- Size calculation helpers (via plugin helper callbacks)
 - Data format definitions
-
-### Separation of Concerns
-
-- **Root-specific**: HTTP handling, mesh broadcasting, BEAT generation
-- **Node-specific**: Mesh command reception, BEAT processing
-- **Shared**: Color extraction, data format handling, size calculations
 
 ## Data Formats
 
@@ -176,21 +167,14 @@ Rhythm values are encoded in **10ms units**:
 
 ### Variable-Length Handling
 
-Size calculation functions (in `node_sequence.h`):
+Size calculation functions (via plugin helper callbacks):
 
-```c
-static inline uint16_t sequence_color_data_size(uint8_t num_rows) {
-    return (uint16_t)((num_rows * 16 / 2) * 3);  // num_rows * 24
-}
+The plugin provides helper functions accessible via `plugin_get_helper()`:
+- `SEQUENCE_HELPER_COLOR_DATA_SIZE`: Returns color data size for given number of rows
+- `SEQUENCE_HELPER_PAYLOAD_SIZE`: Returns HTTP payload size
+- `SEQUENCE_HELPER_MESH_CMD_SIZE`: Returns mesh command size
 
-static inline uint16_t sequence_payload_size(uint8_t num_rows) {
-    return 2 + sequence_color_data_size(num_rows);  // HTTP payload
-}
-
-static inline uint16_t sequence_mesh_cmd_size(uint8_t num_rows) {
-    return 3 + sequence_color_data_size(num_rows);  // Mesh command
-}
-```
+Formula: `(num_rows * 16 / 2) * 3 = num_rows * 24`
 
 **Validation**:
 - HTTP endpoint validates `num_rows` before calculating expected size
@@ -223,9 +207,9 @@ static inline uint16_t sequence_mesh_cmd_size(uint8_t num_rows) {
      - G = `(packed_data[byte_offset + 2] >> 4) & 0x0F`
      - B = `packed_data[byte_offset + 2] & 0x0F`
 
-**Implementation**: See `extract_square_rgb()` in both `mode_sequence_root.c` and `mode_sequence_node.c`
+**Implementation**: See `extract_square_rgb()` in `sequence_plugin.c`
 
-**Note**: Root node implementation has a hardcoded 256 check instead of using `sequence_length * 16` like the child node. This should be fixed to support variable-length sequences correctly.
+**Note**: The plugin implementation correctly uses `sequence_length * 16` for validation, supporting variable-length sequences.
 
 ### Color Scaling Algorithm
 
@@ -274,43 +258,42 @@ if ((sequence_pointer % 16) == 0 && sequence_pointer < max_squares) {
 - Pointer at max_squares: Wraps to 0
 - Pointer validation: Check `pointer < max_squares` before BEAT send
 
-### BEAT Synchronization Algorithm
+### Heartbeat Synchronization Algorithm
 
-**When BEAT is Sent**:
-- Root node timer callback detects row boundary
-- Condition: `(sequence_pointer % 16) == 0 && sequence_pointer < max_squares`
-- BEAT contains current pointer value
+**When Pointer is Included in Heartbeat**:
+- Root node timer callback increments pointer
+- Pointer value included in heartbeat payload via `sequence_plugin_get_pointer_for_heartbeat()`
+- Heartbeat sent periodically by mesh heartbeat system
 
-**BEAT Message Processing (Child Node)**:
+**Heartbeat Message Processing (Child Node)**:
 
-1. **Validate sequence is active**: Ignore if not active
+1. **Validate plugin is active**: Ignore if sequence plugin not active
 2. **Validate pointer**: Check `received_pointer < max_squares`
 3. **Update pointer**: `sequence_pointer = received_pointer`
-4. **Reset timer**: Stop, delete, and recreate timer with same rhythm
-5. **Resume playback**: Timer continues from new pointer position
+4. **Continue playback**: Timer continues without reset (heartbeat provides pointer sync)
 
 **Drift Correction**:
 - **Why drift occurs**: Timer inaccuracies accumulate over time
-- **How BEAT corrects**: Pointer update + timer reset synchronizes all nodes
-- **Frequency**: Once per row (every 16 squares)
+- **How heartbeat corrects**: Pointer update synchronizes all nodes
+- **Frequency**: Based on heartbeat interval (typically more frequent than BEAT)
 - **Effect**: Prevents long-term drift while allowing smooth playback
 
 **Independent Playback**:
-- Child nodes continue playing if BEAT messages are lost
+- Child nodes continue playing if heartbeat messages are lost
 - Timer runs independently with local rhythm value
-- Resynchronization occurs on next received BEAT message
-- No error if BEAT is lost (graceful degradation)
+- Resynchronization occurs on next received heartbeat message
+- No error if heartbeat is lost (graceful degradation)
 
 ## API Reference
 
-### Root Node Functions
+### Root Node Functions (for API handlers)
 
-#### `mode_sequence_root_store_and_broadcast()`
+#### `sequence_plugin_root_store_and_broadcast()`
 
 **Signature**:
 ```c
-esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_rows,
-                                                  uint8_t *color_data, uint16_t color_data_len);
+esp_err_t sequence_plugin_root_store_and_broadcast(uint8_t rhythm, uint8_t num_rows,
+                                                    uint8_t *color_data, uint16_t color_data_len);
 ```
 
 **Parameters**:
@@ -327,53 +310,54 @@ esp_err_t mode_sequence_root_store_and_broadcast(uint8_t rhythm, uint8_t num_row
 - Stops existing timer if running
 - Resets pointer to 0
 - Starts root node playback timer
-- Broadcasts sequence to all child nodes via mesh network
+- Broadcasts sequence to all child nodes via mesh network using plugin system
 - Returns success even if no child nodes exist
 
 **Error Codes**:
 - `ESP_ERR_INVALID_STATE`: Not root node
 - `ESP_ERR_INVALID_ARG`: Invalid rhythm (0), num_rows (<1 or >16), or NULL color_data
+- `ESP_ERR_INVALID_SIZE`: Color data length exceeds maximum
 
-#### `mode_sequence_root_start()`
+#### `sequence_plugin_root_start()`
 
 **Signature**:
 ```c
-esp_err_t mode_sequence_root_start(void);
+esp_err_t sequence_plugin_root_start(void);
 ```
 
 **Returns**: `ESP_OK` on success, error code on failure
 
 **Behavior**:
 - Stops existing timer if running
-- Resets pointer to 0
+- Validates and preserves pointer (resets if out of bounds)
 - Starts playback timer
-- Broadcasts START command to all child nodes
+- Plugin system automatically broadcasts START command to all child nodes
 
 **Error Codes**:
 - `ESP_ERR_INVALID_STATE`: Not root node or no sequence data
 - Timer creation/start errors
 
-#### `mode_sequence_root_stop()`
+#### `sequence_plugin_root_pause()`
 
 **Signature**:
 ```c
-esp_err_t mode_sequence_root_stop(void);
+esp_err_t sequence_plugin_root_pause(void);
 ```
 
 **Returns**: `ESP_OK` on success
 
 **Behavior**:
 - Stops and deletes playback timer
-- Broadcasts STOP command to all child nodes
+- Plugin system automatically broadcasts PAUSE command to all child nodes
 
 **Error Codes**:
 - `ESP_ERR_INVALID_STATE`: Not root node
 
-#### `mode_sequence_root_reset()`
+#### `sequence_plugin_root_reset()`
 
 **Signature**:
 ```c
-esp_err_t mode_sequence_root_reset(void);
+esp_err_t sequence_plugin_root_reset(void);
 ```
 
 **Returns**: `ESP_OK` on success, error code on failure
@@ -381,33 +365,16 @@ esp_err_t mode_sequence_root_reset(void);
 **Behavior**:
 - Resets pointer to 0
 - If sequence is active, restarts timer from beginning
-- Broadcasts RESET command to all child nodes
+- Plugin system automatically broadcasts RESET command to all child nodes
 
 **Error Codes**:
 - `ESP_ERR_INVALID_STATE`: Not root node
 
-#### `mode_sequence_root_broadcast_beat()`
+#### `sequence_plugin_root_get_pointer()`
 
 **Signature**:
 ```c
-esp_err_t mode_sequence_root_broadcast_beat(void);
-```
-
-**Returns**: `ESP_OK` on success, error code on failure
-
-**Behavior**:
-- Validates pointer is within range
-- Broadcasts BEAT command with current pointer value to all child nodes
-- Called automatically by timer callback at row boundaries
-
-**Error Codes**:
-- `ESP_ERR_INVALID_STATE`: Not root node
-
-#### `mode_sequence_root_get_pointer()`
-
-**Signature**:
-```c
-uint16_t mode_sequence_root_get_pointer(void);
+uint16_t sequence_plugin_root_get_pointer(void);
 ```
 
 **Returns**: Current sequence pointer value (0-255)
@@ -416,11 +383,11 @@ uint16_t mode_sequence_root_get_pointer(void);
 - Returns current pointer position
 - Used by HTTP endpoint for web UI indicator
 
-#### `mode_sequence_root_is_active()`
+#### `sequence_plugin_root_is_active()`
 
 **Signature**:
 ```c
-bool mode_sequence_root_is_active(void);
+bool sequence_plugin_root_is_active(void);
 ```
 
 **Returns**: `true` if sequence is active, `false` otherwise
@@ -429,171 +396,69 @@ bool mode_sequence_root_is_active(void);
 - Returns current playback state
 - Used to check if heartbeat should be disabled
 
-### Child Node Functions
-
-#### `mode_sequence_node_handle_command()`
+#### `sequence_plugin_get_pointer_for_heartbeat()`
 
 **Signature**:
 ```c
-esp_err_t mode_sequence_node_handle_command(uint8_t cmd, uint8_t *data, uint16_t len);
+uint8_t sequence_plugin_get_pointer_for_heartbeat(void);
+```
+
+**Returns**: Sequence pointer (0-255) if plugin is active, 0 otherwise
+
+**Behavior**:
+- Returns current sequence pointer as 1-byte value if plugin is active
+- Returns 0 if plugin is inactive
+- Used by heartbeat timer to include sequence pointer in heartbeat payload
+
+### Child Node Functions
+
+#### `sequence_plugin_handle_heartbeat()`
+
+**Signature**:
+```c
+esp_err_t sequence_plugin_handle_heartbeat(uint8_t pointer, uint8_t counter);
 ```
 
 **Parameters**:
-- `cmd`: Command byte (should be `MESH_CMD_SEQUENCE`)
-- `data`: Pointer to command data (variable length)
-- `len`: Length of data
+- `pointer`: Sequence pointer from heartbeat (0-255)
+- `counter`: Synchronization counter from heartbeat (0-255)
 
-**Returns**: `ESP_OK` on success, `ESP_FAIL` on validation failure
+**Returns**: `ESP_OK` on success, error code on failure
 
 **Behavior**:
-- Validates command format and size
-- Extracts rhythm, num_rows, and color_data
-- Stops existing timer if running
-- Stores sequence data locally
-- Resets pointer to 0
-- Starts playback timer
+- Validates plugin is active (ignores if not active)
+- Validates pointer is within range
+- Updates local pointer to received value
+- Continues playback without timer reset (heartbeat provides pointer sync)
 
 **Error Codes**:
-- `ESP_FAIL`: Validation failure (invalid cmd, size, rhythm, or num_rows)
-- Timer creation/start errors
+- `ESP_ERR_INVALID_STATE`: Root node (should not be called) or no sequence data
+- `ESP_ERR_INVALID_ARG`: Invalid pointer value
 
-#### `mode_sequence_node_stop()`
+#### `sequence_plugin_node_pause()`
 
 **Signature**:
 ```c
-void mode_sequence_node_stop(void);
+void sequence_plugin_node_pause(void);
 ```
 
 **Behavior**:
 - Stops and deletes playback timer
-- Clears active state
 - Called externally (e.g., when RGB command is received)
 
-#### `mode_sequence_node_handle_control()`
+### Plugin Callbacks
 
-**Signature**:
-```c
-esp_err_t mode_sequence_node_handle_control(uint8_t cmd, uint8_t *data, uint16_t len);
-```
+The sequence plugin implements the following plugin system callbacks:
 
-**Parameters**:
-- `cmd`: Command byte (START/STOP/RESET/BEAT)
-- `data`: Pointer to command data
-- `len`: Length of data (1 for START/STOP/RESET, 2 for BEAT)
-
-**Returns**: `ESP_OK` on success, error code on failure
-
-**Behavior**:
-- Routes to appropriate handler based on command
-- Validates command and data size
-- Processes control command
-
-**Error Codes**:
-- `ESP_ERR_INVALID_ARG`: Invalid command or data size
-
-#### `mode_sequence_node_start()`
-
-**Signature**:
-```c
-esp_err_t mode_sequence_node_start(void);
-```
-
-**Returns**: `ESP_OK` on success, error code on failure
-
-**Behavior**:
-- Stops existing timer if running
-- Resets pointer to 0
-- Starts playback timer
-
-**Error Codes**:
-- `ESP_ERR_INVALID_STATE`: No sequence data available
-- Timer creation/start errors
-
-#### `mode_sequence_node_reset()`
-
-**Signature**:
-```c
-esp_err_t mode_sequence_node_reset(void);
-```
-
-**Returns**: `ESP_OK` on success, error code on failure
-
-**Behavior**:
-- Resets pointer to 0
-- If sequence is active, restarts timer from beginning
-
-**Error Codes**:
-- Timer restart errors
-
-#### `mode_sequence_node_handle_beat()`
-
-**Signature**:
-```c
-esp_err_t mode_sequence_node_handle_beat(uint16_t received_pointer);
-```
-
-**Parameters**:
-- `received_pointer`: Pointer position from BEAT message (0-255)
-
-**Returns**: `ESP_OK` on success, error code on failure (ignored if sequence not active)
-
-**Behavior**:
-- Validates sequence is active (ignores if not active)
-- Validates pointer is within range
-- Updates local pointer to received value
-- Resets timer to resynchronize
-
-**Error Codes**:
-- `ESP_OK`: Sequence not active (not an error, just ignored)
-- `ESP_ERR_INVALID_ARG`: Invalid pointer value
-
-#### `mode_sequence_node_is_active()`
-
-**Signature**:
-```c
-bool mode_sequence_node_is_active(void);
-```
-
-**Returns**: `true` if sequence is active, `false` otherwise
-
-**Behavior**:
-- Returns current playback state
-- Used to check if heartbeat should be disabled
-
-### Helper Functions
-
-#### `sequence_color_data_size()`
-
-**Signature**:
-```c
-static inline uint16_t sequence_color_data_size(uint8_t num_rows);
-```
-
-**Returns**: Size of color data in bytes for given number of rows
-
-**Formula**: `(num_rows * 16 / 2) * 3 = num_rows * 24`
-
-#### `sequence_payload_size()`
-
-**Signature**:
-```c
-static inline uint16_t sequence_payload_size(uint8_t num_rows);
-```
-
-**Returns**: Size of HTTP payload in bytes
-
-**Formula**: `2 + sequence_color_data_size(num_rows)`
-
-#### `sequence_mesh_cmd_size()`
-
-**Signature**:
-```c
-static inline uint16_t sequence_mesh_cmd_size(uint8_t num_rows);
-```
-
-**Returns**: Size of mesh command in bytes
-
-**Formula**: `3 + sequence_color_data_size(num_rows)`
+- **`command_handler`**: Handles `PLUGIN_CMD_DATA` commands (sequence data storage)
+- **`on_start`**: Handles START command (root and child node logic)
+- **`on_pause`**: Handles PAUSE command (root and child node logic)
+- **`on_reset`**: Handles RESET command (root and child node logic)
+- **`on_stop`**: Handles STOP command
+- **`is_active`**: Returns current playback state
+- **`get_state`**: Returns sequence state (pointer, rhythm, length, active status)
+- **`execute_operation`**: Executes operations (STORE, START, PAUSE, RESET)
+- **`get_helper`**: Returns helper values (payload size, mesh cmd size, color data size)
 
 ## Integration Points
 
@@ -613,13 +478,13 @@ static inline uint16_t sequence_mesh_cmd_size(uint8_t num_rows);
    - Payload size matches expected size
    - Color data length matches expected size
 
-3. **Calls**: `mode_sequence_root_store_and_broadcast(rhythm, num_rows, color_data, color_data_len)`
+3. **Calls**: `sequence_plugin_root_store_and_broadcast(rhythm, num_rows, color_data, color_data_len)`
 
 4. **Returns**: JSON response `{"success": true}` or error message
 
 **GET /api/sequence/pointer** (`api_sequence_pointer_handler`):
 
-1. **Calls**: `mode_sequence_root_get_pointer()`
+1. **Calls**: `sequence_plugin_root_get_pointer()`
 2. **Returns**: Plain text pointer value (0-255)
 3. **Used by**: Web UI current square indicator
 
@@ -669,19 +534,19 @@ The web UI dynamically resizes the grid based on selected row count:
 
 **Command Reception** (`esp_mesh_p2p_rx_main`):
 
-1. **Detects SEQUENCE command**: `data.data[0] == MESH_CMD_SEQUENCE`
-2. **Extracts num_rows**: From `data.data[2]` to calculate expected size
-3. **Validates size**: Checks `data.size == expected_size`
-4. **Routes to handler**: Calls `mode_sequence_node_handle_command()`
+1. **Detects plugin command**: Command routed through plugin system
+2. **Plugin system routes**: Calls plugin's `command_handler` callback
+3. **Sequence plugin handles**: Processes `PLUGIN_CMD_DATA` commands
 
 **Control Command Handling**:
 
-1. **Detects control commands**: START/STOP/RESET (1 byte) or BEAT (2 bytes)
-2. **Routes to handler**: Calls `mode_sequence_node_handle_control()`
+1. **Detects plugin control commands**: START/PAUSE/RESET routed through plugin system
+2. **Plugin system routes**: Calls plugin's `on_start`, `on_pause`, or `on_reset` callbacks
+3. **Sequence plugin handles**: Processes control commands for root and child nodes
 
 **RGB Command Interaction**:
 
-- When RGB command received: Calls `mode_sequence_node_stop()` to stop sequence
+- When RGB command received: Calls `sequence_plugin_node_pause()` to stop sequence
 - Sequence mode takes priority during playback (heartbeat disabled)
 
 **File**: `src/mesh_root.c`
@@ -715,9 +580,10 @@ The web UI dynamically resizes the grid based on selected row count:
 
 **Heartbeat Handler**:
 
-- Checks `mode_sequence_node_is_active()` before processing heartbeat
+- Checks if sequence plugin is active before processing heartbeat
 - If sequence active: Skips LED changes (sequence controls LED)
 - If sequence not active: Normal heartbeat behavior (even/odd toggle)
+- Heartbeat includes sequence pointer if plugin is active
 
 **File**: `src/mesh_root.c`
 
@@ -731,21 +597,14 @@ The web UI dynamically resizes the grid based on selected row count:
 
 ### State Variables
 
-**Root Node** (`mode_sequence_root.c`):
+**Plugin Implementation** (`sequence_plugin.c`):
 - `sequence_rhythm`: Rhythm value in 10ms units (default: 25 = 250ms)
 - `sequence_colors[]`: Packed color data array (384 bytes max)
 - `sequence_length`: Number of rows (1-16, default: 16)
 - `sequence_pointer`: Current position (0-255)
 - `sequence_timer`: ESP timer handle (NULL when stopped)
 - `sequence_active`: Playback state (true when playing)
-
-**Child Node** (`mode_sequence_node.c`):
-- `sequence_rhythm`: Rhythm value (0 = not set)
-- `sequence_colors[]`: Packed color data array (384 bytes max)
-- `sequence_length`: Number of rows (1-16, default: 16)
-- `sequence_pointer`: Current position (0-255)
-- `sequence_timer`: ESP timer handle (NULL when stopped)
-- `sequence_active`: Playback state (true when playing)
+- `sequence_plugin_id`: Plugin ID assigned during registration
 
 ### State Machine
 
@@ -764,20 +623,20 @@ The web UI dynamically resizes the grid based on selected row count:
 **State Transitions**:
 
 1. **Store → Active**:
-   - `mode_sequence_root_store_and_broadcast()` or `mode_sequence_node_handle_command()`
+   - `sequence_plugin_root_store_and_broadcast()` or plugin `command_handler` callback
    - Stores data, starts timer, sets `sequence_active = true`
 
 2. **Active → Inactive**:
-   - `mode_sequence_root_stop()` or `mode_sequence_node_stop()`
+   - `sequence_plugin_root_pause()` or `sequence_plugin_node_pause()` or plugin `on_stop` callback
    - Stops timer, deletes timer, sets `sequence_active = false`
 
 3. **Active → Active** (reset):
-   - `mode_sequence_root_reset()` or `mode_sequence_node_reset()`
+   - `sequence_plugin_root_reset()` or plugin `on_reset` callback
    - Resets pointer, restarts timer if active
 
-4. **Active → Active** (BEAT sync):
-   - `mode_sequence_node_handle_beat()`
-   - Updates pointer, resets timer
+4. **Active → Active** (heartbeat sync):
+   - `sequence_plugin_handle_heartbeat()`
+   - Updates pointer, continues playback
 
 ### Timer Lifecycle
 
@@ -795,18 +654,19 @@ The web UI dynamically resizes the grid based on selected row count:
 - Sets `sequence_active = false`
 
 **Reset** (child node only):
-- Triggered by: BEAT message or RESET command
+- Triggered by: RESET command via plugin `on_reset` callback
 - Stops and deletes current timer
 - Creates new timer with same rhythm
 - Resets timer phase to synchronize
 
 **Callback**:
 - Called periodically by ESP timer
+- Validates plugin is active before processing
 - Extracts color for current square
 - Scales to 8-bit
 - Updates LED
 - Increments and wraps pointer
-- Sends BEAT at row boundaries (root node only)
+- Pointer included in heartbeat payload (root node only)
 
 ### Pointer Management
 
@@ -818,45 +678,43 @@ The web UI dynamically resizes the grid based on selected row count:
 - Incremented in timer callback: `sequence_pointer = (sequence_pointer + 1) % max_squares`
 - Wraps at sequence length boundary
 
-**BEAT Updates**:
-- Child node: Pointer set directly to received value
-- Root node: Pointer used in BEAT message
+**Heartbeat Updates**:
+- Child node: Pointer set directly to received value from heartbeat
+- Root node: Pointer included in heartbeat payload
 
 **Validation**:
 - Checked against `max_squares = sequence_length * 16`
-- Validated before BEAT send and BEAT receive
+- Validated before heartbeat send and heartbeat receive
 
 ## Synchronization
 
-### BEAT Synchronization Mechanism
+### Heartbeat Synchronization Mechanism
 
-**When BEAT is Sent**:
+**When Pointer is Included in Heartbeat**:
 
-Root node timer callback (`sequence_timer_cb` in `mode_sequence_root.c`):
+Root node timer callback (`sequence_timer_cb` in `sequence_plugin.c`):
 
-1. **Row boundary detection**: `(sequence_pointer % 16) == 0`
-2. **Boundary validation**: `sequence_pointer < max_squares`
-3. **BEAT generation**: Calls `mode_sequence_root_broadcast_beat()`
-4. **Frequency**: Once per row (every 16 squares)
+1. **Pointer increment**: Pointer incremented in timer callback
+2. **Pointer inclusion**: `sequence_plugin_get_pointer_for_heartbeat()` returns current pointer
+3. **Heartbeat generation**: Mesh heartbeat system includes pointer in heartbeat payload
+4. **Frequency**: Based on heartbeat interval (typically more frequent than row boundaries)
 
-**BEAT Message Format**:
-- Command: `MESH_CMD_SEQUENCE_BEAT` (0x08)
-- Data: 1-byte pointer value (0-255)
-- Total size: 2 bytes
+**Heartbeat Message Format**:
+- Command: `MESH_CMD_HEARTBEAT`
+- Payload includes: Sequence pointer (1 byte, 0-255) if plugin is active
+- Total size: Variable (includes other heartbeat data)
 
-**BEAT Broadcasting**:
-- Gets routing table from mesh
-- Sends P2P message to each child node
-- Logs success/failure counts
-- Continues even if some sends fail
+**Heartbeat Broadcasting**:
+- Handled by mesh heartbeat system
+- Automatically sent to all child nodes
+- Includes sequence pointer if plugin is active
 
-**BEAT Reception** (child node):
+**Heartbeat Reception** (child node):
 
-1. **Validation**: Checks sequence is active (ignores if not active)
+1. **Validation**: Checks plugin is active (ignores if not active)
 2. **Pointer validation**: Checks `received_pointer < max_squares`
 3. **Pointer update**: `sequence_pointer = received_pointer`
-4. **Timer reset**: Stops, deletes, and recreates timer
-5. **Resume**: Timer continues from new pointer position
+4. **Continue playback**: Timer continues without reset (heartbeat provides pointer sync)
 
 ### Drift Correction
 
@@ -867,12 +725,12 @@ Root node timer callback (`sequence_timer_cb` in `mode_sequence_root.c`):
 - Network delays can cause desynchronization
 - Without correction, nodes would drift apart over time
 
-**How BEAT Corrects Drift**:
+**How Heartbeat Corrects Drift**:
 
 1. **Pointer update**: All nodes set pointer to root's current position
-2. **Timer reset**: All nodes reset their timers simultaneously
-3. **Resynchronization**: All nodes start from same point with same rhythm
-4. **Frequency**: Correction happens once per row (every 16 squares)
+2. **Continue playback**: Nodes continue playing without timer reset
+3. **Resynchronization**: All nodes use same pointer value
+4. **Frequency**: Correction happens on each heartbeat (more frequent than row boundaries)
 
 **Effectiveness**:
 
@@ -880,46 +738,51 @@ Root node timer callback (`sequence_timer_cb` in `mode_sequence_root.c`):
 - Maintains synchronization within acceptable tolerance
 - Allows smooth playback between corrections
 
-### Row Boundary Detection
+### Heartbeat Integration
 
-**Detection Logic**:
+**Pointer Inclusion Logic**:
 ```c
-if ((sequence_pointer % 16) == 0 && sequence_pointer < max_squares) {
-    mode_sequence_root_broadcast_beat();
+uint8_t sequence_plugin_get_pointer_for_heartbeat(void) {
+    if (plugin_is_active("sequence") && sequence_active) {
+        return (uint8_t)(sequence_pointer & 0xFF);
+    }
+    return 0;
 }
 ```
 
 **Conditions**:
-- `sequence_pointer % 16 == 0`: Pointer is at a multiple of 16 (row boundary)
-- `sequence_pointer < max_squares`: Pointer is within valid range
+- Plugin must be active
+- Sequence must be active
+- Returns pointer value (0-255) or 0 if inactive
 
 **Edge Cases**:
-- Pointer 0: Start of sequence, triggers BEAT
-- Pointer at max_squares: Wraps to 0, next increment triggers BEAT
-- Short sequences: BEAT still sent at row boundaries (every 16 squares)
+- Pointer 0: Valid start position
+- Pointer at max_squares: Wraps to 0
+- Short sequences: Pointer still included in heartbeat
 
 ### Independent Playback
 
-**Behavior When BEAT Lost**:
+**Behavior When Heartbeat Lost**:
 
 - Child nodes continue playing independently
 - Timer continues running with local rhythm value
 - Pointer increments locally
-- No error or warning if BEAT is lost
+- No error or warning if heartbeat is lost
 
 **Resynchronization**:
 
-- Next received BEAT message resynchronizes the node
+- Next received heartbeat message resynchronizes the node
 - Pointer jumps to received value
-- Timer resets to match root node
 - Playback continues from synchronized position
+- No timer reset needed (heartbeat provides pointer sync only)
 
 **Benefits**:
 
 - Graceful degradation if network has issues
 - No interruption of playback
-- Automatic recovery when BEAT messages resume
+- Automatic recovery when heartbeat messages resume
 - Better user experience than stopping playback
+- More frequent synchronization than BEAT-based approach
 
 ### Synchronization Flow Diagram
 
@@ -932,17 +795,13 @@ sequenceDiagram
 
     Root->>Root: Timer callback (every beat)
     Root->>Root: Increment pointer
-    Root->>Root: Check row boundary?
-
-    alt At row boundary
-        Root->>Mesh: Broadcast BEAT(pointer)
-        Mesh->>Child1: BEAT(pointer)
-        Mesh->>Child2: BEAT(pointer)
-        Child1->>Child1: Update pointer
-        Child1->>Child1: Reset timer
-        Child2->>Child2: Update pointer
-        Child2->>Child2: Reset timer
-    end
+    Root->>Root: Include pointer in heartbeat
+    
+    Root->>Mesh: Heartbeat(pointer)
+    Mesh->>Child1: Heartbeat(pointer)
+    Mesh->>Child2: Heartbeat(pointer)
+    Child1->>Child1: Update pointer
+    Child2->>Child2: Update pointer
 
     Root->>Root: Extract color, update LED
     Child1->>Child1: Extract color, update LED
@@ -963,10 +822,10 @@ flowchart TD
     Mesh -->|SEQUENCE Command| Child2[Child Node 2]
     Root -->|Timer| RootTimer[Root Timer]
     RootTimer -->|Every Beat| RootLED[Root LED Update]
-    RootTimer -->|Row Boundary| BEAT[BEAT Broadcast]
-    BEAT -->|BEAT Command| Mesh
-    Mesh -->|BEAT| Child1
-    Mesh -->|BEAT| Child2
+    RootTimer -->|Pointer| Heartbeat[Heartbeat System]
+    Heartbeat -->|Heartbeat(pointer)| Mesh
+    Mesh -->|Heartbeat| Child1
+    Mesh -->|Heartbeat| Child2
     Child1 -->|Timer| Child1Timer[Child Timer]
     Child1Timer -->|Every Beat| Child1LED[Child LED Update]
     Child2 -->|Timer| Child2Timer[Child Timer]

@@ -767,7 +767,7 @@ When a sequence is active, heartbeat-based LED changes are skipped:
 
 **Location**: `lyktparad-espidf/src/mesh_root.c`
 
-The heartbeat handler checks `mode_sequence_root_is_active()` before applying heartbeat-based LED changes.
+The heartbeat handler checks if the sequence plugin is active (via `sequence_plugin_root_is_active()`) before applying heartbeat-based LED changes.
 
 ## API Reference
 
