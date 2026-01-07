@@ -455,6 +455,16 @@ const char *plugin_get_active(void)
     return active_plugin_name;
 }
 
+bool plugin_system_has_active_plugin(void)
+{
+    return (plugin_get_active() != NULL);
+}
+
+int plugin_system_get_active_plugin_count(void)
+{
+    return (plugin_get_active() != NULL) ? 1 : 0;
+}
+
 esp_err_t plugin_send_start_to_node(const mesh_addr_t *node_addr)
 {
     if (node_addr == NULL) {

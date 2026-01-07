@@ -273,6 +273,15 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
     if (child_node_count == 0) {
         ESP_LOGI(MESH_TAG, "[ROOT SETUP] No child nodes, starting with default state (counter=0, no plugin)");
         root_setup_in_progress = false;
+        
+        /* Ensure at least one plugin is active when starting with no child nodes */
+        esp_err_t ensure_err = mesh_root_ensure_active_plugin();
+        if (ensure_err != ESP_OK) {
+            ESP_LOGW(MESH_TAG, "[ROOT SETUP] Failed to ensure active plugin (no child nodes): %s",
+                     esp_err_to_name(ensure_err));
+            /* Continue even if default activation fails */
+        }
+        
         return ESP_OK;
     }
 
@@ -370,6 +379,15 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
     if (response_count == 0) {
         ESP_LOGW(MESH_TAG, "[ROOT SETUP] No responses received, using default state");
         root_setup_in_progress = false;
+        
+        /* Ensure at least one plugin is active when no responses received */
+        esp_err_t ensure_err = mesh_root_ensure_active_plugin();
+        if (ensure_err != ESP_OK) {
+            ESP_LOGW(MESH_TAG, "[ROOT SETUP] Failed to ensure active plugin (no responses): %s",
+                     esp_err_to_name(ensure_err));
+            /* Continue even if default activation fails */
+        }
+        
         return ESP_OK;
     }
 
@@ -398,6 +416,14 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
         } else {
             ESP_LOGI(MESH_TAG, "[ROOT SETUP] Plugin '%s' activated", adopted_plugin);
         }
+    }
+
+    /* Ensure at least one plugin is active after state adoption */
+    esp_err_t ensure_err = mesh_root_ensure_active_plugin();
+    if (ensure_err != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "[ROOT SETUP] Failed to ensure active plugin after state adoption: %s",
+                 esp_err_to_name(ensure_err));
+        /* Continue even if default activation fails */
     }
 
     /* Send plugin START command to activate nodes that joined during setup */
@@ -458,6 +484,45 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
     ESP_LOGI(MESH_TAG, "[ROOT SETUP] Mesh state adoption complete - counter: %u, plugin: %s",
              median_counter, adopted_plugin != NULL ? adopted_plugin : "none");
 
+    return ESP_OK;
+}
+
+/**
+ * @brief Ensure at least one plugin is active, activating rgb_effect as default if needed
+ *
+ * This function checks if any plugin is currently active. If no plugin is active,
+ * it automatically activates the rgb_effect plugin as the default fallback.
+ *
+ * This ensures the system always has a valid, controllable state and prevents
+ * undefined LED behavior when no plugin is active.
+ *
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_STATE if not root node
+ * @return Error code from plugin_activate() if default activation fails
+ */
+esp_err_t mesh_root_ensure_active_plugin(void)
+{
+    if (!esp_mesh_is_root()) {
+        ESP_LOGD(MESH_TAG, "mesh_root_ensure_active_plugin: not root node, skipping");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Check if any plugin is currently active */
+    if (plugin_system_has_active_plugin()) {
+        ESP_LOGD(MESH_TAG, "mesh_root_ensure_active_plugin: plugin already active");
+        return ESP_OK;
+    }
+
+    /* No plugin active - activate rgb_effect as default */
+    ESP_LOGI(MESH_TAG, "No active plugin found, activating default plugin 'rgb_effect'");
+    esp_err_t err = plugin_activate("rgb_effect");
+    if (err != ESP_OK) {
+        ESP_LOGE(MESH_TAG, "Failed to activate default plugin 'rgb_effect': %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(MESH_TAG, "Default plugin 'rgb_effect' activated successfully");
     return ESP_OK;
 }
 
@@ -1256,6 +1321,14 @@ esp_err_t mesh_root_init(void)
         ESP_LOGW(MESH_TAG, "[STARTUP] OTA initialization failed: %s", esp_err_to_name(ota_err));
     } else {
         ESP_LOGI(MESH_TAG, "[STARTUP] OTA system initialized");
+    }
+
+    /* Ensure at least one plugin is active after initialization */
+    esp_err_t plugin_err = mesh_root_ensure_active_plugin();
+    if (plugin_err != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "[STARTUP] Failed to ensure active plugin: %s",
+                 esp_err_to_name(plugin_err));
+        /* Continue startup even if default activation fails */
     }
 
     return ESP_OK;

@@ -20,6 +20,7 @@
 #include "config/mesh_device_config.h"
 #include "plugin_system.h"
 #include "mesh_ota.h"
+#include "mesh_root.h"
 #include "light_neopixel.h"
 #include "esp_log.h"
 #include "esp_mesh.h"
@@ -3369,6 +3370,20 @@ static esp_err_t handle_api_plugin_activate(const uint8_t *payload, size_t paylo
     /* Activate plugin */
     esp_err_t err = plugin_activate(plugin_name);
     if (err != ESP_OK) {
+        /* Ensure at least one plugin remains active if activation failed (root node only) */
+        if (esp_mesh_is_root()) {
+            bool has_active_plugin_after_failure = plugin_system_has_active_plugin();
+            esp_err_t ensure_err = mesh_root_ensure_active_plugin();
+            if (ensure_err != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to ensure active plugin after activation failure (UDP bridge): %s",
+                         esp_err_to_name(ensure_err));
+                /* Continue with error response even if default activation fails */
+            } else if (!has_active_plugin_after_failure) {
+                /* No plugin was active after failure, so rgb_effect was activated */
+                ESP_LOGI(TAG, "Default plugin 'rgb_effect' activated after activation failure (UDP bridge)");
+            }
+        }
+
         if (max_response_size < 1) {
             return ESP_ERR_INVALID_SIZE;
         }
@@ -3442,6 +3457,20 @@ static esp_err_t handle_api_plugin_deactivate(const uint8_t *payload, size_t pay
         response_out[0] = 0; /* failure */
         *response_size_out = 1;
         return err;
+    }
+
+    /* Ensure at least one plugin remains active (root node only) */
+    if (esp_mesh_is_root()) {
+        bool has_active_plugin_after_deactivation = plugin_system_has_active_plugin();
+        esp_err_t ensure_err = mesh_root_ensure_active_plugin();
+        if (ensure_err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to ensure active plugin after deactivation (UDP bridge): %s",
+                     esp_err_to_name(ensure_err));
+            /* Continue even if default activation fails */
+        } else if (!has_active_plugin_after_deactivation) {
+            /* No plugin was active after deactivation, so rgb_effect was activated */
+            ESP_LOGI(TAG, "Default plugin 'rgb_effect' activated after deactivation (UDP bridge)");
+        }
     }
 
     /* Success response: [success:1][name_len:1][name:N bytes] */
@@ -3627,6 +3656,20 @@ static esp_err_t handle_api_plugin_stop(const uint8_t *payload, size_t payload_s
         response_out[0] = 0; /* failure */
         *response_size_out = 1;
         return err;
+    }
+
+    /* Ensure at least one plugin remains active (root node only) */
+    if (esp_mesh_is_root()) {
+        bool has_active_plugin_after_stop = plugin_system_has_active_plugin();
+        esp_err_t ensure_err = mesh_root_ensure_active_plugin();
+        if (ensure_err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to ensure active plugin after stop (UDP bridge): %s",
+                     esp_err_to_name(ensure_err));
+            /* Continue even if default activation fails */
+        } else if (!has_active_plugin_after_stop) {
+            /* No plugin was active after stop, so rgb_effect was activated */
+            ESP_LOGI(TAG, "Default plugin 'rgb_effect' activated after stop (UDP bridge)");
+        }
     }
 
     /* Success response: [success:1][name_len:1][name:N bytes] */

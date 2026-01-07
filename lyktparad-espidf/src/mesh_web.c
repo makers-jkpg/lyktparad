@@ -6,6 +6,7 @@
 #include "mesh_version.h"
 #include "mesh_common.h"
 #include "mesh_udp_bridge.h"
+#include "mesh_root.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_mesh.h"
@@ -1779,6 +1780,20 @@ static esp_err_t api_plugin_activate_handler(httpd_req_t *req)
     /* Activate plugin */
     esp_err_t err = plugin_activate(plugin_name);
     if (err != ESP_OK) {
+        /* Ensure at least one plugin remains active if activation failed (root node only) */
+        if (esp_mesh_is_root()) {
+            bool has_active_plugin_after_failure = plugin_system_has_active_plugin();
+            esp_err_t ensure_err = mesh_root_ensure_active_plugin();
+            if (ensure_err != ESP_OK) {
+                ESP_LOGW(WEB_TAG, "Failed to ensure active plugin after activation failure: %s",
+                         esp_err_to_name(ensure_err));
+                /* Continue with error response even if default activation fails */
+            } else if (!has_active_plugin_after_failure) {
+                /* No plugin was active after failure, so rgb_effect was activated */
+                ESP_LOGI(WEB_TAG, "Default plugin 'rgb_effect' activated after activation failure");
+            }
+        }
+
         char error_msg[128];
         snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"%s\"}", esp_err_to_name(err));
         httpd_resp_set_status(req, "400 Bad Request");
@@ -1832,6 +1847,21 @@ static esp_err_t api_plugin_deactivate_handler(httpd_req_t *req)
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
         httpd_resp_send(req, error_msg, -1);
         return ESP_FAIL;
+    }
+
+    /* Ensure at least one plugin remains active (root node only) */
+    if (esp_mesh_is_root()) {
+        /* Check if any plugin is active after deactivation */
+        bool has_active_plugin_after_deactivation = plugin_system_has_active_plugin();
+        esp_err_t ensure_err = mesh_root_ensure_active_plugin();
+        if (ensure_err != ESP_OK) {
+            ESP_LOGW(WEB_TAG, "Failed to ensure active plugin after deactivation: %s",
+                     esp_err_to_name(ensure_err));
+            /* Continue with deactivation response even if default activation fails */
+        } else if (!has_active_plugin_after_deactivation) {
+            /* No plugin was active after deactivation, so rgb_effect was activated */
+            ESP_LOGI(WEB_TAG, "Default plugin 'rgb_effect' activated after deactivation");
+        }
     }
 
     /* Send success response */
@@ -1912,6 +1942,20 @@ static esp_err_t api_plugin_stop_handler(httpd_req_t *req)
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
         httpd_resp_send(req, error_msg, -1);
         return ESP_FAIL;
+    }
+
+    /* Ensure at least one plugin remains active (root node only) */
+    if (esp_mesh_is_root()) {
+        bool has_active_plugin_after_stop = plugin_system_has_active_plugin();
+        esp_err_t ensure_err = mesh_root_ensure_active_plugin();
+        if (ensure_err != ESP_OK) {
+            ESP_LOGW(WEB_TAG, "Failed to ensure active plugin after stop: %s",
+                     esp_err_to_name(ensure_err));
+            /* Continue with stop response even if default activation fails */
+        } else if (!has_active_plugin_after_stop) {
+            /* No plugin was active after stop, so rgb_effect was activated */
+            ESP_LOGI(WEB_TAG, "Default plugin 'rgb_effect' activated after stop");
+        }
     }
 
     /* Send success response */

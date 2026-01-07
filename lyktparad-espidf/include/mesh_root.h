@@ -46,4 +46,7 @@ void mesh_root_handle_state_response(const char *plugin_name, uint8_t counter);
 /* Check if root setup is in progress (for command blocking) */
 bool mesh_root_is_setup_in_progress(void);
 
+/* Ensure at least one plugin is active, activating rgb_effect as default if needed */
+esp_err_t mesh_root_ensure_active_plugin(void);
+
 #endif /* __MESH_ROOT_H__ */

@@ -343,6 +343,23 @@ esp_err_t plugin_deactivate_all(void);
 const char *plugin_get_active(void);
 
 /**
+ * @brief Check if any plugin is currently active
+ *
+ * @return true if at least one plugin is active
+ * @return false if no plugin is active
+ */
+bool plugin_system_has_active_plugin(void);
+
+/**
+ * @brief Get the count of currently active plugins
+ *
+ * Note: Currently only one plugin can be active at a time (mutual exclusivity).
+ *
+ * @return Number of active plugins (0 or 1)
+ */
+int plugin_system_get_active_plugin_count(void);
+
+/**
  * @brief Send active plugin START command to a specific node
  *
  * This function sends the currently active plugin's START command to a specific
