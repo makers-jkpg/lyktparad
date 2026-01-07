@@ -328,10 +328,10 @@ void esp_mesh_p2p_rx_main(void *arg)
                 /* Minimum size: command (1 byte) + payload (4 bytes for timestamp) */
                 if (data.size >= 5) {
                     const mesh_webserver_discovery_failed_t *payload = (const mesh_webserver_discovery_failed_t *)(data.data + 1);
-                    
+
                     /* Extract timestamp from payload (already in network byte order) */
                     uint32_t timestamp = payload->timestamp;
-                    
+
                     /* Store discovery failure state locally */
                     esp_err_t err = mesh_common_set_discovery_failed(timestamp);
                     if (err == ESP_OK) {

@@ -78,7 +78,10 @@ function updateNodeCount() {
   fetch('/api/nodes')
     .then(response => response.json())
     .then(data => {
-      document.getElementById('nodeCount').textContent = data.nodes;
+      const nodeCount = document.getElementById('nodeCount');
+      if (nodeCount) {
+        nodeCount.textContent = data.nodes;
+      }
     })
     .catch(err => {
       console.error('Node count update error:', err);
@@ -1033,7 +1036,8 @@ document.addEventListener('DOMContentLoaded', function() {
   }, 2000);
 
   const gridContainer = document.getElementById('gridContainer');
-  gridContainer.addEventListener('click', function(e) {
+  if (gridContainer) {
+    gridContainer.addEventListener('click', function(e) {
     const target = e.target;
     if (target.classList.contains('grid-square')) {
       const row = parseInt(target.dataset.row);
@@ -1048,10 +1052,12 @@ document.addEventListener('DOMContentLoaded', function() {
     } else if (target.classList.contains('grid-label-z')) {
       showColorPicker(null, null, 'all');
     }
-  });
+    });
+  }
 
   const colorPicker = document.getElementById('colorPicker');
-  colorPicker.addEventListener('change', function(e) {
+  if (colorPicker) {
+    colorPicker.addEventListener('change', function(e) {
     const rgb = hexToRgb(e.target.value);
     if (rgb) {
       const quantized = quantizeColor(rgb.r, rgb.g, rgb.b);
@@ -1066,7 +1072,8 @@ document.addEventListener('DOMContentLoaded', function() {
       }
       renderGrid();
     }
-  });
+    });
+  }
 
   function updateTempoButtonStates() {
     const tempoDecrease = document.getElementById('tempoDecrease');
@@ -1117,41 +1124,60 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 
   const syncButton = document.getElementById('syncButton');
-  syncButton.addEventListener('click', syncGridData);
+  if (syncButton) {
+    syncButton.addEventListener('click', syncGridData);
+  }
 
   const startButton = document.getElementById('startButton');
   const stopButton = document.getElementById('stopButton');
   const resetButton = document.getElementById('resetButton');
-  if (startButton) startButton.disabled = true;
-  if (stopButton) stopButton.disabled = true;
-  if (resetButton) resetButton.disabled = true;
-  startButton.addEventListener('click', handleSequenceStart);
-  stopButton.addEventListener('click', handleSequenceStop);
-  resetButton.addEventListener('click', handleSequenceReset);
+  if (startButton) {
+    startButton.disabled = true;
+    startButton.addEventListener('click', handleSequenceStart);
+  }
+  if (stopButton) {
+    stopButton.disabled = true;
+    stopButton.addEventListener('click', handleSequenceStop);
+  }
+  if (resetButton) {
+    resetButton.disabled = true;
+    resetButton.addEventListener('click', handleSequenceReset);
+  }
   updateSequenceButtonStates();
 
   const exportButton = document.getElementById('exportButton');
-  exportButton.addEventListener('click', exportSequence);
+  if (exportButton) {
+    exportButton.addEventListener('click', exportSequence);
+  }
 
   const importButton = document.getElementById('importButton');
-  importButton.addEventListener('click', showImportUI);
+  if (importButton) {
+    importButton.addEventListener('click', showImportUI);
+  }
 
   const confirmImportButton = document.getElementById('confirmImportButton');
-  confirmImportButton.addEventListener('click', importSequence);
+  if (confirmImportButton) {
+    confirmImportButton.addEventListener('click', importSequence);
+  }
 
   const cancelImportButton = document.getElementById('cancelImportButton');
-  cancelImportButton.addEventListener('click', hideImportUI);
+  if (cancelImportButton) {
+    cancelImportButton.addEventListener('click', hideImportUI);
+  }
 
   const importTextarea = document.getElementById('importTextarea');
-  importTextarea.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      importSequence();
-    }
-  });
+  if (importTextarea) {
+    importTextarea.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        importSequence();
+      }
+    });
+  }
 
   const copyExportButton = document.getElementById('copyExportButton');
-  copyExportButton.addEventListener('click', function() {
+  if (copyExportButton) {
+    copyExportButton.addEventListener('click', function() {
     const exportTextarea = document.getElementById('exportTextarea');
     const exportFeedback = document.getElementById('exportFeedback');
     exportTextarea.select();
@@ -1186,7 +1212,8 @@ document.addEventListener('DOMContentLoaded', function() {
       exportFeedback.textContent = 'Copy failed: ' + err.message;
       exportFeedback.className = 'export-feedback-error';
     }
-  });
+    });
+  }
 
   // Initialize tab navigation
   const tabButtons = document.querySelectorAll('.tab-button');

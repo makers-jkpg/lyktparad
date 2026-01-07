@@ -1031,7 +1031,7 @@ __attribute__((unused)) static void discovery_task(void *pvParameters)
             if (!udp_discovery_succeeded) {
                 /* Both mDNS and UDP discovery failed - broadcast failure state */
                 ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Both mDNS and UDP discovery failed, broadcasting failure state");
-                
+
                 /* Get current timestamp */
                 time_t current_time = time(NULL);
                 if (current_time >= 0) {
@@ -1059,6 +1059,7 @@ __attribute__((unused)) static void discovery_task(void *pvParameters)
                     mesh_common_set_discovery_failed(payload.timestamp);
 
                     /* Broadcast to all child nodes */
+                    int child_node_count = 0;
                     for (int i = 0; i < route_table_size; i++) {
                         /* Skip root node */
                         mesh_addr_t root_addr;
@@ -1078,13 +1079,15 @@ __attribute__((unused)) static void discovery_task(void *pvParameters)
                         }
 
                         esp_err_t send_err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
-                        if (send_err != ESP_OK) {
+                        if (send_err == ESP_OK) {
+                            child_node_count++;
+                        } else {
                             ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] Failed to broadcast failure state to "MACSTR": %s",
                                      MAC2STR(route_table[i].addr), esp_err_to_name(send_err));
                         }
                     }
 
-                    ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Discovery failure state broadcasted to %d nodes", route_table_size);
+                    ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Discovery failure state broadcasted to %d child nodes", child_node_count);
                 } else {
                     ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] Failed to get current time for failure state");
                 }

@@ -2483,8 +2483,8 @@ static esp_err_t handle_api_sequence_start(uint8_t *response_out, size_t *respon
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* Execute start operation using plugin query interface */
-    esp_err_t err = plugin_execute_operation("sequence", 0x02, NULL);  /* SEQUENCE_OP_START */
+    /* Use plugin system API to ensure proper broadcasting to child nodes */
+    esp_err_t err = plugin_activate("sequence");
 
     /* Response format: [success:1] (0=failure, 1=success) */
     if (max_response_size < 1) {
@@ -2520,8 +2520,25 @@ static esp_err_t handle_api_sequence_stop(uint8_t *response_out, size_t *respons
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* Execute pause operation using plugin query interface */
-    esp_err_t err = plugin_execute_operation("sequence", 0x03, NULL);  /* SEQUENCE_OP_PAUSE */
+    /* Use plugin system API to ensure proper broadcasting to child nodes */
+    uint8_t plugin_id;
+    esp_err_t err = plugin_get_id_by_name("sequence", &plugin_id);
+    if (err != ESP_OK) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_FAIL;
+    }
+
+    /* Construct plugin command: [PLUGIN_ID] [PLUGIN_CMD_STOP] */
+    uint8_t cmd_data[2];
+    cmd_data[0] = plugin_id;
+    cmd_data[1] = PLUGIN_CMD_STOP;
+
+    /* Send STOP command via plugin system (from API - processes locally and broadcasts) */
+    err = plugin_system_handle_plugin_command_from_api(cmd_data, sizeof(cmd_data));
 
     /* Response format: [success:1] (0=failure, 1=success) */
     if (max_response_size < 1) {
@@ -2557,8 +2574,25 @@ static esp_err_t handle_api_sequence_reset(uint8_t *response_out, size_t *respon
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* Execute reset operation using plugin query interface */
-    esp_err_t err = plugin_execute_operation("sequence", 0x04, NULL);  /* SEQUENCE_OP_RESET */
+    /* Use plugin system API to ensure proper broadcasting to child nodes */
+    uint8_t plugin_id;
+    esp_err_t err = plugin_get_id_by_name("sequence", &plugin_id);
+    if (err != ESP_OK) {
+        if (max_response_size < 1) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        response_out[0] = 0;
+        *response_size_out = 1;
+        return ESP_FAIL;
+    }
+
+    /* Construct plugin command: [PLUGIN_ID] [PLUGIN_CMD_RESET] */
+    uint8_t cmd_data[2];
+    cmd_data[0] = plugin_id;
+    cmd_data[1] = PLUGIN_CMD_RESET;
+
+    /* Send RESET command via plugin system (from API - processes locally and broadcasts) */
+    err = plugin_system_handle_plugin_command_from_api(cmd_data, sizeof(cmd_data));
 
     /* Response format: [success:1] (0=failure, 1=success) */
     if (max_response_size < 1) {

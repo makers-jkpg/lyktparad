@@ -896,7 +896,7 @@ esp_err_t mesh_common_set_discovery_failed(uint32_t timestamp)
     }
 
     nvs_close(nvs_handle);
-    ESP_LOGI(MESH_TAG, "[DISCOVERY FAILURE] Discovery failure state stored (timestamp: %lu)", (unsigned long)timestamp);
+    ESP_LOGI(MESH_TAG, "[DISCOVERY FAILURE] Discovery failure state stored (timestamp: %lu)", (unsigned long)ntohl(timestamp));
     return ESP_OK;
 }
 
@@ -953,13 +953,13 @@ bool mesh_common_is_discovery_failed(void)
     }
 
     if (elapsed >= DISCOVERY_FAILURE_EXPIRATION_SECONDS) {
-        ESP_LOGI(MESH_TAG, "[DISCOVERY FAILURE] Failure state expired (%ld seconds old, max %d), clearing", 
+        ESP_LOGI(MESH_TAG, "[DISCOVERY FAILURE] Failure state expired (%ld seconds old, max %d), clearing",
                  (long)elapsed, DISCOVERY_FAILURE_EXPIRATION_SECONDS);
         mesh_common_clear_discovery_failed();
         return false;
     }
 
-    ESP_LOGI(MESH_TAG, "[DISCOVERY FAILURE] Valid failure state exists (%ld seconds old, expires in %ld seconds)", 
+    ESP_LOGI(MESH_TAG, "[DISCOVERY FAILURE] Valid failure state exists (%ld seconds old, expires in %ld seconds)",
              (long)elapsed, (long)(DISCOVERY_FAILURE_EXPIRATION_SECONDS - elapsed));
     return true;
 }
