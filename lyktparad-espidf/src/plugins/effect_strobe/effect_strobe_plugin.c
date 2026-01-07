@@ -130,22 +130,14 @@ static esp_err_t strobe_timer_stop(void)
 static void strobe_timer_callback(void *arg)
 {
     (void)arg;
-    // #region agent log
-    ESP_LOGI(TAG, "[DEBUG] Timer callback entry - strobe_running:%d, strobe_is_on:%d", strobe_running ? 1 : 0, strobe_is_on ? 1 : 0);
-    // #endregion
+
     /* Check if effect is running (strobe_running is set before timer starts) */
     if (!strobe_running) {
-        // #region agent log
-        ESP_LOGI(TAG, "[DEBUG] Timer callback early return - not running");
-        // #endregion
         return;
     }
 
     /* Check if strobe plugin is active (double-check for safety) */
     bool is_active = plugin_is_active("effect_strobe");
-    // #region agent log
-    ESP_LOGI(TAG, "[DEBUG] Plugin active check - is_active:%d", is_active ? 1 : 0);
-    // #endregion
     if (!is_active) {
         ESP_LOGW(TAG, "Strobe timer callback called but plugin is not active, stopping timer");
         strobe_timer_stop();
@@ -154,38 +146,20 @@ static void strobe_timer_callback(void *arg)
 
     if (!strobe_is_on) {
         /* Turn ON */
-        // #region agent log
-        ESP_LOGI(TAG, "[DEBUG] Setting LED ON - r:%d g:%d b:%d", strobe_defaults.r_on, strobe_defaults.g_on, strobe_defaults.b_on);
-        // #endregion
         strobe_set_rgb(strobe_defaults.r_on, strobe_defaults.g_on, strobe_defaults.b_on);
-        // #region agent log
-        ESP_LOGI(TAG, "[DEBUG] LED ON set");
-        // #endregion
         strobe_is_on = true;
         /* Schedule next toggle after duration_on */
         if (strobe_timer != NULL) {
-            esp_err_t timer_err = esp_timer_start_once(strobe_timer, (uint64_t)strobe_defaults.duration_on_ms * 1000ULL);
-            // #region agent log
-            ESP_LOGI(TAG, "[DEBUG] Timer restart ON - err:0x%x, duration_ms:%u", timer_err, strobe_defaults.duration_on_ms);
-            // #endregion
+            esp_timer_start_once(strobe_timer, (uint64_t)strobe_defaults.duration_on_ms * 1000ULL);
         }
         return;
     } else {
         /* Turn OFF */
-        // #region agent log
-        ESP_LOGI(TAG, "[DEBUG] Setting LED OFF - r:%d g:%d b:%d", strobe_defaults.r_off, strobe_defaults.g_off, strobe_defaults.b_off);
-        // #endregion
         strobe_set_rgb(strobe_defaults.r_off, strobe_defaults.g_off, strobe_defaults.b_off);
-        // #region agent log
-        ESP_LOGI(TAG, "[DEBUG] LED OFF set");
-        // #endregion
         strobe_is_on = false;
         /* Schedule next toggle after duration_off */
         if (strobe_timer != NULL) {
-            esp_err_t timer_err = esp_timer_start_once(strobe_timer, (uint64_t)strobe_defaults.duration_off_ms * 1000ULL);
-            // #region agent log
-            ESP_LOGI(TAG, "[DEBUG] Timer restart OFF - err:0x%x, duration_ms:%u", timer_err, strobe_defaults.duration_off_ms);
-            // #endregion
+            esp_timer_start_once(strobe_timer, (uint64_t)strobe_defaults.duration_off_ms * 1000ULL);
         }
         return;
     }
@@ -208,9 +182,6 @@ static esp_err_t strobe_start(void)
 
     /* Ensure timer exists */
     esp_err_t timer_create_err = strobe_timer_start();
-    // #region agent log
-    ESP_LOGI(TAG, "[DEBUG] Timer create result - err:0x%x, timer_ptr:%p", timer_create_err, (void*)strobe_timer);
-    // #endregion
     if (timer_create_err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to create/start strobe timer");
         strobe_running = false;
@@ -218,10 +189,7 @@ static esp_err_t strobe_start(void)
     }
 
     /* Start immediately */
-    esp_err_t timer_start_err = esp_timer_start_once(strobe_timer, 1);
-    // #region agent log
-    ESP_LOGI(TAG, "[DEBUG] Timer start once result - err:0x%x, delay_us:1", timer_start_err);
-    // #endregion
+    esp_timer_start_once(strobe_timer, 1);
 
     ESP_LOGI(TAG, "Strobe effect started: on(%d,%d,%d) off(%d,%d,%d) on_ms=%u off_ms=%u",
              strobe_defaults.r_on, strobe_defaults.g_on, strobe_defaults.b_on,
