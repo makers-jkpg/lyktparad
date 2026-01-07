@@ -381,6 +381,64 @@ const char *plugin_get_active(void)
     return active_plugin_name;
 }
 
+esp_err_t plugin_send_start_to_node(const mesh_addr_t *node_addr)
+{
+    if (node_addr == NULL) {
+        ESP_LOGE(TAG, "plugin_send_start_to_node: node_addr is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Only root node should send plugin state to other nodes */
+    if (!esp_mesh_is_root()) {
+        ESP_LOGD(TAG, "plugin_send_start_to_node: not root node, skipping");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Check if plugin is active */
+    const char *active_name = plugin_get_active();
+    if (active_name == NULL) {
+        /* No active plugin - nothing to send */
+        ESP_LOGD(TAG, "plugin_send_start_to_node: no active plugin, skipping");
+        return ESP_OK;
+    }
+
+    /* Get plugin info */
+    const plugin_info_t *plugin = plugin_get_by_name(active_name);
+    if (plugin == NULL) {
+        ESP_LOGE(TAG, "plugin_send_start_to_node: active plugin '%s' not found in registry", active_name);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Verify plugin is still active (race condition protection) */
+    if (plugin_get_active() != active_name) {
+        ESP_LOGD(TAG, "plugin_send_start_to_node: plugin '%s' was deactivated, skipping", active_name);
+        return ESP_OK;
+    }
+
+    /* Construct START command packet */
+    uint8_t *tx_buf = mesh_common_get_tx_buf();
+    tx_buf[0] = plugin->command_id;  /* Plugin ID */
+    tx_buf[1] = PLUGIN_CMD_START;    /* START command */
+
+    mesh_data_t data;
+    data.data = tx_buf;
+    data.size = 2;  /* Plugin ID(1) + CMD(1) */
+    data.proto = MESH_PROTO_BIN;
+    data.tos = MESH_TOS_P2P;
+
+    /* Send to specific node */
+    esp_err_t err = mesh_send_with_bridge(node_addr, &data, MESH_DATA_P2P, NULL, 0);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Plugin '%s' START command sent to newly joined node "MACSTR,
+                 active_name, MAC2STR(node_addr->addr));
+    } else {
+        ESP_LOGW(TAG, "Plugin '%s' START command send failed to "MACSTR": %s",
+                 active_name, MAC2STR(node_addr->addr), esp_err_to_name(err));
+    }
+
+    return err;
+}
+
 bool plugin_is_active(const char *name)
 {
     if (name == NULL) {

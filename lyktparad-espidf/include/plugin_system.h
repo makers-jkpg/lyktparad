@@ -17,6 +17,7 @@
 #define __PLUGIN_SYSTEM_H__
 
 #include "esp_err.h"
+#include "esp_mesh.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -340,6 +341,22 @@ esp_err_t plugin_deactivate_all(void);
  * @return Pointer to active plugin name, or NULL if no plugin is active
  */
 const char *plugin_get_active(void);
+
+/**
+ * @brief Send active plugin START command to a specific node
+ *
+ * This function sends the currently active plugin's START command to a specific
+ * mesh node. This is used to synchronize newly joined nodes with the current
+ * plugin state. If no plugin is active, the function returns successfully without
+ * sending anything.
+ *
+ * @param node_addr Destination mesh node address (non-NULL)
+ * @return ESP_OK on success (including when no plugin is active)
+ * @return ESP_ERR_INVALID_ARG if node_addr is NULL
+ * @return ESP_ERR_NOT_FOUND if active plugin is not found in registry
+ * @return Error code from mesh_send_with_bridge() if send fails
+ */
+esp_err_t plugin_send_start_to_node(const mesh_addr_t *node_addr);
 
 /**
  * @brief Check if a plugin is currently active

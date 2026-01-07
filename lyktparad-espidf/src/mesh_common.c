@@ -73,6 +73,7 @@
 #include "light_common_cathode.h"
 #include "mesh_ota.h"
 #include "mesh_udp_bridge.h"
+#include "plugin_system.h"
 #ifdef ROOT_STATUS_LED_GPIO
 #include "root_status_led.h"
 #endif
@@ -333,6 +334,16 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             root_status_led_update_status();
         }
 #endif
+        /* If root node, send active plugin state to newly joined child node */
+        if (is_root) {
+            /* Add small delay to allow node to fully initialize before receiving commands */
+            vTaskDelay(pdMS_TO_TICKS(200));
+            /* Convert child MAC address to mesh_addr_t */
+            mesh_addr_t child_addr = {0};
+            memcpy(child_addr.addr, child_connected->mac, 6);
+            /* Send active plugin START command to newly joined node */
+            plugin_send_start_to_node(&child_addr);
+        }
     }
     break;
     case MESH_EVENT_CHILD_DISCONNECTED: {
