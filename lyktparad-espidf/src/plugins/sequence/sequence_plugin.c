@@ -116,7 +116,6 @@ static void sequence_timer_stop(void);
 static esp_err_t sequence_timer_start(uint8_t rhythm);
 static void extract_square_rgb(uint8_t *packed_data, uint16_t square_index, uint8_t *r, uint8_t *g, uint8_t *b);
 static esp_err_t sequence_handle_command_internal(uint8_t cmd, uint8_t *data, uint16_t len);
-static esp_err_t sequence_broadcast_control(uint8_t cmd);
 static esp_err_t sequence_load_default_data(void);
 
 /*******************************************************
@@ -774,59 +773,6 @@ esp_err_t sequence_plugin_root_store_and_broadcast(uint8_t rhythm, uint8_t num_r
 
     return ESP_OK;
 }
-
-static esp_err_t sequence_broadcast_control(uint8_t plugin_cmd)
-{
-    if (plugin_cmd != PLUGIN_CMD_START && plugin_cmd != PLUGIN_CMD_PAUSE && plugin_cmd != PLUGIN_CMD_RESET) {
-        ESP_LOGE(TAG, "Invalid control command: 0x%02x", plugin_cmd);
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    if (!esp_mesh_is_root()) {
-        ESP_LOGE(TAG, "Not root node, cannot broadcast control command");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
-    int route_table_size = 0;
-    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
-
-    int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
-    if (child_node_count == 0) {
-        ESP_LOGD(TAG, "Control command broadcast - no child nodes");
-        return ESP_OK;
-    }
-
-    uint8_t *tx_buf = mesh_common_get_tx_buf();
-    tx_buf[0] = sequence_plugin_id;  /* Plugin ID */
-    tx_buf[1] = plugin_cmd;  /* Command byte */
-
-    mesh_data_t data;
-    data.data = tx_buf;
-    data.size = 2;  /* Plugin ID(1) + CMD(1) */
-    data.proto = MESH_PROTO_BIN;
-    data.tos = MESH_TOS_P2P;
-
-    int success_count = 0;
-    int fail_count = 0;
-    for (int i = 0; i < route_table_size; i++) {
-        esp_err_t err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
-        if (err == ESP_OK) {
-            success_count++;
-        } else {
-            fail_count++;
-            ESP_LOGD(TAG, "Control send err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
-        }
-    }
-
-    const char *cmd_name = (plugin_cmd == PLUGIN_CMD_START) ? "START" :
-                          (plugin_cmd == PLUGIN_CMD_PAUSE) ? "PAUSE" : "RESET";
-    ESP_LOGI(TAG, "%s command broadcast - sent to %d/%d child nodes (success:%d, failed:%d)",
-             cmd_name, success_count, child_node_count, success_count, fail_count);
-
-    return ESP_OK;
-}
-
 
 esp_err_t sequence_plugin_root_start(void)
 {

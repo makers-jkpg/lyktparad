@@ -21,7 +21,7 @@
 #include "esp_timer.h"
 #include "mesh_common.h"
 #include "mesh_commands.h"
-#include "light_neopixel.h"
+#include "plugin_light.h"
 #include "node_sequence.h"
 
 /* Default Kconfig CONFIG_ defines for standalone compilation */
@@ -187,7 +187,7 @@ static void sequence_timer_cb(void *arg)
     b_scaled = b_4bit * 16;
 
     /* Update root node's LED */
-    esp_err_t err = mesh_light_set_rgb(r_scaled, g_scaled, b_scaled);
+    esp_err_t err = plugin_set_rgb(r_scaled, g_scaled, b_scaled);
     if (err != ESP_OK) {
         ESP_LOGE(SEQ_ROOT_TAG, "Failed to set LED in timer callback: 0x%x", err);
     }
