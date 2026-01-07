@@ -34,7 +34,7 @@ The Plugin Build System provides automatic discovery, compilation, and integrati
 
 **External Server File Copying**: Plugin HTML/JS/CSS files are copied to the external webserver during CMake configuration. These files are NOT embedded in firmware - they are only served by the external webserver.
 
-**Embedded Webserver**: The embedded webserver uses a simple static HTML page embedded directly in `mesh_web.c`. This page provides basic plugin control (selection, play, pause, rewind) but does not serve plugin-specific HTML files.
+**Embedded Webserver**: The embedded webserver uses a simple static HTML page embedded directly in `mesh_web.c`. This page provides basic plugin control (selection, play, pause, rewind, stop) but does not serve plugin-specific HTML files.
 
 ## Architecture
 
@@ -201,7 +201,7 @@ The build system handles empty plugins directories gracefully:
 
 ### Overview
 
-The embedded webserver on the root node serves a simple static HTML page that is embedded directly in `mesh_web.c` as a C string literal. This page provides basic plugin control functionality: plugin selection, play, pause, and rewind buttons.
+The embedded webserver on the root node serves a simple static HTML page that is embedded directly in `mesh_web.c` as a C string literal. This page provides basic plugin control functionality: plugin selection, play, pause, rewind, and stop buttons.
 
 ### HTML Page Structure
 
@@ -219,7 +219,7 @@ static const char simple_html_page[] =
 
 The embedded HTML page includes:
 - **Plugin Selection Dropdown**: Lists all available plugins
-- **Control Buttons**: Play (activate), Pause, and Rewind (reset)
+- **Control Buttons**: Play (activate), Pause, Rewind (reset), and Stop
 - **Active Plugin Display**: Shows which plugin is currently active
 - **Status Messages**: Success/error feedback for operations
 - **Auto-refresh**: Active plugin status is polled every 5 seconds
@@ -232,6 +232,7 @@ The HTML page uses JavaScript to interact with the plugin API endpoints:
 - `POST /api/plugin/activate` - Activate plugin
 - `POST /api/plugin/pause` - Pause plugin
 - `POST /api/plugin/reset` - Reset plugin
+- `POST /api/plugin/stop` - Stop plugin
 
 ### Limitations
 
