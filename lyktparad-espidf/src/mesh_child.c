@@ -46,6 +46,7 @@ static uint8_t last_rgb_r = 0;
 static uint8_t last_rgb_g = 0;
 static uint8_t last_rgb_b = 0;
 static bool rgb_has_been_set = false;
+static bool state_query_responded = false;  /* One-time response flag for state queries */
 
 /*******************************************************
  *                Child P2P RX Task
@@ -84,6 +85,24 @@ void esp_mesh_p2p_rx_main(void *arg)
                     uint8_t b = data.data[3];
                     ESP_LOGI(MESH_TAG, "[ROOT ACTION] RGB command received from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
                     mesh_root_handle_rgb_command(r, g, b);
+                    continue;
+                } else if (cmd == MESH_CMD_MESH_STATE_RESPONSE && data.size >= 3) {
+                    /* Handle state response from child node (for root state adoption) */
+                    uint8_t plugin_name_len = data.data[1];
+                    if (plugin_name_len > 31) {
+                        plugin_name_len = 31;  /* Limit to prevent overflow */
+                    }
+                    if (data.size < 2 + plugin_name_len + 1) {
+                        ESP_LOGW(MESH_TAG, "[ROOT ACTION] Invalid state response size: %d", data.size);
+                        continue;
+                    }
+                    char plugin_name[32] = {0};
+                    if (plugin_name_len > 0) {
+                        memcpy(plugin_name, &data.data[2], plugin_name_len);
+                        plugin_name[plugin_name_len] = '\0';
+                    }
+                    uint8_t counter = data.data[2 + plugin_name_len];
+                    mesh_root_handle_state_response(plugin_name[0] != '\0' ? plugin_name : NULL, counter);
                     continue;
                 } else if (data.size >= 2 && cmd >= 0x0B && cmd <= 0xEE) {
                     /* Route plugin protocol commands: [PLUGIN_ID:1] [CMD:1] [LENGTH:2?] [DATA:N] */
@@ -153,6 +172,52 @@ void esp_mesh_p2p_rx_main(void *arg)
                 }
             }
         }
+        /* Handle state query from root node */
+        if (data.proto == MESH_PROTO_BIN && data.size == 1 && data.data[0] == MESH_CMD_QUERY_MESH_STATE) {
+            /* Check if we've already responded to this query */
+            if (!state_query_responded) {
+                /* Get active plugin name */
+                const char *active_plugin = plugin_get_active();
+                uint8_t plugin_name_len = 0;
+                if (active_plugin != NULL && active_plugin[0] != '\0') {
+                    plugin_name_len = strlen(active_plugin);
+                    if (plugin_name_len > 31) {
+                        plugin_name_len = 31;  /* Limit to prevent overflow */
+                    }
+                }
+
+                /* Get current local heartbeat counter */
+                uint8_t counter = mesh_common_get_local_heartbeat_counter();
+
+                /* Prepare response: [CMD:1] [PLUGIN_NAME_LEN:1] [PLUGIN_NAME:N] [COUNTER:1] */
+                uint8_t *tx_buf = mesh_common_get_tx_buf();
+                tx_buf[0] = MESH_CMD_MESH_STATE_RESPONSE;
+                tx_buf[1] = plugin_name_len;
+                if (plugin_name_len > 0) {
+                    memcpy(&tx_buf[2], active_plugin, plugin_name_len);
+                }
+                tx_buf[2 + plugin_name_len] = counter;
+
+                mesh_data_t response_data;
+                response_data.data = tx_buf;
+                response_data.size = 2 + plugin_name_len + 1;  /* CMD + LEN + NAME + COUNTER */
+                response_data.proto = MESH_PROTO_BIN;
+                response_data.tos = MESH_TOS_P2P;
+
+                /* Send response to root node */
+                esp_err_t send_err = mesh_send_with_bridge(&from, &response_data, MESH_DATA_P2P, NULL, 0);
+                if (send_err == ESP_OK) {
+                    state_query_responded = true;
+                    ESP_LOGI(MESH_TAG, "[CHILD ACTION] State response sent: plugin='%s', counter=%u",
+                             active_plugin != NULL ? active_plugin : "none", counter);
+                } else {
+                    ESP_LOGW(MESH_TAG, "[CHILD ACTION] Failed to send state response: %s", esp_err_to_name(send_err));
+                }
+            } else {
+                ESP_LOGD(MESH_TAG, "[CHILD ACTION] State query ignored (already responded)");
+            }
+            continue;
+        }
         /* detect heartbeat: command prefix (0x01) + pointer (1 byte) + counter (1 byte) */
         if (data.proto == MESH_PROTO_BIN && data.size == 3 && data.data[0] == MESH_CMD_HEARTBEAT) {
             uint8_t pointer = data.data[1];
@@ -174,6 +239,12 @@ void esp_mesh_p2p_rx_main(void *arg)
                     ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] RGB effect plugin heartbeat handler error: 0x%x", heartbeat_err);
                 }
             }
+
+            /* Synchronize core local heartbeat counter with received counter */
+            mesh_common_set_local_heartbeat_counter(counter);
+
+            /* Reset state query response flag (allows node to respond to next state query) */
+            state_query_responded = false;
 
             /* Heartbeat counting and mesh command handling continue, but RGB LED control is removed
              * RGB LEDs are now exclusive to plugins via plugin_light_set_rgb() and plugin_set_rgb_led()

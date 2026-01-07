@@ -16,6 +16,7 @@
 #include "plugin_system.h"
 #include "mesh_commands.h"
 #include "mesh_common.h"
+#include "mesh_root.h"
 #include "esp_mesh.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -247,6 +248,12 @@ static esp_err_t plugin_system_broadcast_command(uint8_t plugin_id, uint8_t cmd)
         return ESP_ERR_INVALID_STATE;
     }
 
+    /* Block commands during root setup (except state query, which is handled elsewhere) */
+    if (mesh_root_is_setup_in_progress()) {
+        ESP_LOGW(TAG, "Plugin command blocked during root setup: plugin ID 0x%02X, command 0x%02X", plugin_id, cmd);
+        return ESP_ERR_INVALID_STATE;
+    }
+
     mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
     int route_table_size = 0;
     esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
@@ -357,31 +364,37 @@ esp_err_t plugin_activate(const char *name)
 
         int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
         if (child_node_count > 0) {
-            uint8_t *tx_buf = mesh_common_get_tx_buf();
-            tx_buf[0] = plugin->command_id;  /* Plugin ID */
-            tx_buf[1] = PLUGIN_CMD_START;    /* START command */
+            /* Block plugin activation broadcast during root setup */
+            if (mesh_root_is_setup_in_progress()) {
+                ESP_LOGD(TAG, "Plugin activation broadcast blocked during root setup");
+                /* Continue with local activation, but skip broadcast */
+            } else {
+                uint8_t *tx_buf = mesh_common_get_tx_buf();
+                tx_buf[0] = plugin->command_id;  /* Plugin ID */
+                tx_buf[1] = PLUGIN_CMD_START;    /* START command */
 
-            mesh_data_t data;
-            data.data = tx_buf;
-            data.size = 2;  /* Plugin ID(1) + CMD(1) */
-            data.proto = MESH_PROTO_BIN;
-            data.tos = MESH_TOS_P2P;
+                mesh_data_t data;
+                data.data = tx_buf;
+                data.size = 2;  /* Plugin ID(1) + CMD(1) */
+                data.proto = MESH_PROTO_BIN;
+                data.tos = MESH_TOS_P2P;
 
-            int success_count = 0;
-            int fail_count = 0;
-            /* Skip index 0 (root node itself), only send to child nodes */
-            for (int i = 1; i < route_table_size; i++) {
-                esp_err_t err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
-                if (err == ESP_OK) {
-                    success_count++;
-                } else {
-                    fail_count++;
-                    ESP_LOGD(TAG, "Plugin START broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
+                int success_count = 0;
+                int fail_count = 0;
+                /* Skip index 0 (root node itself), only send to child nodes */
+                for (int i = 1; i < route_table_size; i++) {
+                    esp_err_t err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+                    if (err == ESP_OK) {
+                        success_count++;
+                    } else {
+                        fail_count++;
+                        ESP_LOGD(TAG, "Plugin START broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
+                    }
                 }
-            }
 
-            ESP_LOGI(TAG, "Plugin '%s' START command broadcast - sent to %d/%d child nodes (success:%d, failed:%d)",
-                     name, success_count, child_node_count, success_count, fail_count);
+                ESP_LOGI(TAG, "Plugin '%s' START command broadcast - sent to %d/%d child nodes (success:%d, failed:%d)",
+                         name, success_count, child_node_count, success_count, fail_count);
+            }
         } else {
             ESP_LOGD(TAG, "Plugin '%s' activated on root node - no child nodes to broadcast", name);
         }
@@ -452,6 +465,12 @@ esp_err_t plugin_send_start_to_node(const mesh_addr_t *node_addr)
     /* Only root node should send plugin state to other nodes */
     if (!esp_mesh_is_root()) {
         ESP_LOGD(TAG, "plugin_send_start_to_node: not root node, skipping");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Block commands during root setup */
+    if (mesh_root_is_setup_in_progress()) {
+        ESP_LOGD(TAG, "plugin_send_start_to_node: blocked during root setup");
         return ESP_ERR_INVALID_STATE;
     }
 

@@ -40,4 +40,10 @@ int mesh_get_node_count(void);
 /* Handle RGB command received via mesh network (for unified behavior) */
 void mesh_root_handle_rgb_command(uint8_t r, uint8_t g, uint8_t b);
 
+/* Handle mesh state response from child node (for root state adoption) */
+void mesh_root_handle_state_response(const char *plugin_name, uint8_t counter);
+
+/* Check if root setup is in progress (for command blocking) */
+bool mesh_root_is_setup_in_progress(void);
+
 #endif /* __MESH_ROOT_H__ */

@@ -103,5 +103,40 @@ typedef struct {
 #define  MESH_CMD_OTA_PREPARE_REBOOT (0xF5)  /* Prepare for coordinated reboot */
 #define  MESH_CMD_OTA_REBOOT     (0xF6)  /* Execute coordinated reboot */
 #define  MESH_CMD_WEBSERVER_IP_BROADCAST (0xF7)  /* Broadcast external web server IP and UDP port to child nodes */
+#define  MESH_CMD_QUERY_MESH_STATE (0xF9)  /* Root queries child nodes for plugin state and heartbeat counter */
+#define  MESH_CMD_MESH_STATE_RESPONSE (0xFA)  /* Child responds with active plugin name and current heartbeat counter */
+
+/*******************************************************
+ *                Mesh State Query Command Formats
+ *******************************************************/
+
+/**
+ * @brief MESH_CMD_QUERY_MESH_STATE payload format
+ *
+ * Command: MESH_CMD_QUERY_MESH_STATE (0xF9)
+ * Payload: None (command byte only, 1 byte)
+ *
+ * Sent by root node to query all child nodes for their current mesh state:
+ * - Active plugin name
+ * - Current local heartbeat counter value
+ *
+ * Each child node responds only once per query (one-time response flag).
+ */
+
+/**
+ * @brief MESH_CMD_MESH_STATE_RESPONSE payload format
+ *
+ * Command: MESH_CMD_MESH_STATE_RESPONSE (0xFA)
+ * Payload: [PLUGIN_NAME_LEN:1] [PLUGIN_NAME:N] [COUNTER:1]
+ *   - PLUGIN_NAME_LEN: Length of plugin name string (1 byte, 0-255)
+ *   - PLUGIN_NAME: Null-terminated plugin name string (N bytes, max length to prevent overflow)
+ *   - COUNTER: Current local heartbeat counter value (1 byte, 0-255, wraps)
+ *
+ * Total size: 2 + PLUGIN_NAME_LEN bytes (minimum 2 bytes if plugin name is empty)
+ *
+ * Sent by child nodes in response to MESH_CMD_QUERY_MESH_STATE.
+ * Contains the active plugin name (or empty string if no plugin active) and
+ * the current local heartbeat counter value.
+ */
 
 #endif /* __MESH_COMMANDS_H__ */

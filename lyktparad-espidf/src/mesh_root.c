@@ -37,6 +37,7 @@
 #endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "lwip/inet.h"
 #include "lwip/ip4_addr.h"
 
@@ -63,6 +64,26 @@ static uint8_t root_rgb_r = 0;
 static uint8_t root_rgb_g = 0;
 static uint8_t root_rgb_b = 0;
 static bool root_rgb_has_been_set = false;
+static bool root_setup_in_progress = false;
+static bool root_has_been_root_before = false;  /* Track if this node has been root before (not a newly booted root) */
+
+/* State response collection structure */
+typedef struct {
+    uint8_t counter;
+    char plugin_name[32];  /* Max plugin name length */
+    bool valid;
+} mesh_state_response_t;
+
+static mesh_state_response_t state_responses[10];  /* Max 10 responses */
+static int state_response_count = 0;
+static bool state_query_sent = false;
+static SemaphoreHandle_t state_response_mutex = NULL;  /* Mutex for thread-safe response collection */
+
+/*******************************************************
+ *                Forward Declarations
+ *******************************************************/
+
+static esp_err_t mesh_root_adopt_mesh_state(void);
 
 /*******************************************************
  *                Heartbeat Timer Management
@@ -71,11 +92,27 @@ static bool root_rgb_has_been_set = false;
 static void heartbeat_timer_start(void)
 {
     if (heartbeat_timer != NULL) {
-        esp_err_t err = esp_timer_start_periodic(heartbeat_timer, (uint64_t)MESH_CONFIG_HEARTBEAT_INTERVAL * 1000ULL);
-        if (err == ESP_OK) {
-            ESP_LOGI(MESH_TAG, "[HEARTBEAT] Timer started with interval %dms", MESH_CONFIG_HEARTBEAT_INTERVAL);
+        /* If this is a newly booted root and setup hasn't been done, perform state adoption first */
+        if (!root_has_been_root_before && !root_setup_in_progress) {
+            root_setup_in_progress = true;
+            root_has_been_root_before = true;
+            esp_err_t adopt_err = mesh_root_adopt_mesh_state();
+            if (adopt_err != ESP_OK) {
+                ESP_LOGW(MESH_TAG, "[HEARTBEAT] State adoption failed: %s, continuing anyway", esp_err_to_name(adopt_err));
+                root_setup_in_progress = false;  /* Allow heartbeats even if adoption failed */
+            }
+        }
+
+        /* Only start timer if setup is complete */
+        if (!root_setup_in_progress) {
+            esp_err_t err = esp_timer_start_periodic(heartbeat_timer, (uint64_t)MESH_CONFIG_HEARTBEAT_INTERVAL * 1000ULL);
+            if (err == ESP_OK) {
+                ESP_LOGI(MESH_TAG, "[HEARTBEAT] Timer started with interval %dms", MESH_CONFIG_HEARTBEAT_INTERVAL);
+            } else {
+                ESP_LOGE(MESH_TAG, "[HEARTBEAT] Failed to start timer: 0x%x", err);
+            }
         } else {
-            ESP_LOGE(MESH_TAG, "[HEARTBEAT] Failed to start timer: 0x%x", err);
+            ESP_LOGI(MESH_TAG, "[HEARTBEAT] Timer start deferred - setup in progress");
         }
     }
 }
@@ -90,6 +127,399 @@ static void heartbeat_timer_stop(void)
             ESP_LOGE(MESH_TAG, "[HEARTBEAT] Failed to stop timer: 0x%x", err);
         }
     }
+}
+
+/*******************************************************
+ *                Root State Adoption
+ *******************************************************/
+
+/**
+ * @brief Calculate median value from array of uint8_t counters
+ *
+ * Handles the circular nature of uint8_t (0-255 wraps).
+ * For odd count: returns middle value
+ * For even count: returns average of two middle values
+ *
+ * @param counters Array of counter values
+ * @param count Number of values in array
+ * @return Median counter value
+ */
+static uint8_t calculate_median_counter(uint8_t *counters, int count)
+{
+    if (count == 0) {
+        return 0;
+    }
+    if (count == 1) {
+        return counters[0];
+    }
+
+    /* Sort counters (simple bubble sort for small arrays) */
+    uint8_t sorted[10];  /* Max 10 responses */
+    if (count > 10) {
+        count = 10;  /* Limit to 10 */
+    }
+    for (int i = 0; i < count; i++) {
+        sorted[i] = counters[i];
+    }
+
+    /* Bubble sort */
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = 0; j < count - i - 1; j++) {
+            if (sorted[j] > sorted[j + 1]) {
+                uint8_t temp = sorted[j];
+                sorted[j] = sorted[j + 1];
+                sorted[j + 1] = temp;
+            }
+        }
+    }
+
+    /* Calculate median */
+    if (count % 2 == 1) {
+        /* Odd count: return middle value */
+        return sorted[count / 2];
+    } else {
+        /* Even count: return average of two middle values */
+        uint16_t sum = (uint16_t)sorted[count / 2 - 1] + (uint16_t)sorted[count / 2];
+        return (uint8_t)(sum / 2);
+    }
+}
+
+/**
+ * @brief Determine most common plugin name from responses
+ *
+ * @param plugin_names Array of plugin name strings (can be NULL for inactive)
+ * @param count Number of responses
+ * @return Most common plugin name, or NULL if no clear majority
+ */
+static const char* determine_active_plugin(const char **plugin_names, int count)
+{
+    if (count == 0) {
+        return NULL;
+    }
+
+    /* Count occurrences of each plugin name */
+    int max_count = 0;
+    const char *most_common = NULL;
+    int null_count = 0;
+
+    for (int i = 0; i < count; i++) {
+        if (plugin_names[i] == NULL || plugin_names[i][0] == '\0') {
+            null_count++;
+            continue;
+        }
+
+        int plugin_count = 1;
+        for (int j = i + 1; j < count; j++) {
+            if (plugin_names[j] != NULL && plugin_names[j][0] != '\0' &&
+                strcmp(plugin_names[i], plugin_names[j]) == 0) {
+                plugin_count++;
+            }
+        }
+
+        if (plugin_count > max_count) {
+            max_count = plugin_count;
+            most_common = plugin_names[i];
+        }
+    }
+
+    /* If most common plugin has more votes than NULL/inactive, return it */
+    if (most_common != NULL && max_count > null_count) {
+        return most_common;
+    }
+
+    return NULL;  /* No clear majority */
+}
+
+/**
+ * @brief Check if command should be blocked during setup
+ *
+ * @param cmd Command ID to check
+ * @return true if command should be blocked, false otherwise
+ */
+static bool is_command_blocked_during_setup(uint8_t cmd)
+{
+    if (root_setup_in_progress && cmd != MESH_CMD_QUERY_MESH_STATE) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * @brief Perform root state adoption from mesh
+ *
+ * Queries all child nodes for their mesh state (plugin and heartbeat counter),
+ * collects responses, calculates median counter and most common plugin,
+ * and adopts the state before starting heartbeats.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t mesh_root_adopt_mesh_state(void)
+{
+    if (!esp_mesh_is_root()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(MESH_TAG, "[ROOT SETUP] Starting mesh state adoption...");
+
+    /* Get routing table */
+    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+    int route_table_size = 0;
+    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+
+    /* Calculate child node count (excluding root) */
+    int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
+
+    if (child_node_count == 0) {
+        ESP_LOGI(MESH_TAG, "[ROOT SETUP] No child nodes, starting with default state (counter=0, no plugin)");
+        root_setup_in_progress = false;
+        return ESP_OK;
+    }
+
+    /* Prepare state query command */
+    uint8_t *tx_buf = mesh_common_get_tx_buf();
+    tx_buf[0] = MESH_CMD_QUERY_MESH_STATE;
+
+    mesh_data_t query_data;
+    query_data.data = tx_buf;
+    query_data.size = 1;  /* Command byte only */
+    query_data.proto = MESH_PROTO_BIN;
+    query_data.tos = MESH_TOS_P2P;
+
+    /* Send query to all child nodes */
+    for (int i = 0; i < route_table_size; i++) {
+        /* Skip root node */
+        mesh_addr_t root_addr;
+        uint8_t mac[6];
+        if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
+            memcpy(root_addr.addr, mac, 6);
+            bool is_root = true;
+            for (int j = 0; j < 6; j++) {
+                if (route_table[i].addr[j] != root_addr.addr[j]) {
+                    is_root = false;
+                    break;
+                }
+            }
+            if (is_root) {
+                continue;
+            }
+        }
+
+        esp_err_t err = mesh_send_with_bridge(&route_table[i], &query_data, MESH_DATA_P2P, NULL, 0);
+        if (err != ESP_OK) {
+            ESP_LOGW(MESH_TAG, "[ROOT SETUP] Failed to send state query to "MACSTR": %s",
+                     MAC2STR(route_table[i].addr), esp_err_to_name(err));
+        }
+    }
+
+    ESP_LOGI(MESH_TAG, "[ROOT SETUP] State query sent to %d child nodes, waiting for responses...", child_node_count);
+
+    /* Create mutex if not exists */
+    if (state_response_mutex == NULL) {
+        state_response_mutex = xSemaphoreCreateMutex();
+        if (state_response_mutex == NULL) {
+            ESP_LOGE(MESH_TAG, "[ROOT SETUP] Failed to create response mutex");
+            root_setup_in_progress = false;
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    /* Reset response collection (with mutex protection) */
+    if (xSemaphoreTake(state_response_mutex, portMAX_DELAY) == pdTRUE) {
+        state_response_count = 0;
+        state_query_sent = true;
+        memset(state_responses, 0, sizeof(state_responses));
+        xSemaphoreGive(state_response_mutex);
+    }
+
+    /* Wait for responses (max 5 seconds, max 10 responses) */
+    int64_t start_time = esp_timer_get_time() / 1000;  /* Convert to milliseconds */
+    const int timeout_ms = 5000;  /* 5 seconds */
+    const int max_responses = 10;
+
+    /* Wait for responses with timeout */
+    while ((esp_timer_get_time() / 1000 - start_time) < timeout_ms && state_response_count < max_responses) {
+        vTaskDelay(pdMS_TO_TICKS(100));  /* Check every 100ms */
+    }
+
+    /* Stop accepting responses */
+    if (xSemaphoreTake(state_response_mutex, portMAX_DELAY) == pdTRUE) {
+        state_query_sent = false;
+        xSemaphoreGive(state_response_mutex);
+    }
+
+    /* Extract counters and plugin names from responses (with mutex protection) */
+    uint8_t counters[10];
+    const char *plugin_names[10];
+    int response_count = 0;
+    int current_response_count = 0;
+
+    if (xSemaphoreTake(state_response_mutex, portMAX_DELAY) == pdTRUE) {
+        current_response_count = state_response_count;
+        for (int i = 0; i < current_response_count && i < max_responses; i++) {
+            if (state_responses[i].valid) {
+                counters[response_count] = state_responses[i].counter;
+                plugin_names[response_count] = state_responses[i].plugin_name[0] != '\0' ? state_responses[i].plugin_name : NULL;
+                response_count++;
+            }
+        }
+        xSemaphoreGive(state_response_mutex);
+    }
+
+    /* If no responses collected, use default state */
+    if (response_count == 0) {
+        ESP_LOGW(MESH_TAG, "[ROOT SETUP] No responses received, using default state");
+        root_setup_in_progress = false;
+        return ESP_OK;
+    }
+
+    /* Calculate median counter */
+    uint8_t median_counter = calculate_median_counter(counters, response_count);
+    ESP_LOGI(MESH_TAG, "[ROOT SETUP] Collected %d responses, median counter: %u", response_count, median_counter);
+
+    /* Determine active plugin */
+    const char *adopted_plugin = determine_active_plugin(plugin_names, response_count);
+    if (adopted_plugin != NULL) {
+        ESP_LOGI(MESH_TAG, "[ROOT SETUP] Adopted plugin: '%s'", adopted_plugin);
+    } else {
+        ESP_LOGI(MESH_TAG, "[ROOT SETUP] No plugin adopted (no clear majority)");
+    }
+
+    /* Set initial state */
+    heartbeat_count = median_counter;
+    mesh_common_set_local_heartbeat_counter(median_counter);
+
+    /* Activate adopted plugin if one was determined */
+    if (adopted_plugin != NULL) {
+        esp_err_t plugin_err = plugin_activate(adopted_plugin);
+        if (plugin_err != ESP_OK) {
+            ESP_LOGW(MESH_TAG, "[ROOT SETUP] Failed to activate plugin '%s': %s",
+                     adopted_plugin, esp_err_to_name(plugin_err));
+        } else {
+            ESP_LOGI(MESH_TAG, "[ROOT SETUP] Plugin '%s' activated", adopted_plugin);
+        }
+    }
+
+    /* Send plugin START command to activate nodes that joined during setup */
+    /* Note: Do this before marking setup complete, but after state is set */
+    /* This ensures nodes that joined during setup receive the command */
+    /* Refresh routing table to include nodes that joined during setup */
+    if (adopted_plugin != NULL) {
+        /* Refresh routing table to get current state (nodes might have joined during wait) */
+        esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+        int current_child_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
+
+        /* Get plugin ID */
+        uint8_t plugin_id = 0;
+        esp_err_t id_err = plugin_get_id_by_name(adopted_plugin, &plugin_id);
+        if (id_err == ESP_OK && plugin_id != 0) {
+            /* Broadcast PLUGIN_CMD_START */
+            uint8_t *cmd_buf = mesh_common_get_tx_buf();
+            cmd_buf[0] = plugin_id;
+            cmd_buf[1] = PLUGIN_CMD_START;
+
+            mesh_data_t start_data;
+            start_data.data = cmd_buf;
+            start_data.size = 2;  /* Plugin ID + Command */
+            start_data.proto = MESH_PROTO_BIN;
+            start_data.tos = MESH_TOS_P2P;
+
+            for (int i = 0; i < route_table_size; i++) {
+                /* Skip root node */
+                mesh_addr_t root_addr;
+                uint8_t mac[6];
+                if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
+                    memcpy(root_addr.addr, mac, 6);
+                    bool is_root = true;
+                    for (int j = 0; j < 6; j++) {
+                        if (route_table[i].addr[j] != root_addr.addr[j]) {
+                            is_root = false;
+                            break;
+                        }
+                    }
+                    if (is_root) {
+                        continue;
+                    }
+                }
+
+                esp_err_t err = mesh_send_with_bridge(&route_table[i], &start_data, MESH_DATA_P2P, NULL, 0);
+                if (err != ESP_OK) {
+                    ESP_LOGW(MESH_TAG, "[ROOT SETUP] Failed to send plugin START to "MACSTR": %s",
+                             MAC2STR(route_table[i].addr), esp_err_to_name(err));
+                }
+            }
+            ESP_LOGI(MESH_TAG, "[ROOT SETUP] Plugin START command sent for '%s' to %d child nodes", adopted_plugin, current_child_count);
+        }
+    }
+
+    /* Mark setup as complete (after sending plugin START) */
+    root_setup_in_progress = false;
+
+    ESP_LOGI(MESH_TAG, "[ROOT SETUP] Mesh state adoption complete - counter: %u, plugin: %s",
+             median_counter, adopted_plugin != NULL ? adopted_plugin : "none");
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Handle mesh state response from child node
+ *
+ * Called when a child node responds to MESH_CMD_QUERY_MESH_STATE.
+ * Collects the response for processing during state adoption.
+ *
+ * @param plugin_name Active plugin name (can be NULL or empty if no plugin active)
+ * @param counter Current heartbeat counter value
+ */
+void mesh_root_handle_state_response(const char *plugin_name, uint8_t counter)
+{
+    if (state_response_mutex == NULL) {
+        return;  /* Mutex not initialized yet */
+    }
+
+    /* Check if we should accept responses (with mutex protection) */
+    bool should_accept = false;
+    int current_count = 0;
+    if (xSemaphoreTake(state_response_mutex, portMAX_DELAY) == pdTRUE) {
+        should_accept = (state_query_sent && state_response_count < 10);
+        current_count = state_response_count;
+        xSemaphoreGive(state_response_mutex);
+    }
+
+    if (!should_accept) {
+        return;  /* Not waiting for responses or already have max responses */
+    }
+
+    /* Store response (with mutex protection) */
+    if (xSemaphoreTake(state_response_mutex, portMAX_DELAY) == pdTRUE) {
+        /* Double-check after acquiring mutex (state might have changed) */
+        if (state_query_sent && state_response_count < 10) {
+            state_responses[state_response_count].counter = counter;
+            state_responses[state_response_count].valid = true;
+            if (plugin_name != NULL && plugin_name[0] != '\0') {
+                strncpy(state_responses[state_response_count].plugin_name, plugin_name, sizeof(state_responses[state_response_count].plugin_name) - 1);
+                state_responses[state_response_count].plugin_name[sizeof(state_responses[state_response_count].plugin_name) - 1] = '\0';
+            } else {
+                state_responses[state_response_count].plugin_name[0] = '\0';
+            }
+            state_response_count++;
+            current_count = state_response_count;
+        }
+        xSemaphoreGive(state_response_mutex);
+    }
+
+    ESP_LOGD(MESH_TAG, "[ROOT SETUP] State response received: plugin='%s', counter=%u (total: %d)",
+             plugin_name != NULL ? plugin_name : "none", counter, current_count);
+}
+
+/**
+ * @brief Check if root setup is in progress
+ *
+ * Used by other modules to check if commands should be blocked during setup.
+ *
+ * @return true if setup is in progress, false otherwise
+ */
+bool mesh_root_is_setup_in_progress(void)
+{
+    return root_setup_in_progress;
 }
 
 /*******************************************************
@@ -117,9 +547,18 @@ static void heartbeat_timer_cb(void *arg)
     uint16_t seq_pointer = sequence_plugin_get_pointer_for_heartbeat();
     uint8_t pointer = (uint8_t)(seq_pointer & 0xFF);  /* Convert to 1-byte (0-255) */
 
+    /* Check if commands are blocked during setup */
+    if (is_command_blocked_during_setup(MESH_CMD_HEARTBEAT)) {
+        ESP_LOGD(MESH_TAG, "[HEARTBEAT] Heartbeat blocked during setup");
+        return;
+    }
+
     /* payload: command prefix (0x01) + pointer (1 byte) + counter (1 byte) */
-    heartbeat_count++;
-    uint8_t counter = (uint8_t)(heartbeat_count & 0xFF);  /* 1-byte counter (0-255, wraps) */
+    /* Use core local heartbeat counter (core timer handles incrementing) */
+    /* Note: Core timer increments counter every MESH_CONFIG_HEARTBEAT_INTERVAL */
+    /* Root heartbeat timer fires at same interval, so counters should be synchronized */
+    uint8_t counter = mesh_common_get_local_heartbeat_counter();
+    heartbeat_count = counter;  /* Keep root-specific counter for compatibility */
     tx_buf[0] = MESH_CMD_HEARTBEAT;  /* Command prefix */
     tx_buf[1] = pointer;  /* Sequence pointer (0-255, 0 when sequence inactive) */
     tx_buf[2] = counter;  /* Counter (0-255, wraps) */
@@ -202,6 +641,12 @@ static void heartbeat_timer_cb(void *arg)
 esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
 {
     if (!esp_mesh_is_root()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Check if commands are blocked during setup */
+    if (is_command_blocked_during_setup(MESH_CMD_SET_RGB)) {
+        ESP_LOGW(MESH_TAG, "[RGB] Command blocked during setup");
         return ESP_ERR_INVALID_STATE;
     }
 

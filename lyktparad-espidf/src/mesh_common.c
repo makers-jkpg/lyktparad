@@ -97,6 +97,10 @@ static mesh_addr_t mesh_parent_addr;
 static int mesh_layer = -1;
 static esp_netif_t *netif_sta = NULL;
 
+/* Core local heartbeat counter - runs on all nodes (root and child) */
+static uint8_t local_heartbeat_counter = 0;
+static esp_timer_handle_t local_heartbeat_timer = NULL;
+
 /* Task function for non-blocking registration on role change */
 static void registration_task(void *pvParameters)
 {
@@ -762,6 +766,90 @@ esp_err_t mesh_common_comm_p2p_start(void)
 }
 
 /*******************************************************
+ *                Core Local Heartbeat Counter
+ *******************************************************/
+
+/**
+ * @brief Timer callback to increment local heartbeat counter
+ *
+ * This callback increments the local heartbeat counter every
+ * MESH_CONFIG_HEARTBEAT_INTERVAL milliseconds. The counter runs
+ * continuously on all nodes (root and child), even when root is lost.
+ */
+static void local_heartbeat_timer_callback(void *arg)
+{
+    (void)arg;
+    local_heartbeat_counter++;
+    /* Counter wraps at 255 automatically (uint8_t) */
+}
+
+/**
+ * @brief Initialize core local heartbeat counter timer
+ *
+ * Creates and starts a periodic timer that increments the counter
+ * every MESH_CONFIG_HEARTBEAT_INTERVAL milliseconds. This timer
+ * runs on all nodes (root and child) and continues even when
+ * root is lost.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t mesh_common_init_local_heartbeat(void)
+{
+    if (local_heartbeat_timer != NULL) {
+        ESP_LOGD(MESH_TAG, "Local heartbeat timer already created");
+        return ESP_OK;
+    }
+
+    esp_timer_create_args_t args = {
+        .callback = &local_heartbeat_timer_callback,
+        .arg = NULL,
+        .name = "local_heartbeat_timer",
+    };
+
+    esp_err_t err = esp_timer_create(&args, &local_heartbeat_timer);
+    if (err != ESP_OK) {
+        ESP_LOGE(MESH_TAG, "Failed to create local heartbeat timer: %s", esp_err_to_name(err));
+        local_heartbeat_timer = NULL;
+        return err;
+    }
+
+    err = esp_timer_start_periodic(local_heartbeat_timer, (uint64_t)MESH_CONFIG_HEARTBEAT_INTERVAL * 1000ULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(MESH_TAG, "Failed to start local heartbeat timer: %s", esp_err_to_name(err));
+        esp_timer_delete(local_heartbeat_timer);
+        local_heartbeat_timer = NULL;
+        return err;
+    }
+
+    ESP_LOGI(MESH_TAG, "Local heartbeat timer started with interval %dms", MESH_CONFIG_HEARTBEAT_INTERVAL);
+    return ESP_OK;
+}
+
+/**
+ * @brief Get current local heartbeat counter value
+ *
+ * @return Current counter value (0-255, wraps)
+ */
+uint8_t mesh_common_get_local_heartbeat_counter(void)
+{
+    return local_heartbeat_counter;
+}
+
+/**
+ * @brief Set local heartbeat counter value
+ *
+ * Used for root state adoption when a new root adopts the mesh state.
+ * This synchronizes the local counter with the mesh state.
+ *
+ * @param counter Counter value to set (0-255)
+ */
+void mesh_common_set_local_heartbeat_counter(uint8_t counter)
+{
+    local_heartbeat_counter = counter;
+    ESP_LOGD(MESH_TAG, "Local heartbeat counter set to %u", counter);
+}
+
+/*******************************************************
  *                Common Initialization
  *******************************************************/
 
@@ -877,6 +965,13 @@ esp_err_t mesh_common_init(void)
 #endif
 
     init_rgb_led();
+
+    /* Initialize core local heartbeat counter timer (runs on all nodes) */
+    esp_err_t heartbeat_init_err = mesh_common_init_local_heartbeat();
+    if (heartbeat_init_err != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "Failed to initialize local heartbeat timer: %s", esp_err_to_name(heartbeat_init_err));
+        /* Continue anyway - non-critical */
+    }
 
     bool is_root = esp_mesh_is_root();
     bool is_root_fixed = esp_mesh_is_root_fixed();

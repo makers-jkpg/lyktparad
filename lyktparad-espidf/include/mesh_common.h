@@ -68,6 +68,12 @@ const char* mesh_common_get_tag(void);
 /* Get mesh ID */
 const uint8_t* mesh_common_get_mesh_id(void);
 
+/* Get current local heartbeat counter value (0-255, wraps) */
+uint8_t mesh_common_get_local_heartbeat_counter(void);
+
+/* Set local heartbeat counter value (for root state adoption) */
+void mesh_common_set_local_heartbeat_counter(uint8_t counter);
+
 /*******************************************************
  *                Event Handler Callbacks
  *******************************************************/
