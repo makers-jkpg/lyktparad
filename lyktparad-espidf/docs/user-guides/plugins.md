@@ -107,13 +107,18 @@ Plugins receive commands via the mesh network using a self-contained protocol fo
   - `PLUGIN_CMD_START` (0x01): Start plugin playback
   - `PLUGIN_CMD_PAUSE` (0x02): Pause plugin playback
   - `PLUGIN_CMD_RESET` (0x03): Reset plugin state
-  - `PLUGIN_CMD_DATA` (0x04): Plugin-specific data (variable length)
+  - `PLUGIN_CMD_DATA` (0x04): General-purpose plugin data command (variable length). Used by plugins for custom data, configuration, or plugin-specific sub-commands that cannot be handled by standard commands. See [Plugin System Developer Guide](../dev-guides/plugin-system.md) for detailed protocol specification.
   - `PLUGIN_CMD_STOP` (0x05): Stop plugin (deactivate and reset state)
-- **LENGTH** (2 bytes, optional): Length prefix for variable-length data (only for DATA commands)
+- **LENGTH** (2 bytes, optional): Length prefix for variable-length data (only for DATA commands, plugin-specific)
 - **DATA** (N bytes, optional): Command-specific parameters
+  - For PLUGIN_CMD_DATA: Contains plugin-specific sub-command ID and data payload. Each plugin defines its own protocol structure.
 
 **Command Sizes**:
 - START, PAUSE, RESET, STOP: 2 bytes (PLUGIN_ID + CMD)
+- DATA: Variable size (minimum 2 bytes: PLUGIN_ID + CMD, plus plugin-specific data). Maximum recommended payload: 512 bytes.
+
+**When Plugins Use PLUGIN_CMD_DATA**:
+Plugins use PLUGIN_CMD_DATA when they need to send custom data or configuration that doesn't fit the simple START/PAUSE/RESET/STOP model. For example, the sequence plugin uses it to send sequence data (colors, rhythm, length), while effect plugins use standard commands since they don't need custom data. For developers creating plugins, see the [Plugin System Developer Guide](../dev-guides/plugin-system.md) for detailed protocol specification and examples.
 
 **Note**: Sequence synchronization is handled via `MESH_CMD_HEARTBEAT` (core mesh command), not via plugin BEAT commands. The heartbeat format is `[MESH_CMD_HEARTBEAT:1] [POINTER:1] [COUNTER:1]` (3 bytes total), where POINTER is the sequence pointer (0-255, 0 when sequence inactive) and COUNTER is a synchronization counter (0-255, wraps).
 

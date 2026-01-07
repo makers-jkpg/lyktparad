@@ -1341,7 +1341,8 @@ async function loadExternalServerConfig() {
   try {
     const response = await fetch('/api/settings/external-server');
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `HTTP ${response.status}`);
     }
     const data = await response.json();
 
@@ -1464,9 +1465,14 @@ async function handleExternalServerSave() {
       })
     });
 
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || 'HTTP error: ' + response.status);
+    }
+
     const data = await response.json();
 
-    if (!response.ok || !data.success) {
+    if (!data.success) {
       throw new Error(data.error || 'Failed to save configuration');
     }
 
@@ -1505,9 +1511,14 @@ async function handleExternalServerClear() {
       method: 'DELETE'
     });
 
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || 'HTTP error: ' + response.status);
+    }
+
     const data = await response.json();
 
-    if (!response.ok || !data.success) {
+    if (!data.success) {
       throw new Error(data.error || 'Failed to clear configuration');
     }
 

@@ -103,7 +103,11 @@ esp_err_t sequence_plugin_handle_heartbeat(uint8_t pointer, uint8_t counter);
  *******************************************************/
 
 /**
- * @brief Pause sequence playback (called from mesh_child.c on RGB command)
+ * @brief Pause sequence playback on child node
+ *
+ * Note: This function is available for manual pausing but is not automatically
+ * called when RGB commands are received. RGB commands are now handled through
+ * the plugin system, and plugins control LEDs exclusively when active.
  */
 void sequence_plugin_node_pause(void);
 

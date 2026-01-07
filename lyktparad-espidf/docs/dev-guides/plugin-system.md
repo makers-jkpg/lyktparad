@@ -123,20 +123,46 @@ The plugin protocol uses a self-contained format where the plugin ID is included
   - `PLUGIN_CMD_START` (0x01): Start plugin playback
   - `PLUGIN_CMD_PAUSE` (0x02): Pause plugin playback
   - `PLUGIN_CMD_RESET` (0x03): Reset plugin state
-  - `PLUGIN_CMD_DATA` (0x04): Plugin-specific data command (variable length)
+  - `PLUGIN_CMD_DATA` (0x04): General-purpose plugin data command (variable length). Used for plugin-specific needs that cannot be satisfied by standard commands (START, PAUSE, RESET, STOP). Plugins can define their own protocol with sub-command IDs and data formats. See "When to Use PLUGIN_CMD_DATA" section below.
   - `PLUGIN_CMD_STOP` (0x05): Stop plugin (deactivate and reset state)
 - **LENGTH** (2 bytes, optional): Length prefix for variable-length data (network byte order, only for DATA commands)
+  - **Note**: Length prefix is plugin-specific and optional. Some plugins (e.g., sequence plugin) use it, while others may define their own protocol with plugin-specific sub-command IDs
 - **DATA** (N bytes, optional): Command-specific data
+  - For PLUGIN_CMD_DATA: Contains plugin-specific sub-command ID and data payload. Plugins can define their own protocol structure (e.g., sub-command ID format, data layout)
 - **Total size**: Maximum 1024 bytes (including all fields)
+- **PLUGIN_CMD_DATA maximum payload**: 512 bytes recommended (not enforced by system). This leaves room for PLUGIN_ID (1 byte) + CMD (1 byte) within the 1024 byte total limit
 
 **Fixed-size commands**:
 - START, PAUSE, RESET, STOP: 2 bytes total (PLUGIN_ID + CMD)
 
-**Variable-size commands** (DATA): 4 bytes header (PLUGIN_ID + CMD + LENGTH) + data
+**Variable-size commands** (DATA):
+- **With length prefix** (e.g., sequence plugin): 4 bytes header (PLUGIN_ID + CMD + LENGTH) + data
+- **With sub-command ID** (plugin-specific): 3+ bytes (PLUGIN_ID + CMD + sub-command ID) + optional data
+- **Minimum size**: 2 bytes (PLUGIN_ID + CMD)
 
 **Note**: Sequence synchronization is handled via `MESH_CMD_HEARTBEAT` (core mesh command), not via plugin BEAT commands. The heartbeat format is `[MESH_CMD_HEARTBEAT:1] [POINTER:1] [COUNTER:1]` (3 bytes total), where POINTER is the sequence pointer (0-255, 0 when sequence inactive) and COUNTER is a synchronization counter (0-255, wraps).
 
 **Mutual Exclusivity**: When a START command is received for a plugin, the system automatically stops any other running plugin before activating the target plugin.
+
+### When to Use PLUGIN_CMD_DATA
+
+`PLUGIN_CMD_DATA` is a general-purpose command for plugin-specific needs that cannot be satisfied by the standard commands (START, PAUSE, RESET, STOP). Use standard commands when possible, as they provide clear semantics and are handled by dedicated callbacks.
+
+**Use PLUGIN_CMD_DATA when:**
+- You need to send custom data or configuration to your plugin (e.g., sequence data, effect parameters, color palettes)
+- You need to implement plugin-specific sub-commands (e.g., different data types, operation modes)
+- You need to send complex parameters that don't fit the simple START/PAUSE/RESET/STOP model
+- You need variable-length data that changes based on plugin state or configuration
+
+**Use standard commands (START/PAUSE/RESET/STOP) when:**
+- You need to start, pause, reset, or stop plugin playback
+- The operation is a simple state change that doesn't require additional data
+- You want to use the dedicated callbacks (`on_start`, `on_pause`, `on_reset`, `on_stop`)
+
+**Examples:**
+- **Sequence Plugin**: Uses PLUGIN_CMD_DATA to send sequence data (rhythm, length, color data) because it requires variable-length payload
+- **Effect Plugins**: Use START/PAUSE/RESET/STOP because they don't need custom data (effects use hardcoded parameters)
+- **Future Plugin**: Could use PLUGIN_CMD_DATA with sub-command IDs (e.g., 0x01=set_color, 0x02=set_speed, 0x03=set_pattern) to send different types of configuration
 
 ## Creating a Plugin
 
@@ -293,7 +319,7 @@ You should:
 4. Execute the command logic
 5. Return appropriate error codes
 
-Example:
+Example (with length prefix, like sequence plugin):
 
 ```c
 static esp_err_t my_plugin_command_handler(uint8_t *data, uint16_t len)
@@ -310,7 +336,7 @@ static esp_err_t my_plugin_command_handler(uint8_t *data, uint16_t len)
     /* Execute command logic */
     switch (command_byte) {
         case PLUGIN_CMD_DATA:
-            /* Handle DATA command with variable-length payload */
+            /* Handle DATA command with length prefix (network byte order) */
             if (len < 3) {
                 ESP_LOGE(TAG, "DATA command too short: len=%d", len);
                 return ESP_ERR_INVALID_ARG;
@@ -331,12 +357,75 @@ static esp_err_t my_plugin_command_handler(uint8_t *data, uint16_t len)
 }
 ```
 
+Example (with plugin-specific sub-command IDs):
+
+```c
+/* Plugin-specific sub-command IDs */
+#define MY_PLUGIN_SUBCMD_SET_COLOR  (0x01)
+#define MY_PLUGIN_SUBCMD_SET_SPEED  (0x02)
+#define MY_PLUGIN_SUBCMD_SET_PATTERN (0x03)
+
+static esp_err_t my_plugin_command_handler(uint8_t *data, uint16_t len)
+{
+    /* Validate data */
+    if (data == NULL || len < 1) {
+        ESP_LOGE(TAG, "Invalid command data");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Parse command byte (data[0] is the command byte, not plugin ID) */
+    uint8_t command_byte = data[0];
+
+    /* Execute command logic */
+    switch (command_byte) {
+        case PLUGIN_CMD_DATA:
+            /* Handle DATA command with plugin-specific sub-command ID */
+            if (len < 2) {
+                ESP_LOGE(TAG, "DATA command too short: len=%d (need at least CMD + sub-command)", len);
+                return ESP_ERR_INVALID_ARG;
+            }
+            /* Extract plugin-specific sub-command ID from data[1] */
+            uint8_t sub_cmd = data[1];
+
+            switch (sub_cmd) {
+                case MY_PLUGIN_SUBCMD_SET_COLOR:
+                    /* Handle set color sub-command: [CMD:1] [SUB_CMD:1] [R:1] [G:1] [B:1] */
+                    if (len < 5) {
+                        ESP_LOGE(TAG, "SET_COLOR command incomplete: len=%d (need 5 bytes)", len);
+                        return ESP_ERR_INVALID_SIZE;
+                    }
+                    return my_plugin_set_color(data[2], data[3], data[4]);
+
+                case MY_PLUGIN_SUBCMD_SET_SPEED:
+                    /* Handle set speed sub-command: [CMD:1] [SUB_CMD:1] [SPEED:1] */
+                    if (len < 3) {
+                        ESP_LOGE(TAG, "SET_SPEED command incomplete: len=%d (need 3 bytes)", len);
+                        return ESP_ERR_INVALID_SIZE;
+                    }
+                    return my_plugin_set_speed(data[2]);
+
+                default:
+                    ESP_LOGE(TAG, "Unknown sub-command: 0x%02X", sub_cmd);
+                    return ESP_ERR_NOT_SUPPORTED;
+            }
+
+        default:
+            ESP_LOGE(TAG, "Unknown command byte: 0x%02X", command_byte);
+            return ESP_ERR_NOT_SUPPORTED;
+    }
+}
+```
+
 ### Command Data Format
 
-The command handler receives data in the format `[CMD:1] [LENGTH:2?] [DATA:N]`:
+The command handler receives data in the format `[CMD:1] [<plugin_specific_data>:N]`:
 
 - **Note**: The `command_handler` callback is only used for `PLUGIN_CMD_DATA` commands. Fixed-size commands (START, PAUSE, RESET, STOP) are handled by their dedicated callbacks (`on_start`, `on_pause`, `on_reset`, `on_stop`) and do not go through `command_handler`.
-- **For variable-size commands** (DATA): `len >= 3`, `data[0]` = `PLUGIN_CMD_DATA` (0x04), `data[1-2]` = length prefix (network byte order), `data[3]` onwards = actual data
+- **For PLUGIN_CMD_DATA commands**: `data[0]` = `PLUGIN_CMD_DATA` (0x04), `data[1]` onwards = plugin-specific data
+- **Plugin-specific protocol options**:
+  - **Length prefix format** (e.g., sequence plugin): `[CMD:1] [LENGTH:2] [DATA:N]` where LENGTH is 2 bytes in network byte order, `data[3]` onwards = actual data
+  - **Sub-command ID format**: `[CMD:1] [SUB_CMD_ID:1-n] [DATA:N]` where SUB_CMD_ID is plugin-defined, `data[2]` onwards = sub-command data
+  - Plugins can define their own protocol structure as needed
 
 **Example DATA command:**
 If a DATA command is sent with:

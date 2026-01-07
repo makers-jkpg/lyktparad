@@ -995,7 +995,7 @@ esp_err_t mesh_udp_bridge_resolve_hostname(const char *hostname, char *ip_out, s
 
     int err = getaddrinfo(hostname, NULL, &hints, &result);
     if (err != 0) {
-        ESP_LOGW(TAG, "Failed to resolve hostname '%s': %s", hostname, gai_strerror(err));
+        ESP_LOGW(TAG, "Failed to resolve hostname '%s': error code %d", hostname, err);
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -4518,7 +4518,7 @@ bool mesh_udp_bridge_test_connection(const char *ip_or_hostname, uint16_t port)
     /* Build a minimal registration payload for testing */
     mesh_registration_payload_t test_payload;
     memset(&test_payload, 0, sizeof(test_payload));
-    
+
     /* Get root node IP */
     esp_err_t err = mesh_udp_bridge_get_root_ip(test_payload.root_ip);
     if (err != ESP_OK) {
@@ -4526,7 +4526,7 @@ bool mesh_udp_bridge_test_connection(const char *ip_or_hostname, uint16_t port)
         close(test_socket);
         return false;
     }
-    
+
     /* Get mesh ID */
     err = mesh_udp_bridge_get_mesh_id(test_payload.mesh_id);
     if (err != ESP_OK) {
@@ -4534,7 +4534,7 @@ bool mesh_udp_bridge_test_connection(const char *ip_or_hostname, uint16_t port)
         close(test_socket);
         return false;
     }
-    
+
     test_payload.node_count = mesh_udp_bridge_get_node_count();
     test_payload.firmware_version_len = 0;
     test_payload.timestamp = htonl((uint32_t)time(NULL));

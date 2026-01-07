@@ -31,7 +31,32 @@
 #define  PLUGIN_CMD_START        (0x01)  /* Start plugin playback */
 #define  PLUGIN_CMD_PAUSE        (0x02)  /* Pause plugin playback */
 #define  PLUGIN_CMD_RESET        (0x03)  /* Reset plugin state */
-#define  PLUGIN_CMD_DATA         (0x04)  /* Plugin data command: variable length */
+#define  PLUGIN_CMD_DATA         (0x04)  /* General-purpose plugin data command: variable length, for plugin-specific needs beyond START/PAUSE/RESET/STOP */
+/**
+ * @brief PLUGIN_CMD_DATA Protocol Specification
+ *
+ * PLUGIN_CMD_DATA is a general-purpose command for plugin-specific needs that cannot be
+ * satisfied by the standard commands (START, PAUSE, RESET, STOP). Plugins can define their
+ * own protocol within PLUGIN_CMD_DATA to send arbitrary data or sub-commands.
+ *
+ * Protocol Format:
+ *   [PLUGIN_CMD_DATA:1] [<plugin_specific_sub_command_id>:1-n] [<optional_data>:n]
+ *
+ *   - PLUGIN_CMD_DATA (1 byte): Command byte (0x04)
+ *   - <plugin_specific_sub_command_id> (1-n bytes): Plugin-defined sub-command identifier
+ *     Plugins can use any format they choose (e.g., single byte ID, multi-byte ID, etc.)
+ *   - <optional_data> (n bytes): Plugin-specific data payload
+ *
+ * Note: The length prefix format (2-byte network byte order) shown in the Plugin Protocol
+ * Format section is plugin-specific (used by sequence plugin) and is optional. Plugins can
+ * define their own protocol structure within PLUGIN_CMD_DATA.
+ *
+ * Maximum Payload Size: 512 bytes recommended (not enforced by system)
+ *   - This is the recommended maximum for PLUGIN_CMD_DATA payload (data after PLUGIN_ID and CMD)
+ *   - This leaves room for PLUGIN_ID (1 byte) + CMD (1 byte) within the 1024 byte total
+ *     mesh command size limit (512 + 1 + 1 = 514 bytes < 1024 bytes)
+ *   - Plugins should validate their own data size limits
+ */
 #define  PLUGIN_CMD_STOP         (0x05)  /* Stop plugin (deactivate and reset state) */
 
 /*******************************************************
@@ -59,10 +84,16 @@
  *   - PLUGIN_ID: Plugin identifier (0x0B-0xEE)
  *   - CMD: Command byte (PLUGIN_CMD_START=0x01, PAUSE=0x02, RESET=0x03, DATA=0x04, STOP=0x05)
  *   - LENGTH: Optional 2-byte length prefix for variable-length data (network byte order, only for DATA commands)
+ *     Note: Length prefix is plugin-specific and optional. Some plugins (e.g., sequence plugin) use it,
+ *     while others may define their own protocol with plugin-specific sub-command IDs.
  *   - DATA: Optional command-specific data
+ *     For PLUGIN_CMD_DATA: Contains plugin-specific sub-command ID and data payload. Plugins can define
+ *     their own protocol structure (e.g., sub-command ID format, data layout).
  *   - Total size: Maximum 1024 bytes (including all fields)
  *   - Fixed-size commands: START, PAUSE, RESET, STOP (2 bytes: PLUGIN_ID + CMD)
- *   - Variable-size commands: DATA (4 bytes header: PLUGIN_ID + CMD + LENGTH + data)
+ *   - Variable-size commands: DATA (minimum 2 bytes: PLUGIN_ID + CMD, plus plugin-specific data)
+ *     Example with length prefix (sequence plugin): 4 bytes header (PLUGIN_ID + CMD + LENGTH) + data
+ *     Example with sub-command ID: 3+ bytes (PLUGIN_ID + CMD + sub-command ID) + optional data
  *   - Note: Sequence synchronization is handled via MESH_CMD_HEARTBEAT, not via plugin BEAT commands
  *
  * 0xEF-0xFF: Reserved (internal mesh use)

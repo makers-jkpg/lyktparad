@@ -216,10 +216,15 @@ static void sequence_timer_cb(void *arg)
         return;
     }
 
+    /* Read pointer once to ensure consistency between extraction and increment */
+    /* This prevents race conditions if heartbeat updates pointer between read and increment */
+    uint16_t current_pointer = sequence_pointer;
+    uint16_t max_squares = sequence_length * 16;
+
     uint8_t r_4bit, g_4bit, b_4bit;
     uint8_t r_scaled, g_scaled, b_scaled;
 
-    extract_square_rgb(sequence_colors, sequence_pointer, &r_4bit, &g_4bit, &b_4bit);
+    extract_square_rgb(sequence_colors, current_pointer, &r_4bit, &g_4bit, &b_4bit);
 
     r_scaled = r_4bit * 16;
     g_scaled = g_4bit * 16;
@@ -230,8 +235,8 @@ static void sequence_timer_cb(void *arg)
         ESP_LOGE(TAG, "Failed to set LED in timer callback: 0x%x", err);
     }
 
-    uint16_t max_squares = sequence_length * 16;
-    sequence_pointer = (sequence_pointer + 1) % max_squares;
+    /* Increment pointer using the value we read at the start (ensures consistency) */
+    sequence_pointer = (current_pointer + 1) % max_squares;
 
     /* Root node: heartbeat timer will include sequence pointer in heartbeat payload */
 }

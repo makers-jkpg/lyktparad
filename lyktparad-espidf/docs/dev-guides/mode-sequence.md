@@ -444,7 +444,8 @@ void sequence_plugin_node_pause(void);
 
 **Behavior**:
 - Stops and deletes playback timer
-- Called externally (e.g., when RGB command is received)
+- Available for manual pausing but not automatically called
+- Note: RGB commands are now handled through plugin system and don't automatically pause plugins
 
 ### Plugin Callbacks
 
@@ -546,7 +547,8 @@ The web UI dynamically resizes the grid based on selected row count:
 
 **RGB Command Interaction**:
 
-- When RGB command received: Calls `sequence_plugin_node_pause()` to stop sequence
+- RGB commands are handled through the plugin system
+- When a plugin is active, RGB commands are ignored (plugins control LEDs exclusively)
 - Sequence mode takes priority during playback (heartbeat disabled)
 
 **File**: `src/mesh_root.c`
@@ -627,7 +629,7 @@ The web UI dynamically resizes the grid based on selected row count:
    - Stores data, starts timer, sets `sequence_active = true`
 
 2. **Active → Inactive**:
-   - `sequence_plugin_root_pause()` or `sequence_plugin_node_pause()` or plugin `on_stop` callback
+   - `sequence_plugin_root_pause()` or plugin `on_pause`/`on_stop` callbacks
    - Stops timer, deletes timer, sets `sequence_active = false`
 
 3. **Active → Active** (reset):

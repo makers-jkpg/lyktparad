@@ -17,6 +17,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "lwip/inet.h"
 
 static const char *WEB_TAG = "mesh_web";
 static httpd_handle_t server_handle = NULL;
@@ -1824,17 +1825,7 @@ static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* Test connection */
-    bool test_result = mesh_udp_bridge_test_connection(ip_value, (uint16_t)port_val);
-    if (!test_result) {
-        httpd_resp_set_status(req, "400 Bad Request");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_send(req, "{\"success\":false,\"error\":\"Connection test failed\"}", -1);
-        return ESP_FAIL;
-    }
-
-    /* Resolve hostname to get resolved IP */
+    /* Resolve hostname to get resolved IP (needed for both connection test and storage) */
     char resolved_ip[16] = {0};
     esp_err_t resolve_err = mesh_udp_bridge_resolve_hostname(ip_value, resolved_ip, sizeof(resolved_ip));
     if (resolve_err != ESP_OK) {
@@ -1845,13 +1836,38 @@ static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* Store configuration */
-    esp_err_t err = mesh_udp_bridge_set_manual_server_ip(ip_value, (uint16_t)port_val);
+    /* Test connection using resolved IP */
+    bool test_result = mesh_udp_bridge_test_connection(resolved_ip, (uint16_t)port_val);
+    if (!test_result) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Connection test failed\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Store configuration using already-resolved IP to avoid redundant DNS lookup */
+    esp_err_t err = mesh_udp_bridge_store_manual_config(ip_value, (uint16_t)port_val, resolved_ip);
     if (err != ESP_OK) {
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
         httpd_resp_send(req, "{\"success\":false,\"error\":\"Failed to store configuration\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Convert resolved IP to network byte order and set registration */
+    struct in_addr addr;
+    if (inet_aton(resolved_ip, &addr) != 0) {
+        uint8_t ip_bytes[4];
+        memcpy(ip_bytes, &addr.s_addr, 4);
+        mesh_udp_bridge_set_registration(true, ip_bytes, (uint16_t)port_val);
+        ESP_LOGI(WEB_TAG, "Manual server IP set: %s:%d (resolved: %s)", ip_value, port_val, resolved_ip);
+    } else {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Failed to convert resolved IP\"}", -1);
         return ESP_FAIL;
     }
 
