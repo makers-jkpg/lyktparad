@@ -1,6 +1,6 @@
 # Plugin Build System - Developer Guide
 
-**Last Updated:** 2025-01-XX
+**Last Updated:** 2026-01-04
 
 ## Table of Contents
 

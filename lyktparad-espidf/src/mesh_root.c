@@ -27,6 +27,7 @@
 #include "plugin_system.h"
 #include "light_common_cathode.h"
 #include "plugins/sequence/sequence_plugin.h"
+#include "plugins/rgb_effect/rgb_effect_plugin.h"
 #include "config/mesh_config.h"
 #include "config/mesh_device_config.h"
 #include "mesh_ota.h"
@@ -70,9 +71,9 @@ static bool root_rgb_has_been_set = false;
 static void heartbeat_timer_start(void)
 {
     if (heartbeat_timer != NULL) {
-        esp_err_t err = esp_timer_start_periodic(heartbeat_timer, 1000000); /* 1000ms */
+        esp_err_t err = esp_timer_start_periodic(heartbeat_timer, (uint64_t)MESH_CONFIG_HEARTBEAT_INTERVAL * 1000ULL);
         if (err == ESP_OK) {
-            ESP_LOGI(MESH_TAG, "[HEARTBEAT] Timer started");
+            ESP_LOGI(MESH_TAG, "[HEARTBEAT] Timer started with interval %dms", MESH_CONFIG_HEARTBEAT_INTERVAL);
         } else {
             ESP_LOGE(MESH_TAG, "[HEARTBEAT] Failed to start timer: 0x%x", err);
         }
@@ -147,6 +148,14 @@ static void heartbeat_timer_cb(void *arg)
         }
     }
     ESP_LOGI(mesh_common_get_tag(), "[ROOT HEARTBEAT] sent - routing table size: %d (child nodes: %d)", route_table_size, child_node_count);
+
+    /* Process heartbeat for rgb_effect plugin if active (root node processes its own heartbeat) */
+    if (plugin_is_active("rgb_effect")) {
+        esp_err_t heartbeat_err = rgb_effect_plugin_handle_heartbeat(pointer, counter);
+        if (heartbeat_err != ESP_OK) {
+            ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] RGB effect plugin heartbeat handler error: 0x%x", heartbeat_err);
+        }
+    }
 
     // #region agent log
     /* Periodically log root state to detect if it changes (every 10th heartbeat = ~5 seconds) */

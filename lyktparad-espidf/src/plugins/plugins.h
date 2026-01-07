@@ -21,6 +21,7 @@
 #include "plugins/effect_strobe/effect_strobe_plugin.h"
 #include "plugins/effect_fade/effect_fade_plugin.h"
 #include "plugins/sequence/sequence_plugin.h"
+#include "plugins/rgb_effect/rgb_effect_plugin.h"
 
 /**
  * @brief Initialize all plugins
@@ -38,6 +39,9 @@ static inline void plugins_init(void)
 
     /* Register sequence plugin */
     sequence_plugin_register();
+
+    /* Register rgb_effect plugin */
+    rgb_effect_plugin_register();
 }
 
 #endif /* __PLUGINS_H__ */

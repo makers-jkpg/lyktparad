@@ -1,6 +1,6 @@
 # Plugin System - Developer Guide
 
-**Last Updated:** 2025-01-27
+**Last Updated:** 2026-01-05
 
 **Note**: Basic UI feature added for plugins without custom HTML files. Plugin protocol redesigned with plugin ID prefix (0x0B-0xEE). API endpoints added for plugin control (stop, pause, reset).
 

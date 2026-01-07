@@ -23,6 +23,7 @@
 #include "plugin_system.h"
 #include "mesh_udp_bridge.h"
 #include "plugins/sequence/sequence_plugin.h"
+#include "plugins/rgb_effect/rgb_effect_plugin.h"
 #include "light_neopixel.h"
 #include "light_common_cathode.h"
 #include "config/mesh_config.h"
@@ -163,6 +164,14 @@ void esp_mesh_p2p_rx_main(void *arg)
                 esp_err_t heartbeat_err = sequence_plugin_handle_heartbeat(pointer, counter);
                 if (heartbeat_err != ESP_OK && heartbeat_err != ESP_ERR_INVALID_STATE) {
                     ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] Sequence plugin heartbeat handler error: 0x%x", heartbeat_err);
+                }
+            }
+
+            /* Route heartbeat to rgb_effect plugin if active */
+            if (plugin_is_active("rgb_effect")) {
+                esp_err_t heartbeat_err = rgb_effect_plugin_handle_heartbeat(pointer, counter);
+                if (heartbeat_err != ESP_OK) {
+                    ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] RGB effect plugin heartbeat handler error: 0x%x", heartbeat_err);
                 }
             }
 
