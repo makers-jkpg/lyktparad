@@ -187,6 +187,103 @@ static const char simple_html_page[] =
 "            text-align: center;\n"
 "            font-size: 28px;\n"
 "        }\n"
+"        h2 {\n"
+"            color: #333;\n"
+"            margin-bottom: 20px;\n"
+"            font-size: 24px;\n"
+"        }\n"
+"        .external-server-config {\n"
+"            margin-top: 20px;\n"
+"        }\n"
+"        .form-group {\n"
+"            margin-bottom: 20px;\n"
+"        }\n"
+"        .url-input {\n"
+"            width: 100%;\n"
+"            padding: 12px;\n"
+"            border: 2px solid #e0e0e0;\n"
+"            border-radius: 8px;\n"
+"            font-size: 16px;\n"
+"            background: white;\n"
+"            transition: border-color 0.3s;\n"
+"        }\n"
+"        .url-input:hover { border-color: #667eea; }\n"
+"        .url-input:focus { outline: none; border-color: #667eea; }\n"
+"        .url-input.invalid { border-color: #f5576c; }\n"
+"        .validation-message {\n"
+"            display: block;\n"
+"            margin-top: 5px;\n"
+"            font-size: 14px;\n"
+"            color: #666;\n"
+"        }\n"
+"        .validation-message.error {\n"
+"            color: #f5576c;\n"
+"        }\n"
+"        .btn-primary {\n"
+"            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n"
+"            color: white;\n"
+"        }\n"
+"        .btn-secondary {\n"
+"            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);\n"
+"            color: white;\n"
+"        }\n"
+"        .status-indicator {\n"
+"            display: flex;\n"
+"            align-items: center;\n"
+"            gap: 10px;\n"
+"            margin-top: 20px;\n"
+"            padding: 12px;\n"
+"            background: #f8f9fa;\n"
+"            border-radius: 8px;\n"
+"        }\n"
+"        .stage-label {\n"
+"            font-weight: 600;\n"
+"            color: #666;\n"
+"        }\n"
+"        .stage-text {\n"
+"            color: #666;\n"
+"        }\n"
+"        .stage-text.stage-active {\n"
+"            color: #667eea;\n"
+"            font-weight: 600;\n"
+"        }\n"
+"        .current-config {\n"
+"            margin-top: 15px;\n"
+"            padding: 12px;\n"
+"            background: #f8f9fa;\n"
+"            border-radius: 8px;\n"
+"        }\n"
+"        .ota-version-display {\n"
+"            display: flex;\n"
+"            align-items: center;\n"
+"            gap: 10px;\n"
+"        }\n"
+"        .ota-version-display label {\n"
+"            font-weight: 600;\n"
+"            color: #666;\n"
+"            margin: 0;\n"
+"        }\n"
+"        .version-value {\n"
+"            color: #333;\n"
+"        }\n"
+"        .message-area {\n"
+"            margin-top: 15px;\n"
+"            min-height: 20px;\n"
+"            padding: 12px;\n"
+"            border-radius: 8px;\n"
+"            font-size: 14px;\n"
+"        }\n"
+"        .message-area.status-message.success {\n"
+"            background: #d4edda;\n"
+"            color: #155724;\n"
+"        }\n"
+"        .message-area.status-message.error {\n"
+"            background: #f8d7da;\n"
+"            color: #721c24;\n"
+"        }\n"
+"        .limited-mode-hidden {\n"
+"            display: none !important;\n"
+"        }\n"
 "    </style>\n"
 "</head>\n"
 "<body>\n"
@@ -216,7 +313,40 @@ static const char simple_html_page[] =
 "        <h1>Info</h1>\n"
 "    </div>\n"
 "    <div class=\"tab-content\" data-tab=\"config\" role=\"tabpanel\" id=\"tab-panel-config\" aria-labelledby=\"tab-button-config\" hidden>\n"
-"        <h1>Config</h1>\n"
+"        <div class=\"container\">\n"
+"            <h2>External Web Server Configuration</h2>\n"
+"            <div class=\"external-server-config\">\n"
+"                <div class=\"form-group\">\n"
+"                    <label for=\"external-server-ip\">Server IP or Hostname:</label>\n"
+"                    <input type=\"text\" id=\"external-server-ip\" name=\"ip\" class=\"url-input\"\n"
+"                           placeholder=\"192.168.1.100 or example.com\"\n"
+"                           aria-label=\"External server IP or hostname\">\n"
+"                    <span id=\"external-server-ip-validation\" class=\"validation-message\" aria-live=\"polite\"></span>\n"
+"                </div>\n"
+"                <div class=\"form-group\">\n"
+"                    <label for=\"external-server-port\">Port:</label>\n"
+"                    <input type=\"number\" id=\"external-server-port\" name=\"port\" class=\"url-input\"\n"
+"                           min=\"1\" max=\"65535\" value=\"8082\"\n"
+"                           aria-label=\"External server UDP port\">\n"
+"                    <span id=\"external-server-port-validation\" class=\"validation-message\" aria-live=\"polite\"></span>\n"
+"                </div>\n"
+"                <div class=\"button-group\">\n"
+"                    <button id=\"external-server-save\" type=\"button\" class=\"btn btn-primary\" aria-label=\"Save external server configuration\">Save</button>\n"
+"                    <button id=\"external-server-clear\" type=\"button\" class=\"btn btn-secondary\" aria-label=\"Clear external server configuration\">Clear</button>\n"
+"                </div>\n"
+"                <div id=\"external-server-status\" class=\"status-indicator\" style=\"display: none;\">\n"
+"                    <span class=\"stage-label\">Status:</span>\n"
+"                    <span id=\"external-server-status-text\" class=\"stage-text\">Not configured</span>\n"
+"                </div>\n"
+"                <div id=\"external-server-current\" class=\"current-config\" style=\"display: none;\">\n"
+"                    <div class=\"ota-version-display\">\n"
+"                        <label>Current Configuration:</label>\n"
+"                        <span id=\"external-server-current-value\" class=\"version-value\">Not configured</span>\n"
+"                    </div>\n"
+"                </div>\n"
+"                <div id=\"external-server-message\" class=\"message-area\" aria-live=\"polite\" aria-atomic=\"true\"></div>\n"
+"            </div>\n"
+"        </div>\n"
 "    </div>\n"
 "    <script>\n"
 "        let plugins = [];\n"
@@ -483,7 +613,274 @@ static const char simple_html_page[] =
 "            loadActivePlugin();\n"
 "            // Poll for active plugin changes every 5 seconds\n"
 "            setInterval(loadActivePlugin, 5000);\n"
+"\n"
+"            // Initialize external server configuration\n"
+"            initializeExternalServerConfig();\n"
 "        });\n"
+"\n"
+"        function validateIpOrHostname(value) {\n"
+"            if (!value || value.trim().length === 0) {\n"
+"                return { valid: false, message: 'IP/hostname cannot be empty' };\n"
+"            }\n"
+"            if (value.length > 253) {\n"
+"                return { valid: false, message: 'IP/hostname is too long (max 253 characters)' };\n"
+"            }\n"
+"            return { valid: true, message: '' };\n"
+"        }\n"
+"\n"
+"        function validatePort(value) {\n"
+"            const port = parseInt(value, 10);\n"
+"            if (isNaN(port) || port < 1 || port > 65535) {\n"
+"                return { valid: false, message: 'Port must be between 1 and 65535' };\n"
+"            }\n"
+"            return { valid: true, message: '' };\n"
+"        }\n"
+"\n"
+"        function updateLimitedModeUI(limitedMode) {\n"
+"            const pluginsTabButton = document.querySelector('.tab-button[data-tab=\"plugins\"]');\n"
+"            const infoTabButton = document.querySelector('.tab-button[data-tab=\"info\"]');\n"
+"            const pluginsTabContent = document.querySelector('.tab-content[data-tab=\"plugins\"]');\n"
+"            const infoTabContent = document.querySelector('.tab-content[data-tab=\"info\"]');\n"
+"\n"
+"            if (limitedMode) {\n"
+"                if (pluginsTabButton) pluginsTabButton.classList.add('limited-mode-hidden');\n"
+"                if (infoTabButton) infoTabButton.classList.add('limited-mode-hidden');\n"
+"                if (pluginsTabContent) pluginsTabContent.classList.add('limited-mode-hidden');\n"
+"                if (infoTabContent) infoTabContent.classList.add('limited-mode-hidden');\n"
+"\n"
+"                const currentTab = document.querySelector('.tab-button.active');\n"
+"                if (currentTab && (currentTab.getAttribute('data-tab') === 'plugins' || currentTab.getAttribute('data-tab') === 'info')) {\n"
+"                    switchTab('config');\n"
+"                }\n"
+"            } else {\n"
+"                if (pluginsTabButton) pluginsTabButton.classList.remove('limited-mode-hidden');\n"
+"                if (infoTabButton) infoTabButton.classList.remove('limited-mode-hidden');\n"
+"                if (pluginsTabContent) pluginsTabContent.classList.remove('limited-mode-hidden');\n"
+"                if (infoTabContent) infoTabContent.classList.remove('limited-mode-hidden');\n"
+"            }\n"
+"        }\n"
+"\n"
+"        async function loadExternalServerConfig() {\n"
+"            try {\n"
+"                const response = await fetch('/api/settings/external-server');\n"
+"                if (!response.ok) {\n"
+"                    const errorData = await response.json().catch(() => ({}));\n"
+"                    throw new Error(errorData.error || 'HTTP ' + response.status);\n"
+"                }\n"
+"                const data = await response.json();\n"
+"\n"
+"                const ipInput = document.getElementById('external-server-ip');\n"
+"                const portInput = document.getElementById('external-server-port');\n"
+"                const statusDiv = document.getElementById('external-server-status');\n"
+"                const statusText = document.getElementById('external-server-status-text');\n"
+"                const currentDiv = document.getElementById('external-server-current');\n"
+"                const currentValue = document.getElementById('external-server-current-value');\n"
+"\n"
+"                if (data.ip && data.port) {\n"
+"                    if (ipInput) ipInput.value = data.ip;\n"
+"                    if (portInput) portInput.value = data.port;\n"
+"                    if (statusDiv) statusDiv.style.display = 'flex';\n"
+"                    if (statusText) {\n"
+"                        statusText.textContent = data.limited_mode ? 'Active (Limited Mode)' : 'Configured (Not Active)';\n"
+"                        statusText.className = data.limited_mode ? 'stage-text stage-active' : 'stage-text';\n"
+"                    }\n"
+"                    if (currentDiv) currentDiv.style.display = 'block';\n"
+"                    if (currentValue) currentValue.textContent = data.ip + ':' + data.port;\n"
+"                } else {\n"
+"                    if (statusDiv) statusDiv.style.display = 'flex';\n"
+"                    if (statusText) {\n"
+"                        statusText.textContent = 'Not configured';\n"
+"                        statusText.className = 'stage-text';\n"
+"                    }\n"
+"                    if (currentDiv) currentDiv.style.display = 'none';\n"
+"                }\n"
+"\n"
+"                updateLimitedModeUI(data.limited_mode || false);\n"
+"            } catch (error) {\n"
+"                console.error('Failed to load external server configuration:', error);\n"
+"                const messageArea = document.getElementById('external-server-message');\n"
+"                if (messageArea) {\n"
+"                    messageArea.textContent = 'Failed to load configuration: ' + error.message;\n"
+"                    messageArea.className = 'message-area status-message error';\n"
+"                    messageArea.style.display = 'block';\n"
+"                }\n"
+"            }\n"
+"        }\n"
+"\n"
+"        function showExternalServerMessage(message, type) {\n"
+"            const messageArea = document.getElementById('external-server-message');\n"
+"            if (!messageArea) return;\n"
+"\n"
+"            messageArea.textContent = message;\n"
+"            messageArea.className = 'message-area status-message ' + type;\n"
+"            messageArea.style.display = 'block';\n"
+"\n"
+"            if (type === 'success') {\n"
+"                setTimeout(function() {\n"
+"                    if (messageArea.className.includes('success')) {\n"
+"                        messageArea.style.display = 'none';\n"
+"                    }\n"
+"                }, 5000);\n"
+"            }\n"
+"        }\n"
+"\n"
+"        async function handleExternalServerSave() {\n"
+"            const ipInput = document.getElementById('external-server-ip');\n"
+"            const portInput = document.getElementById('external-server-port');\n"
+"            const saveButton = document.getElementById('external-server-save');\n"
+"            const ipValidation = document.getElementById('external-server-ip-validation');\n"
+"            const portValidation = document.getElementById('external-server-port-validation');\n"
+"\n"
+"            if (!ipInput || !portInput || !saveButton) {\n"
+"                console.error('External server form elements not found');\n"
+"                return;\n"
+"            }\n"
+"\n"
+"            if (ipValidation) {\n"
+"                ipValidation.textContent = '';\n"
+"                ipValidation.className = 'validation-message';\n"
+"            }\n"
+"            if (portValidation) {\n"
+"                portValidation.textContent = '';\n"
+"                portValidation.className = 'validation-message';\n"
+"            }\n"
+"\n"
+"            const ipValidationResult = validateIpOrHostname(ipInput.value);\n"
+"            if (!ipValidationResult.valid) {\n"
+"                if (ipValidation) {\n"
+"                    ipValidation.textContent = ipValidationResult.message;\n"
+"                    ipValidation.className = 'validation-message error';\n"
+"                }\n"
+"                ipInput.classList.add('invalid');\n"
+"                return;\n"
+"            }\n"
+"            ipInput.classList.remove('invalid');\n"
+"\n"
+"            const portValidationResult = validatePort(portInput.value);\n"
+"            if (!portValidationResult.valid) {\n"
+"                if (portValidation) {\n"
+"                    portValidation.textContent = portValidationResult.message;\n"
+"                    portValidation.className = 'validation-message error';\n"
+"                }\n"
+"                portInput.classList.add('invalid');\n"
+"                return;\n"
+"            }\n"
+"            portInput.classList.remove('invalid');\n"
+"\n"
+"            saveButton.disabled = true;\n"
+"            saveButton.textContent = 'Saving...';\n"
+"\n"
+"            try {\n"
+"                const response = await fetch('/api/settings/external-server', {\n"
+"                    method: 'POST',\n"
+"                    headers: { 'Content-Type': 'application/json' },\n"
+"                    body: JSON.stringify({\n"
+"                        ip: ipInput.value.trim(),\n"
+"                        port: parseInt(portInput.value, 10)\n"
+"                    })\n"
+"                });\n"
+"\n"
+"                if (!response.ok) {\n"
+"                    const errorData = await response.json().catch(function() { return {}; });\n"
+"                    throw new Error(errorData.error || 'HTTP error: ' + response.status);\n"
+"                }\n"
+"\n"
+"                const data = await response.json();\n"
+"                if (!data.success) {\n"
+"                    throw new Error(data.error || 'Failed to save configuration');\n"
+"                }\n"
+"\n"
+"                showExternalServerMessage('Configuration saved successfully. Limited mode: ' + (data.limited_mode ? 'Active' : 'Inactive'), 'success');\n"
+"                await loadExternalServerConfig();\n"
+"            } catch (error) {\n"
+"                console.error('Failed to save external server configuration:', error);\n"
+"                showExternalServerMessage('Failed to save configuration: ' + error.message, 'error');\n"
+"            } finally {\n"
+"                saveButton.disabled = false;\n"
+"                saveButton.textContent = 'Save';\n"
+"            }\n"
+"        }\n"
+"\n"
+"        async function handleExternalServerClear() {\n"
+"            const clearButton = document.getElementById('external-server-clear');\n"
+"            if (!clearButton) {\n"
+"                console.error('Clear button not found');\n"
+"                return;\n"
+"            }\n"
+"\n"
+"            if (!confirm('Are you sure you want to clear the external server configuration?')) {\n"
+"                return;\n"
+"            }\n"
+"\n"
+"            clearButton.disabled = true;\n"
+"            clearButton.textContent = 'Clearing...';\n"
+"\n"
+"            try {\n"
+"                const response = await fetch('/api/settings/external-server', {\n"
+"                    method: 'DELETE'\n"
+"                });\n"
+"\n"
+"                if (!response.ok) {\n"
+"                    const errorData = await response.json().catch(function() { return {}; });\n"
+"                    throw new Error(errorData.error || 'HTTP error: ' + response.status);\n"
+"                }\n"
+"\n"
+"                const data = await response.json();\n"
+"                if (!data.success) {\n"
+"                    throw new Error(data.error || 'Failed to clear configuration');\n"
+"                }\n"
+"\n"
+"                showExternalServerMessage('Configuration cleared successfully', 'success');\n"
+"\n"
+"                const ipInput = document.getElementById('external-server-ip');\n"
+"                const portInput = document.getElementById('external-server-port');\n"
+"                if (ipInput) ipInput.value = '';\n"
+"                if (portInput) portInput.value = '8082';\n"
+"\n"
+"                await loadExternalServerConfig();\n"
+"            } catch (error) {\n"
+"                console.error('Failed to clear external server configuration:', error);\n"
+"                showExternalServerMessage('Failed to clear configuration: ' + error.message, 'error');\n"
+"            } finally {\n"
+"                clearButton.disabled = false;\n"
+"                clearButton.textContent = 'Clear';\n"
+"            }\n"
+"        }\n"
+"\n"
+"        function initializeExternalServerConfig() {\n"
+"            loadExternalServerConfig();\n"
+"\n"
+"            const saveButton = document.getElementById('external-server-save');\n"
+"            const clearButton = document.getElementById('external-server-clear');\n"
+"            const ipInput = document.getElementById('external-server-ip');\n"
+"            const portInput = document.getElementById('external-server-port');\n"
+"\n"
+"            if (saveButton) {\n"
+"                saveButton.addEventListener('click', handleExternalServerSave);\n"
+"            }\n"
+"\n"
+"            if (clearButton) {\n"
+"                clearButton.addEventListener('click', handleExternalServerClear);\n"
+"            }\n"
+"\n"
+"            if (ipInput) {\n"
+"                ipInput.addEventListener('keydown', function(e) {\n"
+"                    if (e.key === 'Enter') {\n"
+"                        e.preventDefault();\n"
+"                        handleExternalServerSave();\n"
+"                    }\n"
+"                });\n"
+"            }\n"
+"\n"
+"            if (portInput) {\n"
+"                portInput.addEventListener('keydown', function(e) {\n"
+"                    if (e.key === 'Enter') {\n"
+"                        e.preventDefault();\n"
+"                        handleExternalServerSave();\n"
+"                    }\n"
+"                });\n"
+"            }\n"
+"        }\n"
 "    </script>\n"
 "</body>\n"
 "</html>\n";
@@ -1704,28 +2101,34 @@ bool mesh_web_is_limited_mode(void)
     esp_err_t err = mesh_udp_bridge_get_manual_config(manual_ip, sizeof(manual_ip), &manual_port, NULL, 0);
     if (err != ESP_OK) {
         /* No manual IP configured */
+        ESP_LOGD(WEB_TAG, "LIMITED_MODE check: no manual IP configured");
         return false;
     }
 
     /* Check if registration succeeded */
-    if (!mesh_udp_bridge_is_registered()) {
+    bool is_registered = mesh_udp_bridge_is_registered();
+    if (!is_registered) {
         /* Manual IP configured but registration not successful */
+        ESP_LOGD(WEB_TAG, "LIMITED_MODE check: manual IP configured (%s:%d) but not registered", manual_ip, manual_port);
         return false;
     }
 
     /* Both conditions met: LIMITED_MODE is active */
+    ESP_LOGD(WEB_TAG, "LIMITED_MODE check: active (manual IP: %s:%d, registered: true)", manual_ip, manual_port);
     return true;
 }
 
 /* API: GET /api/settings/external-server - Get external server configuration */
 static esp_err_t api_settings_external_server_get_handler(httpd_req_t *req)
 {
+    ESP_LOGD(WEB_TAG, "GET /api/settings/external-server requested");
     char response[256];
     char manual_ip[64] = {0};
     uint16_t manual_port = 0;
     esp_err_t err = mesh_udp_bridge_get_manual_config(manual_ip, sizeof(manual_ip), &manual_port, NULL, 0);
 
     bool limited_mode = mesh_web_is_limited_mode();
+    ESP_LOGD(WEB_TAG, "LIMITED_MODE state: %s", limited_mode ? "active" : "inactive");
 
     if (err == ESP_OK) {
         /* Manual configuration exists */
@@ -1766,6 +2169,7 @@ static esp_err_t api_settings_external_server_get_handler(httpd_req_t *req)
 /* API: POST /api/settings/external-server - Set external server configuration */
 static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req)
 {
+    ESP_LOGI(WEB_TAG, "POST /api/settings/external-server requested");
     char content[256];
     int ret = httpd_req_recv(req, content, sizeof(content) - 1);
 
@@ -1775,6 +2179,20 @@ static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req)
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
         httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid request\"}", -1);
         return ESP_FAIL;
+    }
+
+    /* Check if request body is too large */
+    if (ret >= (int)sizeof(content) - 1) {
+        /* Check if there's more data */
+        char dummy;
+        int more = httpd_req_recv(req, &dummy, 1);
+        if (more > 0) {
+            httpd_resp_set_status(req, "413 Payload Too Large");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_send(req, "{\"success\":false,\"error\":\"Request body too large\"}", -1);
+            return ESP_FAIL;
+        }
     }
 
     content[ret] = '\0';
@@ -1793,18 +2211,61 @@ static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req)
 
     /* Extract IP/hostname */
     ip_str += 5; /* Skip past "ip": */
-    while (*ip_str == ' ' || *ip_str == '"') ip_str++; /* Skip whitespace and quotes */
+    /* Check bounds after skipping */
+    if (ip_str >= content + ret) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid JSON format\"}", -1);
+        return ESP_FAIL;
+    }
+    while (*ip_str != '\0' && ip_str < content + ret && (*ip_str == ' ' || *ip_str == '"')) ip_str++; /* Skip whitespace and quotes */
+    if (ip_str >= content + ret || *ip_str == '\0') {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid JSON format\"}", -1);
+        return ESP_FAIL;
+    }
     char ip_end = (*ip_str == '"') ? '"' : ',';
     char ip_value[64] = {0};
     int ip_idx = 0;
-    while (*ip_str != ip_end && *ip_str != '\0' && ip_idx < (int)sizeof(ip_value) - 1) {
+    while (*ip_str != '\0' && ip_str < content + ret && *ip_str != ip_end && ip_idx < (int)sizeof(ip_value) - 1) {
         ip_value[ip_idx++] = *ip_str++;
     }
     ip_value[ip_idx] = '\0';
 
     /* Extract port */
     port_str += 6; /* Skip past "port": */
-    while (*port_str == ' ') port_str++; /* Skip whitespace */
+    /* Check bounds after skipping */
+    if (port_str >= content + ret) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid JSON format\"}", -1);
+        return ESP_FAIL;
+    }
+    while (*port_str != '\0' && port_str < content + ret && *port_str == ' ') port_str++; /* Skip whitespace */
+    if (port_str >= content + ret || *port_str == '\0') {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid JSON format\"}", -1);
+        return ESP_FAIL;
+    }
+    
+    /* Validate port string is numeric */
+    char *port_end = port_str;
+    while (port_end < content + ret && *port_end != '\0' && *port_end >= '0' && *port_end <= '9') port_end++;
+    if (port_end == port_str || (port_end < content + ret && *port_end != '\0' && *port_end != ' ' && *port_end != ',' && *port_end != '}')) {
+        /* Port contains non-numeric characters */
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Port must be a number\"}", -1);
+        return ESP_FAIL;
+    }
+    
     int port_val = atoi(port_str);
 
     /* Validate port range */
@@ -1826,19 +2287,24 @@ static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req)
     }
 
     /* Resolve hostname to get resolved IP (needed for both connection test and storage) */
+    ESP_LOGI(WEB_TAG, "Resolving hostname: %s", ip_value);
     char resolved_ip[16] = {0};
     esp_err_t resolve_err = mesh_udp_bridge_resolve_hostname(ip_value, resolved_ip, sizeof(resolved_ip));
     if (resolve_err != ESP_OK) {
+        ESP_LOGW(WEB_TAG, "Failed to resolve hostname '%s': %s", ip_value, esp_err_to_name(resolve_err));
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
         httpd_resp_send(req, "{\"success\":false,\"error\":\"Failed to resolve hostname\"}", -1);
         return ESP_FAIL;
     }
+    ESP_LOGI(WEB_TAG, "Hostname resolved: %s -> %s", ip_value, resolved_ip);
 
     /* Test connection using resolved IP */
+    ESP_LOGI(WEB_TAG, "Testing connection to %s:%d", resolved_ip, port_val);
     bool test_result = mesh_udp_bridge_test_connection(resolved_ip, (uint16_t)port_val);
     if (!test_result) {
+        ESP_LOGW(WEB_TAG, "Connection test failed for %s:%d", resolved_ip, port_val);
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -1846,9 +2312,13 @@ static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    ESP_LOGI(WEB_TAG, "Connection test succeeded for %s:%d", resolved_ip, port_val);
+
     /* Store configuration using already-resolved IP to avoid redundant DNS lookup */
+    ESP_LOGI(WEB_TAG, "Storing manual configuration: %s:%d (resolved: %s)", ip_value, port_val, resolved_ip);
     esp_err_t err = mesh_udp_bridge_store_manual_config(ip_value, (uint16_t)port_val, resolved_ip);
     if (err != ESP_OK) {
+        ESP_LOGE(WEB_TAG, "Failed to store manual configuration: %s", esp_err_to_name(err));
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -1882,6 +2352,8 @@ static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req)
     bool limited_mode = mesh_web_is_limited_mode();
     if (limited_mode) {
         ESP_LOGI(WEB_TAG, "LIMITED_MODE entered: external server configured and registered");
+    } else {
+        ESP_LOGI(WEB_TAG, "LIMITED_MODE not active: configuration stored but registration pending");
     }
 
     httpd_resp_set_type(req, "application/json");
@@ -1901,6 +2373,7 @@ static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req)
 /* API: DELETE /api/settings/external-server - Clear external server configuration */
 static esp_err_t api_settings_external_server_delete_handler(httpd_req_t *req)
 {
+    ESP_LOGI(WEB_TAG, "DELETE /api/settings/external-server requested");
     /* Clear manual configuration */
     esp_err_t err = mesh_udp_bridge_clear_manual_server_ip();
     if (err != ESP_OK) {

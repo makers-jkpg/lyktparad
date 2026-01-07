@@ -1478,7 +1478,7 @@ async function handleExternalServerSave() {
 
     // Success
     showExternalServerMessage('Configuration saved successfully. Limited mode: ' + (data.limited_mode ? 'Active' : 'Inactive'), 'success');
-    
+
     // Reload configuration to update UI
     await loadExternalServerConfig();
   } catch (error) {
