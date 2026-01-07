@@ -44,6 +44,7 @@ static const struct {
 static esp_timer_handle_t strobe_timer = NULL;
 static bool strobe_is_on = false;
 static bool strobe_running = false;
+static bool strobe_paused = false;
 
 /* Forward declarations */
 static void strobe_timer_callback(void *arg);
@@ -101,6 +102,10 @@ static esp_err_t strobe_timer_stop(void)
 
 static void strobe_timer_callback(void *arg)
 {
+    /* Check if paused - if so, don't process timer callback */
+    if (strobe_paused) {
+        return;
+    }
     (void)arg;
 
     /* Check if effect is running (strobe_running is set before timer starts) */
@@ -143,7 +148,7 @@ static void strobe_timer_callback(void *arg)
 
 static esp_err_t strobe_start(void)
 {
-    if (strobe_running) {
+    if (strobe_running && !strobe_paused) {
         ESP_LOGD(TAG, "Strobe effect already running");
         return ESP_OK;
     }
@@ -151,6 +156,7 @@ static esp_err_t strobe_start(void)
     /* Initialize state */
     strobe_is_on = false;
     strobe_running = true;
+    strobe_paused = false; /* Clear pause flag when starting */
 
     /* Ensure timer exists */
     esp_err_t timer_create_err = strobe_timer_start();
@@ -187,6 +193,56 @@ static esp_err_t strobe_stop(void)
 /*******************************************************
  *                Plugin Callbacks
  *******************************************************/
+
+static esp_err_t effect_strobe_on_pause(void)
+{
+    if (!strobe_running) {
+        ESP_LOGD(TAG, "Strobe effect not running, nothing to pause");
+        return ESP_OK;
+    }
+
+    /* Stop timer */
+    if (strobe_timer != NULL) {
+        esp_timer_stop(strobe_timer);
+    }
+
+    /* Set paused flag to prevent timer callback from continuing */
+    strobe_paused = true;
+
+    ESP_LOGI(TAG, "Strobe effect paused (is_on=%d)", strobe_is_on);
+    return ESP_OK;
+}
+
+static esp_err_t effect_strobe_on_reset(void)
+{
+    /* Stop timer */
+    if (strobe_timer != NULL) {
+        esp_timer_stop(strobe_timer);
+    }
+
+    /* Reset state */
+    strobe_is_on = false;
+    strobe_running = false;
+    strobe_paused = false;
+
+    /* Reset RGB LED to off */
+    plugin_set_rgb(0, 0, 0);
+
+    ESP_LOGI(TAG, "Strobe effect reset");
+    return ESP_OK;
+}
+
+static esp_err_t effect_strobe_on_stop(void)
+{
+    /* Reset state (calls on_reset logic) */
+    esp_err_t err = effect_strobe_on_reset();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    ESP_LOGI(TAG, "Strobe effect stopped");
+    return ESP_OK;
+}
 
 static esp_err_t strobe_command_handler(uint8_t *data, uint16_t len)
 {
@@ -252,6 +308,9 @@ void effect_strobe_plugin_register(void)
             .on_activate = strobe_on_activate,
             .on_deactivate = strobe_on_deactivate,
             .on_start = strobe_on_start,
+            .on_pause = effect_strobe_on_pause,
+            .on_reset = effect_strobe_on_reset,
+            .on_stop = effect_strobe_on_stop,
         },
         .user_data = NULL,
     };

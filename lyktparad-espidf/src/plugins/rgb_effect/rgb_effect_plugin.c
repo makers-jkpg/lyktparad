@@ -331,6 +331,23 @@ static esp_err_t rgb_effect_on_reset(void)
     return ESP_OK;
 }
 
+static esp_err_t rgb_effect_on_stop(void)
+{
+    /* Stop local heartbeat timer */
+    if (rgb_effect_timer != NULL) {
+        esp_timer_stop(rgb_effect_timer);
+    }
+
+    /* Reset heartbeat counter to 0 */
+    rgb_effect_counter = 0;
+
+    /* Reset RGB LED to off */
+    plugin_set_rgb(0, 0, 0);
+
+    ESP_LOGI(TAG, "RGB effect plugin stopped - counter reset to 0");
+    return ESP_OK;
+}
+
 static esp_err_t rgb_effect_on_start(void)
 {
     /* Resume from pause or restart effect */
@@ -373,6 +390,7 @@ void rgb_effect_plugin_register(void)
             .on_start = rgb_effect_on_start,
             .on_pause = rgb_effect_on_pause,
             .on_reset = rgb_effect_on_reset,
+            .on_stop = rgb_effect_on_stop,
         },
         .user_data = NULL,
     };

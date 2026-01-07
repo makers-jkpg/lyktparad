@@ -140,6 +140,16 @@ typedef struct {
      */
     esp_err_t (*on_reset)(void);
 
+    /**
+     * @brief Plugin STOP command callback (optional, may be NULL)
+     *
+     * Called when PLUGIN_CMD_STOP (0x05) is received via plugin protocol.
+     * STOP command deactivates the plugin and resets all state.
+     * This callback is called before plugin deactivation.
+     *
+     * @return ESP_OK on success, error code on failure
+     */
+    esp_err_t (*on_stop)(void);
 
     /**
      * @brief Plugin state query callback (optional, may be NULL)
@@ -387,6 +397,21 @@ esp_err_t plugin_get_all_names(const char *names[], uint8_t max_count, uint8_t *
  * @return Error code from plugin's callback
  */
 esp_err_t plugin_system_handle_plugin_command(uint8_t *data, uint16_t len);
+
+/**
+ * @brief Handle plugin command from API (root node processes locally and broadcasts)
+ *
+ * This function is called by API handlers when root node receives a command via HTTP API.
+ * Unlike plugin_system_handle_plugin_command(), this function:
+ * - Processes the command locally on root node (calls plugin callbacks)
+ * - Broadcasts the command to all child nodes
+ * - Does NOT ignore commands on root node
+ *
+ * @param data Command data: [PLUGIN_ID:1] [CMD:1]
+ * @param len Command length (must be 2 for fixed-size commands)
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t plugin_system_handle_plugin_command_from_api(uint8_t *data, uint16_t len);
 
 /**
  * @brief Query plugin state

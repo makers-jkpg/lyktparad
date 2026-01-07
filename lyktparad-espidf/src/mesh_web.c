@@ -1239,29 +1239,26 @@ static esp_err_t api_plugin_stop_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* Check if plugin is active */
-    if (!plugin_is_active(plugin_name)) {
-        /* Plugin is not active, just return success */
+    /* Get plugin ID by name */
+    uint8_t plugin_id;
+    esp_err_t err = plugin_get_id_by_name(plugin_name, &plugin_id);
+    if (err != ESP_OK) {
+        char error_msg[128];
+        snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"Plugin not found\"}");
+        httpd_resp_set_status(req, "404 Not Found");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        char response[128];
-        snprintf(response, sizeof(response), "{\"success\":true,\"plugin\":\"%s\",\"message\":\"Plugin was not active\"}", plugin_name);
-        return httpd_resp_send(req, response, -1);
+        httpd_resp_send(req, error_msg, -1);
+        return ESP_FAIL;
     }
 
-    /* Get plugin info to check if it has on_pause callback */
-    const plugin_info_t *plugin = plugin_get_by_name(plugin_name);
-    if (plugin != NULL && plugin->callbacks.on_pause != NULL) {
-        /* Call on_pause callback first (graceful stop) */
-        esp_err_t pause_err = plugin->callbacks.on_pause();
-        if (pause_err != ESP_OK) {
-            ESP_LOGW(WEB_TAG, "Plugin '%s' on_pause callback returned error: %s", plugin_name, esp_err_to_name(pause_err));
-            /* Continue with deactivation even if pause fails */
-        }
-    }
+    /* Construct plugin command: [PLUGIN_ID] [PLUGIN_CMD_STOP] */
+    uint8_t cmd_data[2];
+    cmd_data[0] = plugin_id;
+    cmd_data[1] = PLUGIN_CMD_STOP;
 
-    /* Force deactivation (mutual exclusivity enforcement) */
-    esp_err_t err = plugin_deactivate(plugin_name);
+    /* Send STOP command via plugin system (from API - processes locally and broadcasts) */
+    err = plugin_system_handle_plugin_command_from_api(cmd_data, sizeof(cmd_data));
     if (err != ESP_OK) {
         char error_msg[128];
         snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"%s\"}", esp_err_to_name(err));
@@ -1324,8 +1321,8 @@ static esp_err_t api_plugin_pause_handler(httpd_req_t *req)
     cmd_data[0] = plugin_id;
     cmd_data[1] = PLUGIN_CMD_PAUSE;
 
-    /* Send PAUSE command via plugin system */
-    err = plugin_system_handle_plugin_command(cmd_data, sizeof(cmd_data));
+    /* Send PAUSE command via plugin system (from API - processes locally and broadcasts) */
+    err = plugin_system_handle_plugin_command_from_api(cmd_data, sizeof(cmd_data));
     if (err != ESP_OK) {
         char error_msg[128];
         snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"%s\"}", esp_err_to_name(err));
@@ -1388,8 +1385,8 @@ static esp_err_t api_plugin_reset_handler(httpd_req_t *req)
     cmd_data[0] = plugin_id;
     cmd_data[1] = PLUGIN_CMD_RESET;
 
-    /* Send RESET command via plugin system */
-    err = plugin_system_handle_plugin_command(cmd_data, sizeof(cmd_data));
+    /* Send RESET command via plugin system (from API - processes locally and broadcasts) */
+    err = plugin_system_handle_plugin_command_from_api(cmd_data, sizeof(cmd_data));
     if (err != ESP_OK) {
         char error_msg[128];
         snprintf(error_msg, sizeof(error_msg), "{\"success\":false,\"error\":\"%s\"}", esp_err_to_name(err));

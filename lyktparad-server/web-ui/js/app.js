@@ -977,6 +977,46 @@ function stopConnectionStatusPolling() {
   }
 }
 
+// Tab switching functionality
+function switchTab(tabName) {
+  if (!tabName) {
+    console.warn('switchTab called without tab name');
+    return;
+  }
+
+  // Remove active class and aria-selected from all tab buttons
+  const allTabButtons = document.querySelectorAll('.tab-button');
+  allTabButtons.forEach(button => {
+    button.classList.remove('active');
+    button.setAttribute('aria-selected', 'false');
+  });
+
+  // Remove active class and hide all tab content
+  const allTabContent = document.querySelectorAll('.tab-content');
+  allTabContent.forEach(content => {
+    content.classList.remove('active');
+    content.setAttribute('hidden', '');
+  });
+
+  // Add active class and aria-selected to clicked tab button
+  const clickedButton = document.querySelector(`.tab-button[data-tab="${tabName}"]`);
+  if (clickedButton) {
+    clickedButton.classList.add('active');
+    clickedButton.setAttribute('aria-selected', 'true');
+  } else {
+    console.warn(`Tab button not found for tab: ${tabName}`);
+  }
+
+  // Add active class and show corresponding tab content
+  const targetContent = document.querySelector(`.tab-content[data-tab="${tabName}"]`);
+  if (targetContent) {
+    targetContent.classList.add('active');
+    targetContent.removeAttribute('hidden');
+  } else {
+    console.warn(`Tab content not found for tab: ${tabName}`);
+  }
+}
+
 // Event handlers and initialization
 document.addEventListener('DOMContentLoaded', function() {
   initializeDefaultPattern();
@@ -1147,4 +1187,43 @@ document.addEventListener('DOMContentLoaded', function() {
       exportFeedback.className = 'export-feedback-error';
     }
   });
+
+  // Initialize tab navigation
+  const tabButtons = document.querySelectorAll('.tab-button');
+  tabButtons.forEach(button => {
+    button.addEventListener('click', function() {
+      const tabName = this.getAttribute('data-tab');
+      if (tabName) {
+        switchTab(tabName);
+      }
+    });
+    // Add keyboard support for tab navigation
+    button.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        const tabName = this.getAttribute('data-tab');
+        if (tabName) {
+          switchTab(tabName);
+        }
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        const currentIndex = Array.from(tabButtons).indexOf(this);
+        let targetIndex;
+        if (e.key === 'ArrowLeft') {
+          targetIndex = currentIndex > 0 ? currentIndex - 1 : tabButtons.length - 1;
+        } else {
+          targetIndex = currentIndex < tabButtons.length - 1 ? currentIndex + 1 : 0;
+        }
+        const targetButton = tabButtons[targetIndex];
+        const tabName = targetButton.getAttribute('data-tab');
+        if (tabName) {
+          switchTab(tabName);
+          targetButton.focus();
+        }
+      }
+    });
+  });
+
+  // Ensure Plugins tab is active by default
+  switchTab('plugins');
 });

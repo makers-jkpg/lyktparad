@@ -32,6 +32,7 @@
 #define  PLUGIN_CMD_PAUSE        (0x02)  /* Pause plugin playback */
 #define  PLUGIN_CMD_RESET        (0x03)  /* Reset plugin state */
 #define  PLUGIN_CMD_DATA         (0x04)  /* Plugin data command: variable length */
+#define  PLUGIN_CMD_STOP         (0x05)  /* Stop plugin (deactivate and reset state) */
 
 /*******************************************************
  *                Command ID Allocation
@@ -56,11 +57,11 @@
  * Plugin Protocol Format:
  *   [PLUGIN_ID:1] [CMD:1] [LENGTH:2?] [DATA:N]
  *   - PLUGIN_ID: Plugin identifier (0x0B-0xEE)
- *   - CMD: Command byte (PLUGIN_CMD_START=0x01, PAUSE=0x02, RESET=0x03, DATA=0x04)
+ *   - CMD: Command byte (PLUGIN_CMD_START=0x01, PAUSE=0x02, RESET=0x03, DATA=0x04, STOP=0x05)
  *   - LENGTH: Optional 2-byte length prefix for variable-length data (network byte order, only for DATA commands)
  *   - DATA: Optional command-specific data
  *   - Total size: Maximum 1024 bytes (including all fields)
- *   - Fixed-size commands: START, PAUSE, RESET (2 bytes: PLUGIN_ID + CMD)
+ *   - Fixed-size commands: START, PAUSE, RESET, STOP (2 bytes: PLUGIN_ID + CMD)
  *   - Variable-size commands: DATA (4 bytes header: PLUGIN_ID + CMD + LENGTH + data)
  *   - Note: Sequence synchronization is handled via MESH_CMD_HEARTBEAT, not via plugin BEAT commands
  *

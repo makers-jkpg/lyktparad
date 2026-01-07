@@ -24,7 +24,13 @@
     </div>
 
     <div class="page-content">
+        <div class="tab-navigation" role="tablist">
+            <button class="tab-button active" data-tab="plugins" role="tab" aria-selected="true" aria-controls="tab-panel-plugins" id="tab-button-plugins">Plugins</button>
+            <button class="tab-button" data-tab="info" role="tab" aria-selected="false" aria-controls="tab-panel-info" id="tab-button-info">Info</button>
+            <button class="tab-button" data-tab="config" role="tab" aria-selected="false" aria-controls="tab-panel-config" id="tab-button-config">Config</button>
+        </div>
         <div class="container">
+            <div class="tab-content active" data-tab="plugins" role="tabpanel" id="tab-panel-plugins" aria-labelledby="tab-button-plugins">
             <main>
             <!-- Mesh Control Section -->
             <section id="mesh-control-section" class="section">
@@ -461,6 +467,13 @@
 
             {{PLUGIN_HTML}}
             </main>
+            </div>
+            <div class="tab-content" data-tab="info" role="tabpanel" id="tab-panel-info" aria-labelledby="tab-button-info" hidden>
+                <h1>Info</h1>
+            </div>
+            <div class="tab-content" data-tab="config" role="tabpanel" id="tab-panel-config" aria-labelledby="tab-button-config" hidden>
+                <h1>Config</h1>
+            </div>
         </div>
     </div>
 

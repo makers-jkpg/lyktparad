@@ -47,6 +47,7 @@ static esp_timer_handle_t fade_timer = NULL;
 static uint8_t fade_phase = 0; /* 0=idle, 1=fade_in, 2=hold, 3=fade_out */
 static uint32_t fade_elapsed_ms = 0;
 static bool fade_running = false;
+static bool fade_paused = false;
 static const uint32_t fade_step_ms = 20; /* step resolution for fades */
 
 /* Forward declarations */
@@ -119,6 +120,10 @@ static esp_err_t fade_timer_stop(void)
 
 static void fade_timer_callback(void *arg)
 {
+    /* Check if paused - if so, don't process timer callback */
+    if (fade_paused) {
+        return;
+    }
     (void)arg;
     /* Check if effect is running (fade_running is set before timer starts) */
     if (!fade_running) {
@@ -216,7 +221,7 @@ static void fade_timer_callback(void *arg)
 
 static esp_err_t fade_start(void)
 {
-    if (fade_running) {
+    if (fade_running && !fade_paused) {
         ESP_LOGD(TAG, "Fade effect already running");
         return ESP_OK;
     }
@@ -225,6 +230,7 @@ static esp_err_t fade_start(void)
     fade_phase = 1; /* start with fade_in (on -> off) */
     fade_elapsed_ms = 0;
     fade_running = true;
+    fade_paused = false; /* Clear pause flag when starting */
 
     /* Ensure timer exists */
     if (fade_timer_start() != ESP_OK) {
@@ -261,6 +267,57 @@ static esp_err_t fade_stop(void)
 /*******************************************************
  *                Plugin Callbacks
  *******************************************************/
+
+static esp_err_t effect_fade_on_pause(void)
+{
+    if (!fade_running) {
+        ESP_LOGD(TAG, "Fade effect not running, nothing to pause");
+        return ESP_OK;
+    }
+
+    /* Stop timer */
+    if (fade_timer != NULL) {
+        esp_timer_stop(fade_timer);
+    }
+
+    /* Set paused flag to prevent timer callback from continuing */
+    fade_paused = true;
+
+    ESP_LOGI(TAG, "Fade effect paused (phase=%d, elapsed=%lu ms)", fade_phase, fade_elapsed_ms);
+    return ESP_OK;
+}
+
+static esp_err_t effect_fade_on_reset(void)
+{
+    /* Stop timer */
+    if (fade_timer != NULL) {
+        esp_timer_stop(fade_timer);
+    }
+
+    /* Reset state */
+    fade_phase = 0;
+    fade_elapsed_ms = 0;
+    fade_running = false;
+    fade_paused = false;
+
+    /* Reset RGB LED to off */
+    plugin_set_rgb(0, 0, 0);
+
+    ESP_LOGI(TAG, "Fade effect reset");
+    return ESP_OK;
+}
+
+static esp_err_t effect_fade_on_stop(void)
+{
+    /* Reset state (calls on_reset logic) */
+    esp_err_t err = effect_fade_on_reset();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    ESP_LOGI(TAG, "Fade effect stopped");
+    return ESP_OK;
+}
 
 static esp_err_t fade_command_handler(uint8_t *data, uint16_t len)
 {
@@ -326,6 +383,9 @@ void effect_fade_plugin_register(void)
             .on_activate = fade_on_activate,
             .on_deactivate = fade_on_deactivate,
             .on_start = fade_on_start,
+            .on_pause = effect_fade_on_pause,
+            .on_reset = effect_fade_on_reset,
+            .on_stop = effect_fade_on_stop,
         },
         .user_data = NULL,
     };

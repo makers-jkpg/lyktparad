@@ -229,6 +229,67 @@ esp_err_t plugin_system_handle_command(uint8_t *data, uint16_t len)
     return err;
 }
 
+/**
+ * @brief Broadcast plugin command to all child nodes
+ *
+ * This function broadcasts a plugin command to all child nodes in the mesh network.
+ * Only root nodes can broadcast commands. Child nodes will ignore this function.
+ *
+ * @param plugin_id Plugin ID (0x0B-0xEE)
+ * @param cmd Command byte (PLUGIN_CMD_START, PLUGIN_CMD_PAUSE, PLUGIN_CMD_RESET, PLUGIN_CMD_STOP)
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t plugin_system_broadcast_command(uint8_t plugin_id, uint8_t cmd)
+{
+    /* Only root nodes can broadcast */
+    if (!esp_mesh_is_root()) {
+        ESP_LOGD(TAG, "Not root node, cannot broadcast command");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+    int route_table_size = 0;
+    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+
+    int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
+    if (child_node_count == 0) {
+        ESP_LOGD(TAG, "No child nodes to broadcast command");
+        return ESP_OK;
+    }
+
+    uint8_t *tx_buf = mesh_common_get_tx_buf();
+    tx_buf[0] = plugin_id;  /* Plugin ID */
+    tx_buf[1] = cmd;         /* Command byte */
+
+    mesh_data_t data;
+    data.data = tx_buf;
+    data.size = 2;  /* Plugin ID(1) + CMD(1) */
+    data.proto = MESH_PROTO_BIN;
+    data.tos = MESH_TOS_P2P;
+
+    int success_count = 0;
+    int fail_count = 0;
+    /* Skip index 0 (root node itself), only send to child nodes */
+    for (int i = 1; i < route_table_size; i++) {
+        esp_err_t err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+        if (err == ESP_OK) {
+            success_count++;
+        } else {
+            fail_count++;
+            ESP_LOGD(TAG, "Plugin command broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
+        }
+    }
+
+    const char *cmd_name = (cmd == PLUGIN_CMD_START) ? "START" :
+                          (cmd == PLUGIN_CMD_PAUSE) ? "PAUSE" :
+                          (cmd == PLUGIN_CMD_RESET) ? "RESET" :
+                          (cmd == PLUGIN_CMD_STOP) ? "STOP" : "UNKNOWN";
+    ESP_LOGI(TAG, "Plugin command %s (plugin ID 0x%02X) broadcast - sent to %d/%d child nodes (success:%d, failed:%d)",
+             cmd_name, plugin_id, success_count, child_node_count, success_count, fail_count);
+
+    return ESP_OK;
+}
+
 esp_err_t plugin_activate(const char *name)
 {
     if (name == NULL) {
@@ -497,8 +558,8 @@ esp_err_t plugin_system_handle_plugin_command(uint8_t *data, uint16_t len)
     uint8_t cmd = data[1];
 
     /* Validate command byte */
-    if (cmd != PLUGIN_CMD_START && cmd != PLUGIN_CMD_PAUSE && cmd != PLUGIN_CMD_RESET) {
-        ESP_LOGE(TAG, "Plugin command routing failed: invalid command byte 0x%02X (expected 0x%02X-0x%02X)", cmd, PLUGIN_CMD_START, PLUGIN_CMD_RESET);
+    if (cmd != PLUGIN_CMD_START && cmd != PLUGIN_CMD_PAUSE && cmd != PLUGIN_CMD_RESET && cmd != PLUGIN_CMD_STOP) {
+        ESP_LOGE(TAG, "Plugin command routing failed: invalid command byte 0x%02X (expected 0x%02X-0x%02X or 0x%02X)", cmd, PLUGIN_CMD_START, PLUGIN_CMD_RESET, PLUGIN_CMD_STOP);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -580,6 +641,29 @@ esp_err_t plugin_system_handle_plugin_command(uint8_t *data, uint16_t len)
             err = plugin->callbacks.on_reset();
             break;
 
+        case PLUGIN_CMD_STOP:
+            /* Root nodes should ignore STOP commands received via mesh
+             * Root nodes stop plugins via direct API calls, not via mesh commands
+             * This prevents root nodes from processing their own broadcasts
+             */
+            if (esp_mesh_is_root()) {
+                return ESP_OK; /* Silently ignore - root node doesn't process STOP via mesh */
+            }
+            /* Call plugin's on_stop callback if registered (optional) */
+            if (plugin->callbacks.on_stop != NULL) {
+                err = plugin->callbacks.on_stop();
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "Plugin '%s' on_stop callback returned error: %s", plugin->name, esp_err_to_name(err));
+                    /* Continue with deactivation even if on_stop fails */
+                }
+            }
+            /* Deactivate plugin */
+            err = plugin_deactivate(plugin->name);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to deactivate plugin '%s' for STOP command: %s", plugin->name, esp_err_to_name(err));
+                return err;
+            }
+            break;
 
         default:
             ESP_LOGE(TAG, "Plugin command routing failed: unhandled command byte 0x%02X", cmd);
@@ -593,6 +677,132 @@ esp_err_t plugin_system_handle_plugin_command(uint8_t *data, uint16_t len)
     }
 
     return err;
+}
+
+/**
+ * @brief Handle plugin command from API (root node processes locally and broadcasts)
+ *
+ * This function is called by API handlers when root node receives a command via HTTP API.
+ * Unlike plugin_system_handle_plugin_command(), this function:
+ * - Processes the command locally on root node (calls plugin callbacks)
+ * - Broadcasts the command to all child nodes
+ * - Does NOT ignore commands on root node
+ *
+ * @param data Command data: [PLUGIN_ID:1] [CMD:1]
+ * @param len Command length (must be 2 for fixed-size commands)
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t plugin_system_handle_plugin_command_from_api(uint8_t *data, uint16_t len)
+{
+    /* Validate data pointer and minimum length */
+    if (data == NULL) {
+        ESP_LOGE(TAG, "Plugin command from API failed: data pointer is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (len < 2) {
+        ESP_LOGE(TAG, "Plugin command from API failed: len < 2 (need plugin ID + command byte)");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Extract plugin ID and command */
+    uint8_t plugin_id = data[0];
+    uint8_t cmd = data[1];
+
+    /* Validate plugin ID is in plugin range */
+    if (plugin_id < PLUGIN_ID_MIN || plugin_id > PLUGIN_ID_MAX) {
+        ESP_LOGE(TAG, "Plugin command from API failed: plugin ID 0x%02X outside plugin range (0x%02X-0x%02X)", plugin_id, PLUGIN_ID_MIN, PLUGIN_ID_MAX);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Validate command byte */
+    if (cmd != PLUGIN_CMD_START && cmd != PLUGIN_CMD_PAUSE && cmd != PLUGIN_CMD_RESET && cmd != PLUGIN_CMD_STOP) {
+        ESP_LOGE(TAG, "Plugin command from API failed: invalid command byte 0x%02X", cmd);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Look up plugin by plugin ID */
+    const plugin_info_t *plugin = plugin_get_by_id(plugin_id);
+    if (plugin == NULL) {
+        ESP_LOGD(TAG, "Plugin command from API: no plugin registered for plugin ID 0x%02X", plugin_id);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Only root node should call this function */
+    if (!esp_mesh_is_root()) {
+        ESP_LOGW(TAG, "plugin_system_handle_plugin_command_from_api called on non-root node, falling back to regular handler");
+        return plugin_system_handle_plugin_command(data, len);
+    }
+
+    esp_err_t err = ESP_OK;
+
+    /* Process command locally on root node */
+    switch (cmd) {
+        case PLUGIN_CMD_START:
+            /* START command handled by plugin_activate(), not here */
+            ESP_LOGE(TAG, "START command should not be called via API handler, use plugin_activate() instead");
+            return ESP_ERR_INVALID_ARG;
+
+        case PLUGIN_CMD_PAUSE:
+            if (plugin->callbacks.on_pause == NULL) {
+                ESP_LOGD(TAG, "Plugin command from API: plugin '%s' has no on_pause callback", plugin->name);
+                return ESP_ERR_INVALID_STATE;
+            }
+            if (len != 2) {
+                ESP_LOGE(TAG, "Plugin command from API failed: PAUSE command requires len=2, got %d", len);
+                return ESP_ERR_INVALID_ARG;
+            }
+            err = plugin->callbacks.on_pause();
+            break;
+
+        case PLUGIN_CMD_RESET:
+            if (plugin->callbacks.on_reset == NULL) {
+                ESP_LOGD(TAG, "Plugin command from API: plugin '%s' has no on_reset callback", plugin->name);
+                return ESP_ERR_INVALID_STATE;
+            }
+            if (len != 2) {
+                ESP_LOGE(TAG, "Plugin command from API failed: RESET command requires len=2, got %d", len);
+                return ESP_ERR_INVALID_ARG;
+            }
+            err = plugin->callbacks.on_reset();
+            break;
+
+        case PLUGIN_CMD_STOP:
+            /* Call plugin's on_stop callback if registered (optional) */
+            if (plugin->callbacks.on_stop != NULL) {
+                err = plugin->callbacks.on_stop();
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "Plugin '%s' on_stop callback returned error: %s", plugin->name, esp_err_to_name(err));
+                    /* Continue with deactivation even if on_stop fails */
+                }
+            }
+            /* Deactivate plugin */
+            err = plugin_deactivate(plugin->name);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to deactivate plugin '%s' for STOP command: %s", plugin->name, esp_err_to_name(err));
+                return err;
+            }
+            break;
+
+        default:
+            ESP_LOGE(TAG, "Plugin command from API failed: unhandled command byte 0x%02X", cmd);
+            return ESP_ERR_INVALID_ARG;
+    }
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Plugin '%s' command callback (0x%02X) from API returned error: %s", plugin->name, cmd, esp_err_to_name(err));
+        return err;
+    }
+
+    /* Broadcast command to child nodes */
+    esp_err_t broadcast_err = plugin_system_broadcast_command(plugin_id, cmd);
+    if (broadcast_err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to broadcast command 0x%02X for plugin '%s': %s", cmd, plugin->name, esp_err_to_name(broadcast_err));
+        /* Don't fail the API call if broadcast fails - local processing succeeded */
+    }
+
+    ESP_LOGI(TAG, "Plugin command from API processed: plugin '%s' (plugin ID 0x%02X, command 0x%02X)", plugin->name, plugin_id, cmd);
+    return ESP_OK;
 }
 
 esp_err_t plugin_query_state(const char *plugin_name, uint32_t query_type, void *result)

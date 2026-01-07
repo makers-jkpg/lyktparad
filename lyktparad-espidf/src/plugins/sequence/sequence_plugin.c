@@ -512,6 +512,21 @@ static esp_err_t sequence_on_reset(void)
     }
 }
 
+static esp_err_t sequence_on_stop(void)
+{
+    /* Stop sequence timer */
+    sequence_timer_stop();
+
+    /* Reset sequence pointer to 0 */
+    sequence_pointer = 0;
+
+    /* Clear sequence active state */
+    sequence_active = false;
+
+    ESP_LOGI(TAG, "Sequence plugin stopped - pointer reset to 0");
+    return ESP_OK;
+}
+
 
 /*******************************************************
  *                Query Interface Callbacks
@@ -647,6 +662,7 @@ void sequence_plugin_register(void)
             .on_start = sequence_on_start,
             .on_pause = sequence_on_pause,
             .on_reset = sequence_on_reset,
+            .on_stop = sequence_on_stop,
             .get_state = sequence_get_state,
             .execute_operation = sequence_execute_operation,
             .get_helper = sequence_get_helper,
