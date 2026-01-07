@@ -442,6 +442,13 @@ static esp_err_t sequence_on_deactivate(void)
 static esp_err_t sequence_on_start(void)
 {
     if (esp_mesh_is_root()) {
+        /* Root node: START commands received via mesh should be ignored
+         * Root node starts via direct call during plugin activation, not via mesh commands
+         * If timer is already running, this is likely a duplicate START from our own broadcast
+         */
+        if (sequence_active && sequence_timer != NULL) {
+            return ESP_OK;
+        }
         return sequence_plugin_root_start();
     } else {
         /* Child node: start timer if sequence data exists */

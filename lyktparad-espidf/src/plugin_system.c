@@ -193,6 +193,17 @@ esp_err_t plugin_system_handle_command(uint8_t *data, uint16_t len)
         return ESP_ERR_INVALID_ARG;
     }
 
+    /* Extract command byte from second byte */
+    uint8_t cmd = data[1];
+
+    /* Root nodes should ignore DATA commands received via mesh
+     * Root nodes process DATA commands via direct API calls (e.g., sequence_plugin_root_store_and_broadcast),
+     * not via mesh commands. This prevents root nodes from processing their own broadcasts.
+     */
+    if (esp_mesh_is_root() && cmd == PLUGIN_CMD_DATA) {
+        return ESP_OK; /* Silently ignore - root node doesn't process DATA via mesh */
+    }
+
     /* Look up plugin by plugin ID */
     const plugin_info_t *plugin = plugin_get_by_id(plugin_id);
     if (plugin == NULL) {
@@ -267,8 +278,18 @@ esp_err_t plugin_activate(const char *name)
 
     ESP_LOGI(TAG, "Plugin '%s' activated", name);
 
-    /* If root node, broadcast START command to child nodes */
+    /* If root node, call on_start locally and broadcast START command to child nodes */
     if (esp_mesh_is_root()) {
+        /* Call on_start callback on root node itself */
+        if (plugin->callbacks.on_start != NULL) {
+            esp_err_t start_err = plugin->callbacks.on_start();
+            if (start_err != ESP_OK) {
+                ESP_LOGW(TAG, "Plugin '%s' on_start callback returned error on root node: %s",
+                         name, esp_err_to_name(start_err));
+                /* Continue with broadcast even if on_start fails */
+            }
+        }
+
         mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
         int route_table_size = 0;
         esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
@@ -434,6 +455,13 @@ esp_err_t plugin_system_handle_plugin_command(uint8_t *data, uint16_t len)
     esp_err_t err = ESP_OK;
     switch (cmd) {
         case PLUGIN_CMD_START:
+            /* Root nodes should ignore START commands received via mesh
+             * Root nodes start plugins via direct activation, not via mesh commands
+             * This prevents root nodes from processing their own broadcasts
+             */
+            if (esp_mesh_is_root()) {
+                return ESP_OK; /* Silently ignore - root node doesn't process START via mesh */
+            }
             /* Enforce mutual exclusivity: START command must stop other plugins and activate this one */
             esp_err_t deactivate_err = plugin_deactivate_all();
             if (deactivate_err != ESP_OK && deactivate_err != ESP_ERR_INVALID_STATE) {
@@ -457,6 +485,13 @@ esp_err_t plugin_system_handle_plugin_command(uint8_t *data, uint16_t len)
             break;
 
         case PLUGIN_CMD_PAUSE:
+            /* Root nodes should ignore PAUSE commands received via mesh
+             * Root nodes pause plugins via direct API calls, not via mesh commands
+             * This prevents root nodes from processing their own broadcasts
+             */
+            if (esp_mesh_is_root()) {
+                return ESP_OK; /* Silently ignore - root node doesn't process PAUSE via mesh */
+            }
             if (plugin->callbacks.on_pause == NULL) {
                 ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_pause callback", plugin->name);
                 return ESP_ERR_INVALID_STATE;
@@ -469,6 +504,13 @@ esp_err_t plugin_system_handle_plugin_command(uint8_t *data, uint16_t len)
             break;
 
         case PLUGIN_CMD_RESET:
+            /* Root nodes should ignore RESET commands received via mesh
+             * Root nodes reset plugins via direct API calls, not via mesh commands
+             * This prevents root nodes from processing their own broadcasts
+             */
+            if (esp_mesh_is_root()) {
+                return ESP_OK; /* Silently ignore - root node doesn't process RESET via mesh */
+            }
             if (plugin->callbacks.on_reset == NULL) {
                 ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_reset callback", plugin->name);
                 return ESP_ERR_INVALID_STATE;
@@ -481,6 +523,13 @@ esp_err_t plugin_system_handle_plugin_command(uint8_t *data, uint16_t len)
             break;
 
         case PLUGIN_CMD_BEAT:
+            /* Root nodes should ignore BEAT commands received via mesh
+             * Root nodes broadcast BEAT commands but don't process them when received back
+             * This prevents root nodes from processing their own broadcasts
+             */
+            if (esp_mesh_is_root()) {
+                return ESP_OK; /* Silently ignore - root node doesn't process BEAT via mesh */
+            }
             if (plugin->callbacks.on_beat == NULL) {
                 ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_beat callback", plugin->name);
                 return ESP_ERR_INVALID_STATE;

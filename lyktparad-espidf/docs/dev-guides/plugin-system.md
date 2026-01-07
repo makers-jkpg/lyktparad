@@ -129,7 +129,7 @@ The plugin protocol uses a self-contained format where the plugin ID is included
 - **DATA** (N bytes, optional): Command-specific data
 - **Total size**: Maximum 1024 bytes (including all fields)
 
-**Fixed-size commands**: 
+**Fixed-size commands**:
 - START, PAUSE, RESET: 2 bytes total (PLUGIN_ID + CMD)
 - BEAT: 4 bytes total (PLUGIN_ID + CMD + POINTER + COUNTER)
   - POINTER (1 byte): Current position pointer (0-255)
@@ -783,6 +783,34 @@ You don't need to modify `CMakeLists.txt` or any build configuration files. The 
 - Plugin callbacks may be called from different threads
 - Use appropriate synchronization if needed
 - Be aware of mesh event handler context
+
+### RGB LED Control
+
+**Plugin Exclusivity**: RGB LEDs are controlled exclusively by plugins when a plugin is active. This applies to both root nodes and child nodes, ensuring unified behavior across all mesh nodes.
+
+**Plugin LED Control Functions**:
+- `plugin_light_set_rgb(r, g, b)`: Control Neopixel/WS2812 LEDs (works on root and child nodes)
+- `plugin_set_rgb_led(r, g, b)`: Control common-cathode RGB LEDs (works on root and child nodes, requires `RGB_ENABLE`)
+
+**Root Node Behavior**:
+- Root node RGB LEDs respond to plugin control calls exactly like child nodes
+- Root node heartbeat handler skips LED control when a plugin is active
+- Root node RGB command handler skips LED control when a plugin is active
+- Root node and child nodes have identical RGB LED behavior for the same plugin
+
+**Usage in Plugins**:
+```c
+/* In timer callback or command handler */
+esp_err_t err = plugin_light_set_rgb(255, 0, 0);  /* Set to red */
+if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to set LED: 0x%x", err);
+}
+
+/* If RGB_ENABLE is defined, also control common-cathode RGB LED */
+plugin_set_rgb_led(255, 0, 0);  /* Set to red */
+```
+
+**Important**: These functions check if a plugin is active before allowing LED control. Only the active plugin can control LEDs. If no plugin is active, these functions return `ESP_ERR_INVALID_STATE`.
 
 ## Examples
 

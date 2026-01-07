@@ -8,6 +8,7 @@
 #include "esp_err.h"
 #include "esp_mesh.h"
 #include "esp_timer.h"
+#include "esp_log.h"
 #include "mesh_commands.h"
 #include "light_neopixel.h"
 #include "config/mesh_device_config.h"

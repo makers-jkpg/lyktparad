@@ -25,7 +25,6 @@
 #include "mesh_commands.h"
 #include "light_neopixel.h"
 #include "plugin_system.h"
-#include "mesh_commands.h"
 #include "light_common_cathode.h"
 #include "config/mesh_config.h"
 #include "config/mesh_device_config.h"
@@ -34,8 +33,6 @@
 #ifdef ROOT_STATUS_LED_GPIO
 #include "root_status_led.h"
 #endif
-#include "plugin_system.h"
-#include "mesh_udp_bridge.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/inet.h"
@@ -162,10 +159,20 @@ static void heartbeat_timer_cb(void *arg)
     }
     // #endregion
 
+    /* Skip LED control if plugin is active (plugin controls LED exclusively)
+     * This check ensures that if LED control is ever added back to the heartbeat handler,
+     * it will not override plugin control. Heartbeat counting and mesh command sending
+     * continue normally regardless of plugin state.
+     */
+    const char *active_plugin = plugin_get_active();
+    if (active_plugin != NULL) {
+        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - skipping LED change (plugin '%s' active)", (unsigned long)cnt, active_plugin);
+    }
+
     /* Unified LED behavior for all nodes (root and child):
      * - Even heartbeat: LED OFF
      * - Odd heartbeat: LED ON (BLUE default or custom RGB)
-     * - Skip LED changes if sequence mode is active (sequence controls LED)
+     * - Skip LED changes if plugin is active (plugin controls LED)
      */
     /* Heartbeat counting and mesh command sending continue, but RGB LED control is removed
      * RGB LEDs are now exclusive to plugins via plugin_light_set_rgb() and plugin_set_rgb_led()
@@ -285,6 +292,16 @@ void mesh_root_handle_rgb_command(uint8_t r, uint8_t g, uint8_t b)
     root_rgb_g = g;
     root_rgb_b = b;
     root_rgb_has_been_set = true;
+
+    /* If plugin is active, don't override plugin control
+     * This check ensures that if LED control is ever added back to this function,
+     * it will not override plugin control. State storage for web UI continues regardless.
+     */
+    const char *active_plugin = plugin_get_active();
+    if (active_plugin != NULL) {
+        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] RGB command ignored - plugin '%s' active", active_plugin);
+        return;
+    }
 
     /* RGB LED control removed - LEDs are now exclusive to plugins
      * State is still stored for web UI queries via mesh_get_current_rgb()
