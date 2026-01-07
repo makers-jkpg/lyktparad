@@ -90,7 +90,7 @@ static void rgb_effect_update_color(void)
 static void rgb_effect_timer_callback(void *arg)
 {
     (void)arg;
-    
+
     /* Check if plugin is active (double-check for safety) */
     if (!plugin_is_active("rgb_effect")) {
         ESP_LOGW(TAG, "RGB effect timer callback called but plugin is not active, stopping timer");
@@ -99,13 +99,13 @@ static void rgb_effect_timer_callback(void *arg)
         }
         return;
     }
-    
+
     /* Increment counter (wraps at 255 automatically) */
     rgb_effect_counter++;
-    
+
     /* Update color based on counter */
     rgb_effect_update_color();
-    
+
     ESP_LOGD(TAG, "Local timer tick - counter: %u, color_index: %u", rgb_effect_counter, rgb_effect_counter % 6);
 }
 
@@ -130,20 +130,20 @@ static esp_err_t rgb_effect_timer_start(void)
         }
         return ESP_OK;
     }
-    
+
     esp_timer_create_args_t args = {
         .callback = &rgb_effect_timer_callback,
         .arg = NULL,
         .name = "rgb_effect_timer",
     };
-    
+
     esp_err_t err = esp_timer_create(&args, &rgb_effect_timer);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to create timer: %s", esp_err_to_name(err));
         rgb_effect_timer = NULL;
         return err;
     }
-    
+
     err = esp_timer_start_periodic(rgb_effect_timer, (uint64_t)MESH_CONFIG_HEARTBEAT_INTERVAL * 1000ULL);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start timer: %s", esp_err_to_name(err));
@@ -151,7 +151,7 @@ static esp_err_t rgb_effect_timer_start(void)
         rgb_effect_timer = NULL;
         return err;
     }
-    
+
     ESP_LOGI(TAG, "RGB effect timer started with interval %dms", MESH_CONFIG_HEARTBEAT_INTERVAL);
     return ESP_OK;
 }
@@ -170,10 +170,10 @@ static esp_err_t rgb_effect_timer_stop(void)
         esp_timer_delete(rgb_effect_timer);
         rgb_effect_timer = NULL;
     }
-    
+
     rgb_effect_counter = 0;
     rgb_effect_running = false;
-    
+
     ESP_LOGI(TAG, "RGB effect timer stopped and state cleared");
     return ESP_OK;
 }
@@ -185,23 +185,23 @@ static esp_err_t rgb_effect_timer_stop(void)
 esp_err_t rgb_effect_plugin_handle_heartbeat(uint8_t pointer, uint8_t counter)
 {
     (void)pointer;  /* Pointer is unused for this plugin, kept for sequence plugin compatibility */
-    
+
     /* Only process heartbeat if plugin is active */
     if (!plugin_is_active("rgb_effect")) {
         ESP_LOGD(TAG, "Heartbeat received but RGB effect plugin not active, ignoring");
         return ESP_OK;
     }
-    
+
     /* Store old counter for drift logging */
     uint8_t old_counter = rgb_effect_counter;
-    
+
     /* Calculate drift: difference between local counter and received counter */
     int8_t drift = (int8_t)(rgb_effect_counter - counter);
-    
+
     /* Handle wrap-around: if drift is large (e.g., 127), counter may have wrapped */
     /* For simplicity, we trust the received counter and update local counter */
     rgb_effect_counter = counter;
-    
+
     /* Reset local timer to synchronize with root node */
     /* Stop timer before restarting to reset internal timing */
     if (rgb_effect_timer != NULL) {
@@ -212,18 +212,18 @@ esp_err_t rgb_effect_plugin_handle_heartbeat(uint8_t pointer, uint8_t counter)
             return err;
         }
     }
-    
+
     /* Update color based on corrected counter */
     rgb_effect_update_color();
-    
+
     /* Log drift correction if significant (more than 1) */
     if (drift > 1 || drift < -1) {
-        ESP_LOGW(TAG, "Drift correction: local=%u, received=%u, drift=%d", 
+        ESP_LOGW(TAG, "Drift correction: local=%u, received=%u, drift=%d",
                  old_counter, counter, drift);
     } else {
         ESP_LOGD(TAG, "Heartbeat received - counter: %u, color_index: %u", counter, counter % 6);
     }
-    
+
     return ESP_OK;
 }
 
@@ -260,20 +260,20 @@ static esp_err_t rgb_effect_on_activate(void)
 {
     /* Initialize counter to 0 */
     rgb_effect_counter = 0;
-    
+
     /* Start local timer */
     esp_err_t err = rgb_effect_timer_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start timer on activation: %s", esp_err_to_name(err));
         return err;
     }
-    
+
     /* Set initial color (index 0, red) */
     rgb_effect_update_color();
-    
+
     /* Set running flag */
     rgb_effect_running = true;
-    
+
     ESP_LOGI(TAG, "RGB effect plugin activated - counter: %u", rgb_effect_counter);
     return ESP_OK;
 }
@@ -285,12 +285,12 @@ static esp_err_t rgb_effect_on_deactivate(void)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to stop timer on deactivation: %s", esp_err_to_name(err));
     }
-    
+
     /* Reset RGB LED to off */
     plugin_set_rgb(0, 0, 0);
-    
+
     /* Counter and running flag are reset in timer_stop() */
-    
+
     ESP_LOGI(TAG, "RGB effect plugin deactivated");
     return ESP_OK;
 }
@@ -301,10 +301,10 @@ static esp_err_t rgb_effect_on_pause(void)
     if (rgb_effect_timer != NULL) {
         esp_timer_stop(rgb_effect_timer);
     }
-    
+
     /* Preserve counter and color state for resume */
     /* Keep running flag (for resume) */
-    
+
     ESP_LOGI(TAG, "RGB effect plugin paused - counter: %u", rgb_effect_counter);
     return ESP_OK;
 }
@@ -313,7 +313,7 @@ static esp_err_t rgb_effect_on_reset(void)
 {
     /* Reset counter to 0 */
     rgb_effect_counter = 0;
-    
+
     /* Stop and restart timer */
     if (rgb_effect_timer != NULL) {
         esp_timer_stop(rgb_effect_timer);
@@ -323,10 +323,10 @@ static esp_err_t rgb_effect_on_reset(void)
             return err;
         }
     }
-    
+
     /* Set color to index 0 (red) */
     rgb_effect_update_color();
-    
+
     ESP_LOGI(TAG, "RGB effect plugin reset - counter: %u", rgb_effect_counter);
     return ESP_OK;
 }
@@ -348,7 +348,7 @@ static esp_err_t rgb_effect_on_start(void)
         /* Start from beginning (similar to activate) */
         return rgb_effect_on_activate();
     }
-    
+
     ESP_LOGI(TAG, "RGB effect plugin START command received");
     return ESP_OK;
 }
@@ -376,7 +376,7 @@ void rgb_effect_plugin_register(void)
         },
         .user_data = NULL,
     };
-    
+
     uint8_t assigned_cmd_id;
     esp_err_t err = plugin_register(&info, &assigned_cmd_id);
     if (err != ESP_OK) {

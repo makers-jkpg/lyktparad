@@ -823,11 +823,15 @@ header h1 {
     border: none;
     padding: 12px 24px;
     border-radius: 8px;
-    font-size: 16px;
-    font-weight: bold;
+    font-size: 24px;
+    font-weight: normal;
     cursor: pointer;
     transition: background-color 0.2s;
     min-height: 44px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 #startButton:hover, #stopButton:hover, #resetButton:hover {
