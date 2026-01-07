@@ -15,8 +15,23 @@
 
 #include "plugin_system.h"
 #include "mesh_commands.h"
+#include "mesh_common.h"
+#include "esp_mesh.h"
 #include "esp_log.h"
+#include "esp_wifi.h"
 #include <string.h>
+
+#ifndef CONFIG_MESH_ROUTE_TABLE_SIZE
+#define CONFIG_MESH_ROUTE_TABLE_SIZE 50
+#endif
+
+/* Ensure MACSTR and MAC2STR are defined */
+#ifndef MACSTR
+#define MACSTR "%02x:%02x:%02x:%02x:%02x:%02x"
+#endif
+#ifndef MAC2STR
+#define MAC2STR(a) (a)[0], (a)[1], (a)[2], (a)[3], (a)[4], (a)[5]
+#endif
 
 static const char *TAG = "plugin_system";
 
@@ -234,19 +249,61 @@ esp_err_t plugin_activate(const char *name)
         }
     }
 
+    /* Set as active plugin BEFORE calling on_activate to prevent race conditions
+     * (e.g., timer callbacks that check plugin_is_active() during on_activate) */
+    active_plugin_name = plugin->name;
+
     /* Call plugin's on_activate callback if provided */
     if (plugin->callbacks.on_activate != NULL) {
         esp_err_t activate_err = plugin->callbacks.on_activate();
         if (activate_err != ESP_OK) {
             ESP_LOGE(TAG, "Plugin '%s' on_activate callback failed: %s",
                      name, esp_err_to_name(activate_err));
+            /* Rollback: clear active plugin name on failure */
+            active_plugin_name = NULL;
             return activate_err;
         }
     }
 
-    /* Set as active plugin */
-    active_plugin_name = plugin->name;
     ESP_LOGI(TAG, "Plugin '%s' activated", name);
+
+    /* If root node, broadcast START command to child nodes */
+    if (esp_mesh_is_root()) {
+        mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+        int route_table_size = 0;
+        esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+
+        int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
+        if (child_node_count > 0) {
+            uint8_t *tx_buf = mesh_common_get_tx_buf();
+            tx_buf[0] = plugin->command_id;  /* Plugin ID */
+            tx_buf[1] = PLUGIN_CMD_START;    /* START command */
+
+            mesh_data_t data;
+            data.data = tx_buf;
+            data.size = 2;  /* Plugin ID(1) + CMD(1) */
+            data.proto = MESH_PROTO_BIN;
+            data.tos = MESH_TOS_P2P;
+
+            int success_count = 0;
+            int fail_count = 0;
+            /* Skip index 0 (root node itself), only send to child nodes */
+            for (int i = 1; i < route_table_size; i++) {
+                esp_err_t err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+                if (err == ESP_OK) {
+                    success_count++;
+                } else {
+                    fail_count++;
+                    ESP_LOGD(TAG, "Plugin START broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
+                }
+            }
+
+            ESP_LOGI(TAG, "Plugin '%s' START command broadcast - sent to %d/%d child nodes (success:%d, failed:%d)",
+                     name, success_count, child_node_count, success_count, fail_count);
+        } else {
+            ESP_LOGD(TAG, "Plugin '%s' activated on root node - no child nodes to broadcast", name);
+        }
+    }
 
     return ESP_OK;
 }
