@@ -323,6 +323,27 @@ void esp_mesh_p2p_rx_main(void *arg)
                     ESP_LOGW(MESH_TAG, "[WEBSERVER IP] Invalid payload size: %d (expected >= 7)", data.size);
                 }
             }
+            /* Check for web server discovery failure broadcast command */
+            else if (cmd == MESH_CMD_WEBSERVER_DISCOVERY_FAILED) {
+                /* Minimum size: command (1 byte) + payload (4 bytes for timestamp) */
+                if (data.size >= 5) {
+                    const mesh_webserver_discovery_failed_t *payload = (const mesh_webserver_discovery_failed_t *)(data.data + 1);
+                    
+                    /* Extract timestamp from payload (already in network byte order) */
+                    uint32_t timestamp = payload->timestamp;
+                    
+                    /* Store discovery failure state locally */
+                    esp_err_t err = mesh_common_set_discovery_failed(timestamp);
+                    if (err == ESP_OK) {
+                        ESP_LOGI(MESH_TAG, "[DISCOVERY FAILURE] Received discovery failure state from "MACSTR" (timestamp: %lu)",
+                                 MAC2STR(from.addr), (unsigned long)ntohl(timestamp));
+                    } else {
+                        ESP_LOGW(MESH_TAG, "[DISCOVERY FAILURE] Failed to store failure state: %s", esp_err_to_name(err));
+                    }
+                } else {
+                    ESP_LOGW(MESH_TAG, "[DISCOVERY FAILURE] Invalid payload size: %d (expected >= 5)", data.size);
+                }
+            }
             /* Check for OTA messages (leaf nodes only) */
             else if (cmd == MESH_CMD_OTA_START || cmd == MESH_CMD_OTA_BLOCK ||
                      cmd == MESH_CMD_OTA_PREPARE_REBOOT || cmd == MESH_CMD_OTA_REBOOT) {

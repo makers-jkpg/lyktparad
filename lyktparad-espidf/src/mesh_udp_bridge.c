@@ -1894,6 +1894,9 @@ static void handle_broadcast_packet(const uint8_t *buffer, size_t len,
         ESP_LOGI(TAG, "UDP broadcast discovery: server=%s:%d (HTTP:%d, protocol=%s, version=%s)",
                  ip_str, udp_port, http_port, protocol, version);
 
+        /* Clear any existing discovery failure state */
+        mesh_common_clear_discovery_failed();
+
         /* Update registration state (if not already registered) */
         if (!s_server_registered) {
             mesh_udp_bridge_set_registration(true, server_ip, udp_port);

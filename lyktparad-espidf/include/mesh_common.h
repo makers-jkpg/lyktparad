@@ -75,6 +75,19 @@ uint8_t mesh_common_get_local_heartbeat_counter(void);
 void mesh_common_set_local_heartbeat_counter(uint8_t counter);
 
 /*******************************************************
+ *                Discovery Failure State Management
+ *******************************************************/
+
+/* Set discovery failure state with timestamp (network byte order) */
+esp_err_t mesh_common_set_discovery_failed(uint32_t timestamp);
+
+/* Check if discovery failure state exists and is valid (not expired) */
+bool mesh_common_is_discovery_failed(void);
+
+/* Clear discovery failure state */
+esp_err_t mesh_common_clear_discovery_failed(void);
+
+/*******************************************************
  *                Event Handler Callbacks
  *******************************************************/
 

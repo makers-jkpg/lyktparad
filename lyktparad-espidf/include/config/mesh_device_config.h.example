@@ -46,6 +46,18 @@
 #define MESH_LED_RMT_RES_HZ      10000000
 
 /*******************************************************
+ *                Neopixel/WS2812 LED Configuration
+ *******************************************************/
+
+/* Enable Neopixel/WS2812 LED support - Defined by default
+ * Comment out to disable Neopixel support
+ * If not defined, Neopixel functions will be stubbed out (no-op)
+ * This allows the code to compile and run on devices without Neopixel LEDs
+ * Default: Enabled (defined)
+ */
+#define NEOPIXEL_ENABLE
+
+/*******************************************************
  *                RGB LED Configuration (LEDC PWM)
  *******************************************************/
 

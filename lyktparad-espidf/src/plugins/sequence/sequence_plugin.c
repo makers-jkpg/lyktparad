@@ -855,10 +855,8 @@ esp_err_t sequence_plugin_root_start(void)
         ESP_LOGE(TAG, "Failed to start sequence timer: 0x%x", err);
     }
 
-    esp_err_t broadcast_err = sequence_broadcast_control(PLUGIN_CMD_START);
-    if (broadcast_err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to broadcast START command: 0x%x", broadcast_err);
-    }
+    /* Note: START command broadcasting is now handled by plugin_system.c in plugin_activate() */
+    /* No need to broadcast here - plugin system handles it automatically */
 
     ESP_LOGI(TAG, "Sequence playback started");
     return err;
@@ -873,10 +871,8 @@ esp_err_t sequence_plugin_root_pause(void)
 
     sequence_timer_stop();
 
-    esp_err_t broadcast_err = sequence_broadcast_control(PLUGIN_CMD_PAUSE);
-    if (broadcast_err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to broadcast PAUSE command: 0x%x", broadcast_err);
-    }
+    /* Note: PAUSE command broadcasting is now handled by plugin_system.c in plugin_system_handle_plugin_command_from_api() */
+    /* No need to broadcast here - plugin system handles it automatically */
 
     ESP_LOGI(TAG, "Sequence playback paused");
     return ESP_OK;
@@ -899,10 +895,8 @@ esp_err_t sequence_plugin_root_reset(void)
         }
     }
 
-    esp_err_t broadcast_err = sequence_broadcast_control(PLUGIN_CMD_RESET);
-    if (broadcast_err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to broadcast RESET command: 0x%x", broadcast_err);
-    }
+    /* Note: RESET command broadcasting is now handled by plugin_system.c in plugin_system_handle_plugin_command_from_api() */
+    /* No need to broadcast here - plugin system handles it automatically */
 
     ESP_LOGI(TAG, "Sequence pointer reset to 0");
     return ESP_OK;

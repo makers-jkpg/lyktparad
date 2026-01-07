@@ -67,6 +67,10 @@
  *
  * 0xEF-0xFF: Reserved (internal mesh use)
  *   - Reserved for internal mesh operations (OTA, web server IP broadcast, etc.)
+ *   - 0xF7: MESH_CMD_WEBSERVER_IP_BROADCAST
+ *   - 0xF8: MESH_CMD_WEBSERVER_DISCOVERY_FAILED
+ *   - 0xF9: MESH_CMD_QUERY_MESH_STATE
+ *   - 0xFA: MESH_CMD_MESH_STATE_RESPONSE
  */
 
 /*******************************************************
@@ -93,6 +97,22 @@ typedef struct {
     uint32_t timestamp;   /* Optional: Unix timestamp for expiration (network byte order) */
 } __attribute__((packed)) mesh_webserver_ip_broadcast_t;
 
+/**
+ * @brief Payload structure for web server discovery failure broadcast command.
+ *
+ * This structure is sent as the payload for MESH_CMD_WEBSERVER_DISCOVERY_FAILED.
+ * The structure is packed to ensure consistent byte alignment across platforms.
+ *
+ * Fields:
+ * - timestamp: Unix timestamp when discovery failed (4 bytes, network byte order)
+ *   Used for expiration logic (e.g., 5-10 minutes) to allow recovery if network conditions change.
+ *
+ * Size: 4 bytes (timestamp)
+ */
+typedef struct {
+    uint32_t timestamp;   /* Unix timestamp when discovery failed (network byte order) */
+} __attribute__((packed)) mesh_webserver_discovery_failed_t;
+
 /* Mesh Command Definitions - Internal Mesh Use (0xF prefix) */
 /* Commands with prefix 0xF are reserved for internal mesh use (OTA/update and internal mesh operations) */
 #define  MESH_CMD_OTA_REQUEST    (0xF0)  /* Leaf node requests firmware update */
@@ -103,6 +123,7 @@ typedef struct {
 #define  MESH_CMD_OTA_PREPARE_REBOOT (0xF5)  /* Prepare for coordinated reboot */
 #define  MESH_CMD_OTA_REBOOT     (0xF6)  /* Execute coordinated reboot */
 #define  MESH_CMD_WEBSERVER_IP_BROADCAST (0xF7)  /* Broadcast external web server IP and UDP port to child nodes */
+#define  MESH_CMD_WEBSERVER_DISCOVERY_FAILED (0xF8)  /* Broadcast external web server discovery failure state to all mesh nodes */
 #define  MESH_CMD_QUERY_MESH_STATE (0xF9)  /* Root queries child nodes for plugin state and heartbeat counter */
 #define  MESH_CMD_MESH_STATE_RESPONSE (0xFA)  /* Child responds with active plugin name and current heartbeat counter */
 

@@ -4,6 +4,10 @@
  * It includes functions for initializing LED strips, setting colors, and processing light control
  * commands from the mesh network. Mesh protocol command definitions are provided via mesh_commands.h.
  *
+ * NOTE: Neopixel support is conditionally compiled based on NEOPIXEL_ENABLE define.
+ * If NEOPIXEL_ENABLE is not defined, all functions are stubbed (no-op) and return ESP_OK or ESP_FAIL
+ * as appropriate. The header and function declarations remain available for API compatibility.
+ *
  * This example code is in the Public Domain (or CC0 licensed, at your option.)
  *
  * Unless required by applicable law or agreed to in writing, this

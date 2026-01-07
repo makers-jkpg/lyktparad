@@ -13,6 +13,7 @@
 
 #include <string.h>
 #include <inttypes.h>
+#include <time.h>
 #include "esp_wifi.h"
 #include "esp_mac.h"
 #include "esp_log.h"
@@ -910,6 +911,8 @@ __attribute__((unused)) static void discovery_task(void *pvParameters)
     /* First, try to use cached IP if available (optimization) */
     if (mesh_udp_bridge_use_cached_ip()) {
         ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Using cached server IP (skipping mDNS)");
+        /* Clear any existing discovery failure state (cached IP means server was previously discovered) */
+        mesh_common_clear_discovery_failed();
         /* Register with external server after discovery (non-blocking - already in task) */
         if (mesh_udp_bridge_is_server_discovered() && esp_mesh_is_root()) {
             esp_err_t reg_err = mesh_udp_bridge_register();
@@ -929,6 +932,8 @@ __attribute__((unused)) static void discovery_task(void *pvParameters)
         err = mesh_udp_bridge_get_cached_server(server_ip, &server_port);
         if (err == ESP_OK) {
             ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Using cached server address: %s:%d", server_ip, server_port);
+            /* Clear any existing discovery failure state (cached address means server was previously discovered) */
+            mesh_common_clear_discovery_failed();
             /* Convert IP string to network byte order for registration */
             struct in_addr addr;
             if (inet_aton(server_ip, &addr) != 0) {
@@ -954,6 +959,9 @@ __attribute__((unused)) static void discovery_task(void *pvParameters)
         /* Discovery succeeded - cache the address */
         ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] External web server discovered: %s:%d", server_ip, server_port);
         mesh_udp_bridge_cache_server(server_ip, server_port);
+
+        /* Clear any existing discovery failure state */
+        mesh_common_clear_discovery_failed();
 
         /* Stop retry task if it's running (discovery succeeded) */
         mesh_udp_bridge_stop_retry_task();
@@ -985,6 +993,8 @@ __attribute__((unused)) static void discovery_task(void *pvParameters)
         err = mesh_udp_bridge_get_cached_server(server_ip, &server_port);
         if (err == ESP_OK) {
             ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Using cached server address: %s:%d", server_ip, server_port);
+            /* Clear any existing discovery failure state (cached address means server was previously discovered) */
+            mesh_common_clear_discovery_failed();
             /* Convert IP string to network byte order for registration */
             struct in_addr addr;
             if (inet_aton(server_ip, &addr) != 0) {
@@ -1000,9 +1010,91 @@ __attribute__((unused)) static void discovery_task(void *pvParameters)
                 }
             }
         } else {
-            ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] No cached address available, starting retry task");
-            /* Start background retry task if no cached address available */
-            mesh_udp_bridge_start_retry_task();
+            ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] No cached address available, waiting for UDP broadcast");
+            /* Wait for UDP broadcast discovery (30 seconds timeout) */
+            /* UDP broadcast listener is already running in background */
+            const int udp_wait_timeout_ms = 30000;  /* 30 seconds */
+            int64_t wait_start_time = esp_timer_get_time() / 1000;  /* Convert to milliseconds */
+            bool udp_discovery_succeeded = false;
+
+            /* Wait for UDP broadcast discovery */
+            while ((esp_timer_get_time() / 1000 - wait_start_time) < udp_wait_timeout_ms) {
+                /* Check if server was discovered via UDP broadcast */
+                if (mesh_udp_bridge_is_server_discovered()) {
+                    ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Server discovered via UDP broadcast");
+                    udp_discovery_succeeded = true;
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(500));  /* Check every 500ms */
+            }
+
+            if (!udp_discovery_succeeded) {
+                /* Both mDNS and UDP discovery failed - broadcast failure state */
+                ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Both mDNS and UDP discovery failed, broadcasting failure state");
+                
+                /* Get current timestamp */
+                time_t current_time = time(NULL);
+                if (current_time >= 0) {
+                    /* Prepare failure command payload */
+                    mesh_webserver_discovery_failed_t payload;
+                    payload.timestamp = htonl((uint32_t)current_time);  /* Network byte order */
+
+                    /* Prepare mesh command */
+                    uint8_t *tx_buf = mesh_common_get_tx_buf();
+                    tx_buf[0] = MESH_CMD_WEBSERVER_DISCOVERY_FAILED;
+                    memcpy(&tx_buf[1], &payload, sizeof(payload));
+
+                    mesh_data_t data;
+                    data.data = tx_buf;
+                    data.size = 1 + sizeof(payload);  /* Command + payload */
+                    data.proto = MESH_PROTO_BIN;
+                    data.tos = MESH_TOS_P2P;
+
+                    /* Broadcast to all mesh nodes */
+                    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+                    int route_table_size = 0;
+                    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+
+                    /* Store failure state locally first */
+                    mesh_common_set_discovery_failed(payload.timestamp);
+
+                    /* Broadcast to all child nodes */
+                    for (int i = 0; i < route_table_size; i++) {
+                        /* Skip root node */
+                        mesh_addr_t root_addr;
+                        uint8_t mac[6];
+                        if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
+                            memcpy(root_addr.addr, mac, 6);
+                            bool is_root = true;
+                            for (int j = 0; j < 6; j++) {
+                                if (route_table[i].addr[j] != root_addr.addr[j]) {
+                                    is_root = false;
+                                    break;
+                                }
+                            }
+                            if (is_root) {
+                                continue;
+                            }
+                        }
+
+                        esp_err_t send_err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
+                        if (send_err != ESP_OK) {
+                            ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] Failed to broadcast failure state to "MACSTR": %s",
+                                     MAC2STR(route_table[i].addr), esp_err_to_name(send_err));
+                        }
+                    }
+
+                    ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Discovery failure state broadcasted to %d nodes", route_table_size);
+                } else {
+                    ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] Failed to get current time for failure state");
+                }
+
+                /* Start background retry task for future discovery attempts */
+                mesh_udp_bridge_start_retry_task();
+            } else {
+                /* UDP discovery succeeded - clear any existing failure state */
+                mesh_common_clear_discovery_failed();
+            }
         }
     }
 
@@ -1029,14 +1121,21 @@ static void mesh_root_ip_callback(void *arg, esp_event_base_t event_base,
         /* Start UDP API command listener (for external server API proxy) */
         mesh_udp_bridge_api_listener_start();
 
-        /* Start discovery task AFTER web server has started (non-blocking) */
-        /* mDNS discovery is the primary method and is required at build time */
-        /* Discovery does not affect embedded web server operation (embedded server always works) */
-        BaseType_t task_err = xTaskCreate(discovery_task, "discovery", 4096, NULL, 1, NULL);
-        if (task_err != pdPASS) {
-            ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] Failed to create discovery task");
+        /* Check if discovery failure state exists and is valid (not expired) */
+        if (mesh_common_is_discovery_failed()) {
+            ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Valid discovery failure state exists, skipping discovery and using HTTP-only mode");
+            /* Skip discovery and use HTTP-only mode immediately */
+            /* Embedded web server is already running, no external server discovery needed */
         } else {
-            ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Discovery task started");
+            /* Start discovery task AFTER web server has started (non-blocking) */
+            /* mDNS discovery is the primary method and is required at build time */
+            /* Discovery does not affect embedded web server operation (embedded server always works) */
+            BaseType_t task_err = xTaskCreate(discovery_task, "discovery", 4096, NULL, 1, NULL);
+            if (task_err != pdPASS) {
+                ESP_LOGW(mesh_common_get_tag(), "[DISCOVERY] Failed to create discovery task");
+            } else {
+                ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Discovery task started");
+            }
         }
 #else
         ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] ONLY_ONBOARD_HTTP enabled - external webserver functionality disabled");

@@ -12,6 +12,8 @@
 #include "mesh_commands.h"
 #include "light_neopixel.h"
 #include "config/mesh_device_config.h"
+
+#ifdef NEOPIXEL_ENABLE
 #include "led_strip.h"
 #include "driver/rmt_tx.h"
 
@@ -170,3 +172,41 @@ esp_err_t mesh_light_process(mesh_addr_t *from, uint8_t *buf, uint16_t len)
     /* Unknown command type */
     return ESP_FAIL;
 }
+
+#else /* NEOPIXEL_ENABLE not defined - stub implementations */
+
+/*******************************************************
+ *                Stub Function Definitions
+ *******************************************************/
+esp_err_t mesh_light_init(void)
+{
+    /* Neopixel support is disabled - return success (no-op) */
+    return ESP_OK;
+}
+
+esp_err_t mesh_light_set_colour(int color)
+{
+    /* Neopixel support is disabled - return success (no-op) */
+    (void)color; /* Suppress unused parameter warning */
+    return ESP_OK;
+}
+
+esp_err_t mesh_light_set_rgb(uint8_t r, uint8_t g, uint8_t b)
+{
+    /* Neopixel support is disabled - return success (no-op) */
+    (void)r; /* Suppress unused parameter warnings */
+    (void)g;
+    (void)b;
+    return ESP_OK;
+}
+
+esp_err_t mesh_light_process(mesh_addr_t *from, uint8_t *buf, uint16_t len)
+{
+    /* Neopixel support is disabled - return failure for commands */
+    (void)from; /* Suppress unused parameter warnings */
+    (void)buf;
+    (void)len;
+    return ESP_FAIL;
+}
+
+#endif /* NEOPIXEL_ENABLE */

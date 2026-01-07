@@ -110,6 +110,10 @@ static const char simple_html_page[] =
 "            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);\n"
 "            color: white;\n"
 "        }\n"
+"        .btn-stop {\n"
+"            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);\n"
+"            color: white;\n"
+"        }\n"
 "        .status {\n"
 "            padding: 12px;\n"
 "            border-radius: 8px;\n"
@@ -147,6 +151,7 @@ static const char simple_html_page[] =
 "            <button class=\"btn-play\" id=\"playBtn\" onclick=\"handlePlay()\" aria-label=\"Play\">▶</button>\n"
 "            <button class=\"btn-pause\" id=\"pauseBtn\" onclick=\"handlePause()\" aria-label=\"Pause\">⏸</button>\n"
 "            <button class=\"btn-rewind\" id=\"rewindBtn\" onclick=\"handleRewind()\" aria-label=\"Rewind\">⏪</button>\n"
+"            <button class=\"btn-stop\" id=\"stopBtn\" onclick=\"handleStop()\" aria-label=\"Stop\">⏹</button>\n"
 "        </div>\n"
 "        <div class=\"active-plugin\" id=\"activePlugin\">No active plugin</div>\n"
 "        <div class=\"status\" id=\"status\" style=\"display: none;\"></div>\n"
@@ -262,6 +267,31 @@ static const char simple_html_page[] =
 "                    setTimeout(() => loadActivePlugin(), 1000);\n"
 "                } else {\n"
 "                    showStatus('Error: ' + (data.error || 'Reset failed'), 'error');\n"
+"                }\n"
+"            } catch (error) {\n"
+"                showStatus('Error: ' + error.message, 'error');\n"
+"            }\n"
+"        }\n"
+"\n"
+"        async function handleStop() {\n"
+"            const select = document.getElementById('pluginSelect');\n"
+"            const pluginName = select.value;\n"
+"            if (!pluginName) {\n"
+"                showStatus('Please select a plugin first', 'error');\n"
+"                return;\n"
+"            }\n"
+"            try {\n"
+"                const response = await fetch('/api/plugin/stop', {\n"
+"                    method: 'POST',\n"
+"                    headers: { 'Content-Type': 'application/json' },\n"
+"                    body: JSON.stringify({ name: pluginName })\n"
+"                });\n"
+"                const data = await response.json();\n"
+"                if (data.success) {\n"
+"                    showStatus('Plugin stopped: ' + pluginName, 'info');\n"
+"                    setTimeout(() => loadActivePlugin(), 1000);\n"
+"                } else {\n"
+"                    showStatus('Error: ' + (data.error || 'Stop failed'), 'error');\n"
 "                }\n"
 "            } catch (error) {\n"
 "                showStatus('Error: ' + error.message, 'error');\n"
@@ -606,6 +636,7 @@ static esp_err_t api_sequence_pointer_handler(httpd_req_t *req)
 }
 
 /* API: POST /api/sequence/start - Start sequence playback */
+/* Note: This endpoint is maintained for backward compatibility. It now uses the plugin system API to ensure proper broadcasting. */
 static esp_err_t api_sequence_start_handler(httpd_req_t *req)
 {
     if (!esp_mesh_is_root()) {
@@ -616,15 +647,20 @@ static esp_err_t api_sequence_start_handler(httpd_req_t *req)
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* Execute start operation using plugin query interface */
-    esp_err_t err = plugin_execute_operation("sequence", 0x02, NULL);  /* SEQUENCE_OP_START */
-
-    if (err == ESP_OK) {
+    /* Use plugin system API to ensure proper broadcasting to child nodes */
+    uint8_t plugin_id;
+    esp_err_t err = plugin_get_id_by_name("sequence", &plugin_id);
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_send(req, "{\"success\":true}", -1);
-        return ESP_OK;
-    } else {
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Sequence plugin not found\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Activate plugin (this handles START command and broadcasting) */
+    err = plugin_activate("sequence");
+    if (err != ESP_OK) {
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -633,28 +669,44 @@ static esp_err_t api_sequence_start_handler(httpd_req_t *req)
         httpd_resp_send(req, error_msg, -1);
         return ESP_FAIL;
     }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, "{\"success\":true}", -1);
+    return ESP_OK;
 }
 
 /* API: POST /api/sequence/stop - Stop sequence playback */
+/* Note: This endpoint is maintained for backward compatibility. It now uses the plugin system API to ensure proper broadcasting. */
 static esp_err_t api_sequence_stop_handler(httpd_req_t *req)
 {
     if (!esp_mesh_is_root()) {
         httpd_resp_set_status(req, "403 Forbidden");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_send(req, "{\"success\":false,\"error\":\"Only root node can pause sequence\"}", -1);
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Only root node can stop sequence\"}", -1);
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* Execute pause operation using plugin query interface */
-    esp_err_t err = plugin_execute_operation("sequence", 0x03, NULL);  /* SEQUENCE_OP_PAUSE */
-
-    if (err == ESP_OK) {
+    /* Use plugin system API to ensure proper broadcasting to child nodes */
+    uint8_t plugin_id;
+    esp_err_t err = plugin_get_id_by_name("sequence", &plugin_id);
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_send(req, "{\"success\":true}", -1);
-        return ESP_OK;
-    } else {
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Sequence plugin not found\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Construct plugin command: [PLUGIN_ID] [PLUGIN_CMD_STOP] */
+    uint8_t cmd_data[2];
+    cmd_data[0] = plugin_id;
+    cmd_data[1] = PLUGIN_CMD_STOP;
+
+    /* Send STOP command via plugin system (from API - processes locally and broadcasts) */
+    err = plugin_system_handle_plugin_command_from_api(cmd_data, sizeof(cmd_data));
+    if (err != ESP_OK) {
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -663,9 +715,15 @@ static esp_err_t api_sequence_stop_handler(httpd_req_t *req)
         httpd_resp_send(req, error_msg, -1);
         return ESP_FAIL;
     }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, "{\"success\":true}", -1);
+    return ESP_OK;
 }
 
 /* API: POST /api/sequence/reset - Reset sequence pointer */
+/* Note: This endpoint is maintained for backward compatibility. It now uses the plugin system API to ensure proper broadcasting. */
 static esp_err_t api_sequence_reset_handler(httpd_req_t *req)
 {
     if (!esp_mesh_is_root()) {
@@ -676,15 +734,25 @@ static esp_err_t api_sequence_reset_handler(httpd_req_t *req)
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* Execute reset operation using plugin query interface */
-    esp_err_t err = plugin_execute_operation("sequence", 0x04, NULL);  /* SEQUENCE_OP_RESET */
-
-    if (err == ESP_OK) {
+    /* Use plugin system API to ensure proper broadcasting to child nodes */
+    uint8_t plugin_id;
+    esp_err_t err = plugin_get_id_by_name("sequence", &plugin_id);
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_send(req, "{\"success\":true}", -1);
-        return ESP_OK;
-    } else {
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Sequence plugin not found\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Construct plugin command: [PLUGIN_ID] [PLUGIN_CMD_RESET] */
+    uint8_t cmd_data[2];
+    cmd_data[0] = plugin_id;
+    cmd_data[1] = PLUGIN_CMD_RESET;
+
+    /* Send RESET command via plugin system (from API - processes locally and broadcasts) */
+    err = plugin_system_handle_plugin_command_from_api(cmd_data, sizeof(cmd_data));
+    if (err != ESP_OK) {
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -693,6 +761,11 @@ static esp_err_t api_sequence_reset_handler(httpd_req_t *req)
         httpd_resp_send(req, error_msg, -1);
         return ESP_FAIL;
     }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, "{\"success\":true}", -1);
+    return ESP_OK;
 }
 
 /* API: GET /api/sequence/status - Returns sequence status */

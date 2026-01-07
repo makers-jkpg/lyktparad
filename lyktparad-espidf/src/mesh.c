@@ -21,9 +21,11 @@
 
 void app_main(void)
 {
+#ifdef NEOPIXEL_ENABLE
     /* Initialize LED strip first */
     ESP_ERROR_CHECK(mesh_light_init());
     ESP_LOGI(mesh_common_get_tag(), "[STARTUP] LED strip initialized");
+#endif /* NEOPIXEL_ENABLE */
 
     /* Initialize plugins (before mesh starts) */
     plugins_init();

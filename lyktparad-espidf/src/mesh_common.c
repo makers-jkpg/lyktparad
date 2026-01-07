@@ -79,9 +79,12 @@
 #endif
 #include "mesh_udp_bridge.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
+#include "lwip/inet.h"
+#include <time.h>
 
 #define RX_SIZE          (1500)
 #define TX_SIZE          (1460)
@@ -847,6 +850,157 @@ void mesh_common_set_local_heartbeat_counter(uint8_t counter)
 {
     local_heartbeat_counter = counter;
     ESP_LOGD(MESH_TAG, "Local heartbeat counter set to %u", counter);
+}
+
+/*******************************************************
+ *                Discovery Failure State Management
+ *******************************************************/
+
+/* NVS namespace and key for discovery failure state */
+#define NVS_NAMESPACE_DISCOVERY "discovery"
+#define NVS_KEY_DISCOVERY_FAILED_TIMESTAMP "failed_ts"
+#define DISCOVERY_FAILURE_EXPIRATION_SECONDS (8 * 60)  /* 8 minutes expiration */
+
+/**
+ * @brief Set discovery failure state with timestamp
+ *
+ * Stores the discovery failure state in NVS with a timestamp for expiration.
+ * This state indicates that both mDNS and UDP discovery have failed.
+ *
+ * @param timestamp Unix timestamp when discovery failed (network byte order)
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_common_set_discovery_failed(uint32_t timestamp)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_DISCOVERY, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "[DISCOVERY FAILURE] Failed to open NVS namespace '%s': %s", NVS_NAMESPACE_DISCOVERY, esp_err_to_name(err));
+        return err;
+    }
+
+    /* Store timestamp (already in network byte order from mesh command) */
+    err = nvs_set_u32(nvs_handle, NVS_KEY_DISCOVERY_FAILED_TIMESTAMP, timestamp);
+    if (err != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "[DISCOVERY FAILURE] Failed to store timestamp in NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    /* Commit changes */
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "[DISCOVERY FAILURE] Failed to commit NVS changes: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    nvs_close(nvs_handle);
+    ESP_LOGI(MESH_TAG, "[DISCOVERY FAILURE] Discovery failure state stored (timestamp: %lu)", (unsigned long)timestamp);
+    return ESP_OK;
+}
+
+/**
+ * @brief Check if discovery failure state exists and is valid (not expired)
+ *
+ * Checks if a discovery failure state exists in NVS and if it's still valid
+ * (not expired). The state expires after DISCOVERY_FAILURE_EXPIRATION_SECONDS
+ * to allow recovery if network conditions change.
+ *
+ * @return true if valid failure state exists, false otherwise
+ */
+bool mesh_common_is_discovery_failed(void)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_DISCOVERY, NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGD(MESH_TAG, "[DISCOVERY FAILURE] Failed to open NVS namespace '%s': %s", NVS_NAMESPACE_DISCOVERY, esp_err_to_name(err));
+        return false;
+    }
+
+    /* Read timestamp */
+    uint32_t timestamp = 0;
+    err = nvs_get_u32(nvs_handle, NVS_KEY_DISCOVERY_FAILED_TIMESTAMP, &timestamp);
+    nvs_close(nvs_handle);
+
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGD(MESH_TAG, "[DISCOVERY FAILURE] No failure state found in NVS");
+        } else {
+            ESP_LOGW(MESH_TAG, "[DISCOVERY FAILURE] Failed to read timestamp from NVS: %s", esp_err_to_name(err));
+        }
+        return false;
+    }
+
+    /* Check if state is expired */
+    time_t current_time = time(NULL);
+    if (current_time < 0) {
+        ESP_LOGW(MESH_TAG, "[DISCOVERY FAILURE] Failed to get current time");
+        return false;
+    }
+
+    /* Convert timestamp from network byte order to host byte order */
+    uint32_t host_timestamp = ntohl(timestamp);
+    time_t failure_time = (time_t)host_timestamp;
+
+    /* Check expiration */
+    time_t elapsed = current_time - failure_time;
+    if (elapsed < 0) {
+        /* Timestamp is in the future (clock skew) - treat as invalid */
+        ESP_LOGW(MESH_TAG, "[DISCOVERY FAILURE] Timestamp is in the future (clock skew), clearing state");
+        mesh_common_clear_discovery_failed();
+        return false;
+    }
+
+    if (elapsed >= DISCOVERY_FAILURE_EXPIRATION_SECONDS) {
+        ESP_LOGI(MESH_TAG, "[DISCOVERY FAILURE] Failure state expired (%ld seconds old, max %d), clearing", 
+                 (long)elapsed, DISCOVERY_FAILURE_EXPIRATION_SECONDS);
+        mesh_common_clear_discovery_failed();
+        return false;
+    }
+
+    ESP_LOGI(MESH_TAG, "[DISCOVERY FAILURE] Valid failure state exists (%ld seconds old, expires in %ld seconds)", 
+             (long)elapsed, (long)(DISCOVERY_FAILURE_EXPIRATION_SECONDS - elapsed));
+    return true;
+}
+
+/**
+ * @brief Clear discovery failure state
+ *
+ * Removes the discovery failure state from NVS, allowing discovery to be
+ * attempted again. This should be called when external server is successfully
+ * discovered.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_common_clear_discovery_failed(void)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_DISCOVERY, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "[DISCOVERY FAILURE] Failed to open NVS namespace '%s': %s", NVS_NAMESPACE_DISCOVERY, esp_err_to_name(err));
+        return err;
+    }
+
+    /* Erase the timestamp key */
+    err = nvs_erase_key(nvs_handle, NVS_KEY_DISCOVERY_FAILED_TIMESTAMP);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(MESH_TAG, "[DISCOVERY FAILURE] Failed to erase timestamp from NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    /* Commit changes */
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(MESH_TAG, "[DISCOVERY FAILURE] Failed to commit NVS changes: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    nvs_close(nvs_handle);
+    ESP_LOGI(MESH_TAG, "[DISCOVERY FAILURE] Discovery failure state cleared");
+    return ESP_OK;
 }
 
 /*******************************************************

@@ -131,8 +131,11 @@ The project supports two LED driver types. Configure the one that matches your h
 
 #### WS2812/Neopixel LED Configuration (Default)
 
-These settings are always active and control the WS2812/Neopixel LED driver:
+Neopixel/WS2812 LED support is enabled by default. To disable it, comment out `#define NEOPIXEL_ENABLE` in `include/config/mesh_device_config.h`.
 
+When enabled, these settings control the WS2812/Neopixel LED driver:
+
+- `NEOPIXEL_ENABLE`: Defined by default - comment out to disable Neopixel support
 - `MESH_LED_GPIO`: GPIO pin connected to WS2812 data line (default: 10)
 - `MESH_LED_NUM_PIXELS`: Number of LEDs in strip (default: 1)
 - `MESH_LED_RMT_RES_HZ`: RMT resolution in Hz (default: 10000000)
@@ -149,7 +152,7 @@ To enable common-cathode RGB LED support, uncomment `#define RGB_ENABLE` in `inc
 - `RGB_CHANNEL_R/G/B`: LEDC channel assignments (default: R=CHANNEL_1, G=CHANNEL_0, B=CHANNEL_2)
 - `RGB_GPIO_R/G/B`: GPIO pins for Red, Green, Blue (default: R=GPIO 1, G=GPIO 0, B=GPIO 2)
 
-**Note**: Both LED drivers can be enabled simultaneously. The WS2812 driver is used for mesh status indicators, while the RGB LED driver provides additional visual feedback when `RGB_ENABLE` is defined.
+**Note**: Both LED drivers can be enabled simultaneously, or either can be disabled independently. The WS2812 driver is used for mesh status indicators when `NEOPIXEL_ENABLE` is defined, while the RGB LED driver provides additional visual feedback when `RGB_ENABLE` is defined. Both are enabled by default for backward compatibility.
 
 ## Usage
 
@@ -309,9 +312,10 @@ This project uses PlatformIO and **must be built within VS Code**. The build pro
 4. Creates firmware binary
 
 **LED Driver Selection:**
-- WS2812/Neopixel driver (`light_neopixel.c`) is always compiled and active
+- WS2812/Neopixel driver (`light_neopixel.c`) is conditionally compiled based on `NEOPIXEL_ENABLE` (enabled by default)
 - Common-cathode RGB LED driver (`light_common_cathode.c`) is always compiled but only active when `RGB_ENABLE` is defined
-- Both drivers can operate simultaneously if both LED types are connected
+- Both drivers can operate simultaneously if both LED types are connected and both defines are enabled
+- Either driver can be disabled independently by commenting out the respective define
 
 ### Adding New Features
 
