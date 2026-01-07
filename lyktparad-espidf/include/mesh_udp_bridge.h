@@ -431,16 +431,85 @@ void mesh_udp_bridge_stop_retry_task(void);
 void mesh_udp_bridge_broadcast_server_ip(const char *ip, uint16_t port);
 
 /**
+ * @brief Resolve hostname to IP address.
+ *
+ * Resolves a hostname to an IPv4 address using DNS. If the input is already
+ * an IP address, it is copied directly without DNS resolution.
+ *
+ * @param hostname Hostname or IP address string
+ * @param ip_out Output buffer for resolved IP address (must be at least 16 bytes)
+ * @param ip_len Size of ip_out buffer
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_resolve_hostname(const char *hostname, char *ip_out, size_t ip_len);
+
+/**
  * @brief Test UDP connection to server.
  *
- * Tests if a UDP connection can be established to the given IP and port.
- * This is a quick test (1-2 second timeout) to validate cached IP addresses.
+ * Tests if a UDP connection can be established to the given IP/hostname and port.
+ * This function resolves hostnames and sends a test registration packet, waiting
+ * for an ACK with a 5 second timeout.
  *
- * @param ip IP address string
+ * @param ip_or_hostname IP address or hostname string
  * @param port UDP port number
  * @return true if connection test succeeds, false otherwise
  */
-bool mesh_udp_bridge_test_connection(const char *ip, uint16_t port);
+bool mesh_udp_bridge_test_connection(const char *ip_or_hostname, uint16_t port);
+
+/**
+ * @brief Store manual server configuration in NVS.
+ *
+ * Stores the server IP/hostname, port, and resolved IP in NVS for manual configuration.
+ *
+ * @param ip_or_hostname Server IP address or hostname string
+ * @param port Server UDP port
+ * @param resolved_ip Resolved IP address (if hostname was resolved), NULL if not resolved
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_store_manual_config(const char *ip_or_hostname, uint16_t port, const char *resolved_ip);
+
+/**
+ * @brief Retrieve manual server configuration from NVS.
+ *
+ * Reads the manual server IP/hostname, port, and resolved IP from NVS.
+ *
+ * @param ip_or_hostname Output buffer for IP/hostname (must be at least hostname_len bytes)
+ * @param hostname_len Size of ip_or_hostname buffer
+ * @param port Output pointer for UDP port
+ * @param resolved_ip Output buffer for resolved IP (must be at least resolved_len bytes), can be NULL
+ * @param resolved_len Size of resolved_ip buffer
+ * @return ESP_OK if found, ESP_ERR_NOT_FOUND if not configured, error code on failure
+ */
+esp_err_t mesh_udp_bridge_get_manual_config(char *ip_or_hostname, size_t hostname_len, uint16_t *port, char *resolved_ip, size_t resolved_len);
+
+/**
+ * @brief Clear manual server configuration from NVS.
+ *
+ * Erases all manual server configuration keys from NVS.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_clear_manual_config(void);
+
+/**
+ * @brief Set manual server IP and register with external server.
+ *
+ * Resolves hostname if needed, stores configuration in NVS, and sets registration state.
+ *
+ * @param ip_or_hostname Server IP address or hostname string
+ * @param port Server UDP port
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_set_manual_server_ip(const char *ip_or_hostname, uint16_t port);
+
+/**
+ * @brief Clear manual server IP configuration.
+ *
+ * Clears manual configuration from NVS and clears registration state if it was using manual IP.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_clear_manual_server_ip(void);
 
 /**
  * @brief Check and use cached IP address if valid.

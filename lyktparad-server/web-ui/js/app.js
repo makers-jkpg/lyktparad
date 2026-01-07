@@ -1269,4 +1269,302 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Ensure Plugins tab is active by default
   switchTab('plugins');
+
+  // Initialize external server configuration
+  initializeExternalServerConfig();
 });
+
+// External Server Configuration Functions
+function validateIpOrHostname(value) {
+  if (!value || value.trim().length === 0) {
+    return { valid: false, message: 'IP/hostname cannot be empty' };
+  }
+  if (value.length > 253) {
+    return { valid: false, message: 'IP/hostname is too long (max 253 characters)' };
+  }
+  return { valid: true, message: '' };
+}
+
+function validatePort(value) {
+  const port = parseInt(value, 10);
+  if (isNaN(port) || port < 1 || port > 65535) {
+    return { valid: false, message: 'Port must be between 1 and 65535' };
+  }
+  return { valid: true, message: '' };
+}
+
+function updateLimitedModeUI(limitedMode) {
+  const pluginsTabButton = document.querySelector('.tab-button[data-tab="plugins"]');
+  const infoTabButton = document.querySelector('.tab-button[data-tab="info"]');
+  const configTabButton = document.querySelector('.tab-button[data-tab="config"]');
+  const pluginsTabContent = document.querySelector('.tab-content[data-tab="plugins"]');
+  const infoTabContent = document.querySelector('.tab-content[data-tab="info"]');
+
+  if (limitedMode) {
+    // Hide Plugins and Info tabs
+    if (pluginsTabButton) {
+      pluginsTabButton.classList.add('limited-mode-hidden');
+    }
+    if (infoTabButton) {
+      infoTabButton.classList.add('limited-mode-hidden');
+    }
+    if (pluginsTabContent) {
+      pluginsTabContent.classList.add('limited-mode-hidden');
+    }
+    if (infoTabContent) {
+      infoTabContent.classList.add('limited-mode-hidden');
+    }
+
+    // Switch to Config tab if not already active
+    const currentTab = document.querySelector('.tab-button.active');
+    if (currentTab && (currentTab.getAttribute('data-tab') === 'plugins' || currentTab.getAttribute('data-tab') === 'info')) {
+      switchTab('config');
+    }
+  } else {
+    // Show all tabs
+    if (pluginsTabButton) {
+      pluginsTabButton.classList.remove('limited-mode-hidden');
+    }
+    if (infoTabButton) {
+      infoTabButton.classList.remove('limited-mode-hidden');
+    }
+    if (pluginsTabContent) {
+      pluginsTabContent.classList.remove('limited-mode-hidden');
+    }
+    if (infoTabContent) {
+      infoTabContent.classList.remove('limited-mode-hidden');
+    }
+  }
+}
+
+async function loadExternalServerConfig() {
+  try {
+    const response = await fetch('/api/settings/external-server');
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const data = await response.json();
+
+    const ipInput = document.getElementById('external-server-ip');
+    const portInput = document.getElementById('external-server-port');
+    const statusDiv = document.getElementById('external-server-status');
+    const statusText = document.getElementById('external-server-status-text');
+    const currentDiv = document.getElementById('external-server-current');
+    const currentValue = document.getElementById('external-server-current-value');
+
+    if (data.ip && data.port) {
+      // Configuration exists
+      if (ipInput) ipInput.value = data.ip;
+      if (portInput) portInput.value = data.port;
+      if (statusDiv) statusDiv.style.display = 'flex';
+      if (statusText) {
+        statusText.textContent = data.limited_mode ? 'Active (Limited Mode)' : 'Configured (Not Active)';
+        statusText.className = data.limited_mode ? 'stage-text stage-active' : 'stage-text';
+      }
+      if (currentDiv) currentDiv.style.display = 'block';
+      if (currentValue) currentValue.textContent = `${data.ip}:${data.port}`;
+    } else {
+      // No configuration
+      if (statusDiv) statusDiv.style.display = 'flex';
+      if (statusText) {
+        statusText.textContent = 'Not configured';
+        statusText.className = 'stage-text';
+      }
+      if (currentDiv) currentDiv.style.display = 'none';
+    }
+
+    // Update LIMITED_MODE UI
+    updateLimitedModeUI(data.limited_mode || false);
+  } catch (error) {
+    console.error('Failed to load external server configuration:', error);
+    const messageArea = document.getElementById('external-server-message');
+    if (messageArea) {
+      messageArea.textContent = 'Failed to load configuration: ' + error.message;
+      messageArea.className = 'status-message error';
+    }
+  }
+}
+
+function showExternalServerMessage(message, type) {
+  const messageArea = document.getElementById('external-server-message');
+  if (!messageArea) return;
+
+  messageArea.textContent = message;
+  messageArea.className = `status-message ${type}`;
+  messageArea.style.display = 'block';
+
+  // Auto-hide success messages after 5 seconds
+  if (type === 'success') {
+    setTimeout(() => {
+      if (messageArea.className.includes('success')) {
+        messageArea.style.display = 'none';
+      }
+    }, 5000);
+  }
+}
+
+async function handleExternalServerSave() {
+  const ipInput = document.getElementById('external-server-ip');
+  const portInput = document.getElementById('external-server-port');
+  const saveButton = document.getElementById('external-server-save');
+  const ipValidation = document.getElementById('external-server-ip-validation');
+  const portValidation = document.getElementById('external-server-port-validation');
+
+  if (!ipInput || !portInput || !saveButton) {
+    console.error('External server form elements not found');
+    return;
+  }
+
+  // Clear previous validation messages
+  if (ipValidation) {
+    ipValidation.textContent = '';
+    ipValidation.className = 'validation-message';
+  }
+  if (portValidation) {
+    portValidation.textContent = '';
+    portValidation.className = 'validation-message';
+  }
+
+  // Validate inputs
+  const ipValidationResult = validateIpOrHostname(ipInput.value);
+  if (!ipValidationResult.valid) {
+    if (ipValidation) {
+      ipValidation.textContent = ipValidationResult.message;
+      ipValidation.className = 'validation-message error';
+    }
+    ipInput.classList.add('invalid');
+    return;
+  }
+  ipInput.classList.remove('invalid');
+
+  const portValidationResult = validatePort(portInput.value);
+  if (!portValidationResult.valid) {
+    if (portValidation) {
+      portValidation.textContent = portValidationResult.message;
+      portValidation.className = 'validation-message error';
+    }
+    portInput.classList.add('invalid');
+    return;
+  }
+  portInput.classList.remove('invalid');
+
+  // Disable button and show loading state
+  saveButton.disabled = true;
+  saveButton.textContent = 'Saving...';
+
+  try {
+    const response = await fetch('/api/settings/external-server', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        ip: ipInput.value.trim(),
+        port: parseInt(portInput.value, 10)
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || 'Failed to save configuration');
+    }
+
+    // Success
+    showExternalServerMessage('Configuration saved successfully. Limited mode: ' + (data.limited_mode ? 'Active' : 'Inactive'), 'success');
+    
+    // Reload configuration to update UI
+    await loadExternalServerConfig();
+  } catch (error) {
+    console.error('Failed to save external server configuration:', error);
+    showExternalServerMessage('Failed to save configuration: ' + error.message, 'error');
+  } finally {
+    saveButton.disabled = false;
+    saveButton.textContent = 'Save';
+  }
+}
+
+async function handleExternalServerClear() {
+  const clearButton = document.getElementById('external-server-clear');
+  if (!clearButton) {
+    console.error('Clear button not found');
+    return;
+  }
+
+  // Confirm action
+  if (!confirm('Are you sure you want to clear the external server configuration?')) {
+    return;
+  }
+
+  // Disable button and show loading state
+  clearButton.disabled = true;
+  clearButton.textContent = 'Clearing...';
+
+  try {
+    const response = await fetch('/api/settings/external-server', {
+      method: 'DELETE'
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || 'Failed to clear configuration');
+    }
+
+    // Success
+    showExternalServerMessage('Configuration cleared successfully', 'success');
+
+    // Clear form fields
+    const ipInput = document.getElementById('external-server-ip');
+    const portInput = document.getElementById('external-server-port');
+    if (ipInput) ipInput.value = '';
+    if (portInput) portInput.value = '8082';
+
+    // Reload configuration to update UI
+    await loadExternalServerConfig();
+  } catch (error) {
+    console.error('Failed to clear external server configuration:', error);
+    showExternalServerMessage('Failed to clear configuration: ' + error.message, 'error');
+  } finally {
+    clearButton.disabled = false;
+    clearButton.textContent = 'Clear';
+  }
+}
+
+function initializeExternalServerConfig() {
+  // Load current configuration on page load
+  loadExternalServerConfig();
+
+  // Set up event listeners
+  const saveButton = document.getElementById('external-server-save');
+  const clearButton = document.getElementById('external-server-clear');
+  const ipInput = document.getElementById('external-server-ip');
+  const portInput = document.getElementById('external-server-port');
+
+  if (saveButton) {
+    saveButton.addEventListener('click', handleExternalServerSave);
+  }
+
+  if (clearButton) {
+    clearButton.addEventListener('click', handleExternalServerClear);
+  }
+
+  // Allow Enter key to trigger save
+  if (ipInput) {
+    ipInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleExternalServerSave();
+      }
+    });
+  }
+
+  if (portInput) {
+    portInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleExternalServerSave();
+      }
+    });
+  }
+}

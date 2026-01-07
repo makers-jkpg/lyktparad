@@ -5,6 +5,7 @@
 #include "mesh_ota.h"
 #include "mesh_version.h"
 #include "mesh_common.h"
+#include "mesh_udp_bridge.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_mesh.h"
@@ -497,6 +498,10 @@ static esp_err_t api_sequence_stop_handler(httpd_req_t *req);
 static esp_err_t api_sequence_reset_handler(httpd_req_t *req);
 static esp_err_t api_sequence_status_handler(httpd_req_t *req);
 static esp_err_t api_ota_download_post_handler(httpd_req_t *req);
+static esp_err_t api_settings_external_server_get_handler(httpd_req_t *req);
+static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req);
+static esp_err_t api_settings_external_server_delete_handler(httpd_req_t *req);
+bool mesh_web_is_limited_mode(void);
 static esp_err_t api_ota_status_get_handler(httpd_req_t *req);
 static esp_err_t api_ota_cancel_post_handler(httpd_req_t *req);
 static esp_err_t api_ota_version_get_handler(httpd_req_t *req);
@@ -1681,6 +1686,222 @@ static esp_err_t api_plugins_list_handler(httpd_req_t *req)
     return httpd_resp_send(req, response, -1);
 }
 
+/**
+ * @brief Check if LIMITED_MODE is active.
+ *
+ * LIMITED_MODE is active when both conditions are met:
+ * - Manual external server IP is configured in NVS
+ * - Registration with external server succeeded
+ *
+ * @return true if LIMITED_MODE is active, false otherwise
+ */
+bool mesh_web_is_limited_mode(void)
+{
+    /* Check if manual IP is configured */
+    char manual_ip[64] = {0};
+    uint16_t manual_port = 0;
+    esp_err_t err = mesh_udp_bridge_get_manual_config(manual_ip, sizeof(manual_ip), &manual_port, NULL, 0);
+    if (err != ESP_OK) {
+        /* No manual IP configured */
+        return false;
+    }
+
+    /* Check if registration succeeded */
+    if (!mesh_udp_bridge_is_registered()) {
+        /* Manual IP configured but registration not successful */
+        return false;
+    }
+
+    /* Both conditions met: LIMITED_MODE is active */
+    return true;
+}
+
+/* API: GET /api/settings/external-server - Get external server configuration */
+static esp_err_t api_settings_external_server_get_handler(httpd_req_t *req)
+{
+    char response[256];
+    char manual_ip[64] = {0};
+    uint16_t manual_port = 0;
+    esp_err_t err = mesh_udp_bridge_get_manual_config(manual_ip, sizeof(manual_ip), &manual_port, NULL, 0);
+
+    bool limited_mode = mesh_web_is_limited_mode();
+
+    if (err == ESP_OK) {
+        /* Manual configuration exists */
+        int len = snprintf(response, sizeof(response),
+                          "{\"ip\":\"%s\",\"port\":%d,\"limited_mode\":%s}",
+                          manual_ip, manual_port, limited_mode ? "true" : "false");
+        if (len < 0 || len >= (int)sizeof(response)) {
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_send(req, "{\"error\":\"Response formatting error\"}", -1);
+            return ESP_FAIL;
+        }
+    } else if (err == ESP_ERR_NOT_FOUND) {
+        /* No manual configuration */
+        int len = snprintf(response, sizeof(response), "{\"limited_mode\":false}");
+        if (len < 0 || len >= (int)sizeof(response)) {
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_send(req, "{\"error\":\"Response formatting error\"}", -1);
+            return ESP_FAIL;
+        }
+    } else {
+        /* Error reading configuration */
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"error\":\"Failed to read configuration\"}", -1);
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    return httpd_resp_send(req, response, -1);
+}
+
+/* API: POST /api/settings/external-server - Set external server configuration */
+static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req)
+{
+    char content[256];
+    int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+
+    if (ret <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid request\"}", -1);
+        return ESP_FAIL;
+    }
+
+    content[ret] = '\0';
+
+    /* Simple JSON parsing for {"ip":"...","port":...} */
+    char *ip_str = strstr(content, "\"ip\":");
+    char *port_str = strstr(content, "\"port\":");
+
+    if (!ip_str || !port_str) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid JSON format\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Extract IP/hostname */
+    ip_str += 5; /* Skip past "ip": */
+    while (*ip_str == ' ' || *ip_str == '"') ip_str++; /* Skip whitespace and quotes */
+    char ip_end = (*ip_str == '"') ? '"' : ',';
+    char ip_value[64] = {0};
+    int ip_idx = 0;
+    while (*ip_str != ip_end && *ip_str != '\0' && ip_idx < (int)sizeof(ip_value) - 1) {
+        ip_value[ip_idx++] = *ip_str++;
+    }
+    ip_value[ip_idx] = '\0';
+
+    /* Extract port */
+    port_str += 6; /* Skip past "port": */
+    while (*port_str == ' ') port_str++; /* Skip whitespace */
+    int port_val = atoi(port_str);
+
+    /* Validate port range */
+    if (port_val < 1 || port_val > 65535) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Port must be 1-65535\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Validate IP/hostname is not empty */
+    if (strlen(ip_value) == 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"IP/hostname cannot be empty\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Test connection */
+    bool test_result = mesh_udp_bridge_test_connection(ip_value, (uint16_t)port_val);
+    if (!test_result) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Connection test failed\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Resolve hostname to get resolved IP */
+    char resolved_ip[16] = {0};
+    esp_err_t resolve_err = mesh_udp_bridge_resolve_hostname(ip_value, resolved_ip, sizeof(resolved_ip));
+    if (resolve_err != ESP_OK) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Failed to resolve hostname\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Store configuration */
+    esp_err_t err = mesh_udp_bridge_set_manual_server_ip(ip_value, (uint16_t)port_val);
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Failed to store configuration\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Attempt registration */
+    esp_err_t reg_err = mesh_udp_bridge_register();
+    if (reg_err != ESP_OK && reg_err != ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(WEB_TAG, "Registration failed after setting manual IP: %s", esp_err_to_name(reg_err));
+        /* Continue anyway - registration might succeed later */
+    }
+
+    /* Check if LIMITED_MODE is now active */
+    bool limited_mode = mesh_web_is_limited_mode();
+    if (limited_mode) {
+        ESP_LOGI(WEB_TAG, "LIMITED_MODE entered: external server configured and registered");
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    char response[128];
+    int len = snprintf(response, sizeof(response), "{\"success\":true,\"limited_mode\":%s}", limited_mode ? "true" : "false");
+    if (len < 0 || len >= (int)sizeof(response)) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"error\":\"Response formatting error\"}", -1);
+        return ESP_FAIL;
+    }
+    return httpd_resp_send(req, response, -1);
+}
+
+/* API: DELETE /api/settings/external-server - Clear external server configuration */
+static esp_err_t api_settings_external_server_delete_handler(httpd_req_t *req)
+{
+    /* Clear manual configuration */
+    esp_err_t err = mesh_udp_bridge_clear_manual_server_ip();
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Failed to clear configuration\"}", -1);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(WEB_TAG, "LIMITED_MODE exited: external server configuration cleared");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    return httpd_resp_send(req, "{\"success\":true,\"limited_mode\":false}", -1);
+}
+
 /* GET / - Serves simple HTML page with plugin selection and control */
 static esp_err_t index_handler(httpd_req_t *req)
 {
@@ -2063,6 +2284,48 @@ esp_err_t mesh_web_server_start(void)
         reg_err = httpd_register_uri_handler(server_handle, &plugins_list_uri);
         if (reg_err != ESP_OK) {
             ESP_LOGE(WEB_TAG, "Failed to register plugins list URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t settings_external_server_get_uri = {
+            .uri       = "/api/settings/external-server",
+            .method    = HTTP_GET,
+            .handler   = api_settings_external_server_get_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &settings_external_server_get_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register external server GET URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t settings_external_server_post_uri = {
+            .uri       = "/api/settings/external-server",
+            .method    = HTTP_POST,
+            .handler   = api_settings_external_server_post_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &settings_external_server_post_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register external server POST URI: 0x%x", reg_err);
+            httpd_stop(server_handle);
+            server_handle = NULL;
+            return ESP_FAIL;
+        }
+
+        httpd_uri_t settings_external_server_delete_uri = {
+            .uri       = "/api/settings/external-server",
+            .method    = HTTP_DELETE,
+            .handler   = api_settings_external_server_delete_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &settings_external_server_delete_uri);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to register external server DELETE URI: 0x%x", reg_err);
             httpd_stop(server_handle);
             server_handle = NULL;
             return ESP_FAIL;

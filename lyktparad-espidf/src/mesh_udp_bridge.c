@@ -98,6 +98,11 @@ static bool s_registration_complete = false;
 #define NVS_KEY_SERVER_IP "server_ip"
 #define NVS_KEY_SERVER_PORT "server_port"
 
+/* NVS keys for manual server configuration */
+#define NVS_KEY_MANUAL_SERVER_IP "manual_server_ip"
+#define NVS_KEY_MANUAL_SERVER_PORT "manual_server_port"
+#define NVS_KEY_MANUAL_SERVER_RESOLVED_IP "manual_server_resolved_ip"
+
 /* mDNS initialization state */
 #if MDNS_AVAILABLE
 static bool s_mdns_initialized = false;
@@ -457,28 +462,51 @@ esp_err_t mesh_udp_bridge_register(void)
     return ESP_ERR_NOT_SUPPORTED;
 #endif
 
-    /* Check if external server is discovered (via set_registration or cached) */
-    if (!s_server_registered) {
-        /* Try to use cached server address as fallback */
-        char cached_ip[16] = {0};
-        uint16_t cached_port = 0;
-        esp_err_t cache_err = mesh_udp_bridge_get_cached_server(cached_ip, &cached_port);
-        if (cache_err == ESP_OK) {
-            /* Convert cached IP to network byte order and set registration */
-            struct in_addr addr;
-            if (inet_aton(cached_ip, &addr) != 0) {
-                uint8_t ip_bytes[4];
-                memcpy(ip_bytes, &addr.s_addr, 4);
-                mesh_udp_bridge_set_registration(true, ip_bytes, cached_port);
-                ESP_LOGI(TAG, "Using cached server address for registration: %s:%d", cached_ip, cached_port);
+    /* Check for manual server IP first (takes precedence over discovery) */
+    char manual_ip[64] = {0};
+    char manual_resolved_ip[16] = {0};
+    uint16_t manual_port = 0;
+    esp_err_t manual_err = mesh_udp_bridge_get_manual_config(manual_ip, sizeof(manual_ip), &manual_port, manual_resolved_ip, sizeof(manual_resolved_ip));
+    if (manual_err == ESP_OK) {
+        /* Manual IP is configured, use it for registration */
+        const char *ip_to_use = (manual_resolved_ip[0] != '\0') ? manual_resolved_ip : manual_ip;
+        struct in_addr addr;
+        if (inet_aton(ip_to_use, &addr) != 0) {
+            uint8_t ip_bytes[4];
+            memcpy(ip_bytes, &addr.s_addr, 4);
+            mesh_udp_bridge_set_registration(true, ip_bytes, manual_port);
+            ESP_LOGI(TAG, "Using manual server address for registration: %s:%d (hostname: %s)", ip_to_use, manual_port, manual_ip);
+        } else {
+            ESP_LOGE(TAG, "Manual server IP invalid: %s", ip_to_use);
+            return ESP_ERR_INVALID_ARG;
+        }
+    } else if (manual_err == ESP_ERR_NOT_FOUND) {
+        /* No manual IP configured, check if external server is discovered (via set_registration or cached) */
+        if (!s_server_registered) {
+            /* Try to use cached server address as fallback */
+            char cached_ip[16] = {0};
+            uint16_t cached_port = 0;
+            esp_err_t cache_err = mesh_udp_bridge_get_cached_server(cached_ip, &cached_port);
+            if (cache_err == ESP_OK) {
+                /* Convert cached IP to network byte order and set registration */
+                struct in_addr addr;
+                if (inet_aton(cached_ip, &addr) != 0) {
+                    uint8_t ip_bytes[4];
+                    memcpy(ip_bytes, &addr.s_addr, 4);
+                    mesh_udp_bridge_set_registration(true, ip_bytes, cached_port);
+                    ESP_LOGI(TAG, "Using cached server address for registration: %s:%d", cached_ip, cached_port);
+                } else {
+                    ESP_LOGD(TAG, "External server not discovered and cached IP invalid, skipping registration");
+                    return ESP_ERR_NOT_FOUND;
+                }
             } else {
-                ESP_LOGD(TAG, "External server not discovered and cached IP invalid, skipping registration");
+                ESP_LOGD(TAG, "External server not discovered, skipping registration");
                 return ESP_ERR_NOT_FOUND;
             }
-        } else {
-            ESP_LOGD(TAG, "External server not discovered, skipping registration");
-            return ESP_ERR_NOT_FOUND;
         }
+    } else {
+        ESP_LOGE(TAG, "Failed to read manual configuration: %s", esp_err_to_name(manual_err));
+        return manual_err;
     }
 
     /* Only root node can register */
@@ -922,6 +950,316 @@ esp_err_t mesh_udp_bridge_get_cached_server(char *server_ip, uint16_t *server_po
 
     nvs_close(nvs_handle);
     ESP_LOGI(TAG, "Retrieved cached server address: %s:%d", server_ip, *server_port);
+    return ESP_OK;
+}
+
+/*******************************************************
+ *                Hostname Resolution
+ *******************************************************/
+
+/**
+ * @brief Resolve hostname to IP address.
+ *
+ * Resolves a hostname to an IPv4 address using DNS. If the input is already
+ * an IP address, it is copied directly without DNS resolution.
+ *
+ * @param hostname Hostname or IP address string
+ * @param ip_out Output buffer for resolved IP address (must be at least 16 bytes)
+ * @param ip_len Size of ip_out buffer
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_resolve_hostname(const char *hostname, char *ip_out, size_t ip_len)
+{
+    if (hostname == NULL || ip_out == NULL || ip_len < 16) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Check if input is already an IP address */
+    struct in_addr addr;
+    if (inet_aton(hostname, &addr) != 0) {
+        /* Input is already an IP address, copy directly */
+        strncpy(ip_out, hostname, ip_len - 1);
+        ip_out[ip_len - 1] = '\0';
+        ESP_LOGD(TAG, "Input is already an IP address: %s", ip_out);
+        return ESP_OK;
+    }
+
+    /* Input is a hostname, resolve using DNS */
+    ESP_LOGD(TAG, "Resolving hostname: %s", hostname);
+
+    struct addrinfo hints;
+    struct addrinfo *result = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;  /* IPv4 only */
+    hints.ai_socktype = SOCK_DGRAM;
+
+    int err = getaddrinfo(hostname, NULL, &hints, &result);
+    if (err != 0) {
+        ESP_LOGW(TAG, "Failed to resolve hostname '%s': %s", hostname, gai_strerror(err));
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Extract first IPv4 address from results */
+    bool found = false;
+    for (struct addrinfo *rp = result; rp != NULL; rp = rp->ai_next) {
+        if (rp->ai_family == AF_INET) {
+            struct sockaddr_in *sin = (struct sockaddr_in *)rp->ai_addr;
+            const char *ip_str = inet_ntoa(sin->sin_addr);
+            if (ip_str != NULL) {
+                strncpy(ip_out, ip_str, ip_len - 1);
+                ip_out[ip_len - 1] = '\0';
+                found = true;
+                ESP_LOGI(TAG, "Resolved hostname '%s' to IP: %s", hostname, ip_out);
+                break;
+            }
+        }
+    }
+
+    freeaddrinfo(result);
+
+    if (!found) {
+        ESP_LOGW(TAG, "No IPv4 address found for hostname '%s'", hostname);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    return ESP_OK;
+}
+
+/*******************************************************
+ *                Manual Server Configuration
+ *******************************************************/
+
+/**
+ * @brief Store manual server configuration in NVS.
+ *
+ * Stores the server IP/hostname, port, and resolved IP in NVS for manual configuration.
+ *
+ * @param ip_or_hostname Server IP address or hostname string
+ * @param port Server UDP port
+ * @param resolved_ip Resolved IP address (if hostname was resolved), NULL if not resolved
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_store_manual_config(const char *ip_or_hostname, uint16_t port, const char *resolved_ip)
+{
+    if (ip_or_hostname == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to open NVS namespace '%s': %s", NVS_NAMESPACE_UDP_BRIDGE, esp_err_to_name(err));
+        return err;
+    }
+
+    /* Store server IP/hostname */
+    err = nvs_set_str(nvs_handle, NVS_KEY_MANUAL_SERVER_IP, ip_or_hostname);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to store manual server IP in NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    /* Store server port */
+    err = nvs_set_u16(nvs_handle, NVS_KEY_MANUAL_SERVER_PORT, port);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to store manual server port in NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    /* Store resolved IP if provided */
+    if (resolved_ip != NULL) {
+        err = nvs_set_str(nvs_handle, NVS_KEY_MANUAL_SERVER_RESOLVED_IP, resolved_ip);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to store manual server resolved IP in NVS: %s", esp_err_to_name(err));
+            nvs_close(nvs_handle);
+            return err;
+        }
+    } else {
+        /* Clear resolved IP if not provided */
+        nvs_erase_key(nvs_handle, NVS_KEY_MANUAL_SERVER_RESOLVED_IP);
+    }
+
+    /* Commit changes */
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to commit NVS changes: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "Stored manual server configuration: %s:%d (resolved: %s)", ip_or_hostname, port, resolved_ip ? resolved_ip : "N/A");
+    return ESP_OK;
+}
+
+/**
+ * @brief Retrieve manual server configuration from NVS.
+ *
+ * Reads the manual server IP/hostname, port, and resolved IP from NVS.
+ *
+ * @param ip_or_hostname Output buffer for IP/hostname (must be at least hostname_len bytes)
+ * @param hostname_len Size of ip_or_hostname buffer
+ * @param port Output pointer for UDP port
+ * @param resolved_ip Output buffer for resolved IP (must be at least resolved_len bytes), can be NULL
+ * @param resolved_len Size of resolved_ip buffer
+ * @return ESP_OK if found, ESP_ERR_NOT_FOUND if not configured, error code on failure
+ */
+esp_err_t mesh_udp_bridge_get_manual_config(char *ip_or_hostname, size_t hostname_len, uint16_t *port, char *resolved_ip, size_t resolved_len)
+{
+    if (ip_or_hostname == NULL || port == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "Failed to open NVS namespace '%s': %s", NVS_NAMESPACE_UDP_BRIDGE, esp_err_to_name(err));
+        return err;
+    }
+
+    /* Read server IP/hostname */
+    size_t required_size = hostname_len;
+    err = nvs_get_str(nvs_handle, NVS_KEY_MANUAL_SERVER_IP, ip_or_hostname, &required_size);
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGD(TAG, "No manual server IP found in NVS");
+        } else {
+            ESP_LOGW(TAG, "Failed to read manual server IP from NVS: %s", esp_err_to_name(err));
+        }
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    /* Read server port */
+    err = nvs_get_u16(nvs_handle, NVS_KEY_MANUAL_SERVER_PORT, port);
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGD(TAG, "No manual server port found in NVS");
+        } else {
+            ESP_LOGW(TAG, "Failed to read manual server port from NVS: %s", esp_err_to_name(err));
+        }
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    /* Read resolved IP if buffer provided */
+    if (resolved_ip != NULL && resolved_len > 0) {
+        required_size = resolved_len;
+        err = nvs_get_str(nvs_handle, NVS_KEY_MANUAL_SERVER_RESOLVED_IP, resolved_ip, &required_size);
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            /* Resolved IP not stored, that's okay */
+            resolved_ip[0] = '\0';
+        } else if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to read manual server resolved IP from NVS: %s", esp_err_to_name(err));
+            resolved_ip[0] = '\0';
+        }
+    }
+
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "Retrieved manual server configuration: %s:%d", ip_or_hostname, *port);
+    return ESP_OK;
+}
+
+/**
+ * @brief Clear manual server configuration from NVS.
+ *
+ * Erases all manual server configuration keys from NVS.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_clear_manual_config(void)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to open NVS namespace '%s': %s", NVS_NAMESPACE_UDP_BRIDGE, esp_err_to_name(err));
+        return err;
+    }
+
+    /* Erase all manual configuration keys */
+    nvs_erase_key(nvs_handle, NVS_KEY_MANUAL_SERVER_IP);
+    nvs_erase_key(nvs_handle, NVS_KEY_MANUAL_SERVER_PORT);
+    nvs_erase_key(nvs_handle, NVS_KEY_MANUAL_SERVER_RESOLVED_IP);
+
+    /* Commit changes */
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to commit NVS changes: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "Cleared manual server configuration");
+    return ESP_OK;
+}
+
+/**
+ * @brief Set manual server IP and register with external server.
+ *
+ * Resolves hostname if needed, stores configuration in NVS, and sets registration state.
+ *
+ * @param ip_or_hostname Server IP address or hostname string
+ * @param port Server UDP port
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_set_manual_server_ip(const char *ip_or_hostname, uint16_t port)
+{
+    if (ip_or_hostname == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Resolve hostname to IP if needed */
+    char resolved_ip[16] = {0};
+    esp_err_t resolve_err = mesh_udp_bridge_resolve_hostname(ip_or_hostname, resolved_ip, sizeof(resolved_ip));
+    if (resolve_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to resolve hostname '%s': %s", ip_or_hostname, esp_err_to_name(resolve_err));
+        return resolve_err;
+    }
+
+    /* Store manual configuration in NVS */
+    esp_err_t err = mesh_udp_bridge_store_manual_config(ip_or_hostname, port, resolved_ip);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to store manual configuration: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Convert resolved IP to network byte order and set registration */
+    struct in_addr addr;
+    if (inet_aton(resolved_ip, &addr) != 0) {
+        uint8_t ip_bytes[4];
+        memcpy(ip_bytes, &addr.s_addr, 4);
+        mesh_udp_bridge_set_registration(true, ip_bytes, port);
+        ESP_LOGI(TAG, "Manual server IP set: %s:%d (resolved: %s)", ip_or_hostname, port, resolved_ip);
+        return ESP_OK;
+    } else {
+        ESP_LOGE(TAG, "Failed to convert resolved IP address: %s", resolved_ip);
+        return ESP_ERR_INVALID_ARG;
+    }
+}
+
+/**
+ * @brief Clear manual server IP configuration.
+ *
+ * Clears manual configuration from NVS and clears registration state.
+ *
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_clear_manual_server_ip(void)
+{
+    /* Clear registration state first (if it was using manual IP) */
+    mesh_udp_bridge_set_registration(false, NULL, 0);
+
+    /* Clear manual configuration from NVS */
+    esp_err_t err = mesh_udp_bridge_clear_manual_config();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to clear manual configuration: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(TAG, "Manual server IP cleared and registration state reset");
     return ESP_OK;
 }
 
@@ -4125,11 +4463,21 @@ void mesh_udp_bridge_broadcast_server_ip(const char *ip, uint16_t port)
  * @param port UDP port number
  * @return true if connection test succeeds, false otherwise
  */
-bool mesh_udp_bridge_test_connection(const char *ip, uint16_t port)
+bool mesh_udp_bridge_test_connection(const char *ip_or_hostname, uint16_t port)
 {
-    if (ip == NULL) {
+    if (ip_or_hostname == NULL) {
         return false;
     }
+
+    /* Resolve hostname to IP if needed */
+    char resolved_ip[16] = {0};
+    esp_err_t resolve_err = mesh_udp_bridge_resolve_hostname(ip_or_hostname, resolved_ip, sizeof(resolved_ip));
+    if (resolve_err != ESP_OK) {
+        ESP_LOGD(TAG, "Failed to resolve hostname '%s': %s", ip_or_hostname, esp_err_to_name(resolve_err));
+        return false;
+    }
+
+    const char *ip_to_use = resolved_ip;
 
     /* Create UDP socket */
     int test_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -4138,9 +4486,9 @@ bool mesh_udp_bridge_test_connection(const char *ip, uint16_t port)
         return false;
     }
 
-    /* Set socket timeout (1 second) */
+    /* Set socket timeout (5 seconds for connection test) */
     struct timeval timeout;
-    timeout.tv_sec = 1;
+    timeout.tv_sec = 5;
     timeout.tv_usec = 0;
     if (setsockopt(test_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
         ESP_LOGD(TAG, "Failed to set socket timeout: %d", errno);
@@ -4160,25 +4508,75 @@ bool mesh_udp_bridge_test_connection(const char *ip, uint16_t port)
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(port);
-    if (inet_aton(ip, &server_addr.sin_addr) == 0) {
-        ESP_LOGD(TAG, "Failed to convert IP address: %s", ip);
+    if (inet_aton(ip_to_use, &server_addr.sin_addr) == 0) {
+        ESP_LOGD(TAG, "Failed to convert IP address: %s", ip_to_use);
         close(test_socket);
         return false;
     }
 
-    /* Attempt to send a test packet (UDP is fire-and-forget, so just check socket creation) */
-    /* For UDP, we can't really "test" the connection without a response, so we just verify */
-    /* the socket can be created and the address is valid */
-    ssize_t sent = sendto(test_socket, "test", 4, 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
-    close(test_socket);
+    /* Attempt to send a test registration packet and wait for ACK */
+    /* Build a minimal registration payload for testing */
+    mesh_registration_payload_t test_payload;
+    memset(&test_payload, 0, sizeof(test_payload));
+    
+    /* Get root node IP */
+    esp_err_t err = mesh_udp_bridge_get_root_ip(test_payload.root_ip);
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "Failed to get root IP for test: %s", esp_err_to_name(err));
+        close(test_socket);
+        return false;
+    }
+    
+    /* Get mesh ID */
+    err = mesh_udp_bridge_get_mesh_id(test_payload.mesh_id);
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "Failed to get mesh ID for test: %s", esp_err_to_name(err));
+        close(test_socket);
+        return false;
+    }
+    
+    test_payload.node_count = mesh_udp_bridge_get_node_count();
+    test_payload.firmware_version_len = 0;
+    test_payload.timestamp = htonl((uint32_t)time(NULL));
 
+    /* Send test registration packet */
+    uint8_t test_buffer[256];
+    size_t test_len = sizeof(test_payload);
+    if (test_len > sizeof(test_buffer) - 3) {
+        test_len = sizeof(test_buffer) - 3;
+    }
+    memcpy(test_buffer + 3, &test_payload, test_len);
+    test_buffer[0] = UDP_CMD_REGISTRATION;
+    test_buffer[1] = (test_len >> 8) & 0xFF;
+    test_buffer[2] = test_len & 0xFF;
+
+    ssize_t sent = sendto(test_socket, test_buffer, test_len + 3, 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
     if (sent < 0) {
-        ESP_LOGD(TAG, "Failed to send test packet to %s:%d: %d", ip, port, errno);
+        ESP_LOGD(TAG, "Failed to send test packet to %s:%d: %d", ip_to_use, port, errno);
+        close(test_socket);
         return false;
     }
 
-    ESP_LOGD(TAG, "Connection test succeeded for %s:%d", ip, port);
-    return true;
+    /* Wait for ACK with timeout */
+    uint8_t ack_buffer[64];
+    struct sockaddr_in from_addr;
+    socklen_t from_len = sizeof(from_addr);
+    ssize_t received = recvfrom(test_socket, ack_buffer, sizeof(ack_buffer), 0, (struct sockaddr *)&from_addr, &from_len);
+    close(test_socket);
+
+    if (received < 3) {
+        ESP_LOGD(TAG, "No ACK received from %s:%d (timeout or error)", ip_to_use, port);
+        return false;
+    }
+
+    /* Check if it's a registration ACK */
+    if (ack_buffer[0] == UDP_CMD_REGISTRATION_ACK) {
+        ESP_LOGI(TAG, "Connection test succeeded for %s:%d (hostname: %s)", ip_to_use, port, ip_or_hostname);
+        return true;
+    }
+
+    ESP_LOGD(TAG, "Received unexpected response from %s:%d", ip_to_use, port);
+    return false;
 }
 
 /**

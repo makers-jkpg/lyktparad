@@ -984,3 +984,32 @@ header h1 {
         padding: 20px;
     }
 }
+
+/* External Server Configuration Styles */
+.external-server-config {
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.current-config {
+    margin-top: 20px;
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+}
+
+.message-area {
+    margin-top: 15px;
+    min-height: 20px;
+}
+
+/* LIMITED_MODE Styles */
+.tab-button.limited-mode-hidden {
+    display: none !important;
+}
+
+.tab-content[data-tab="plugins"].limited-mode-hidden,
+.tab-content[data-tab="info"].limited-mode-hidden {
+    display: none !important;
+}
