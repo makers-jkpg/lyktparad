@@ -3,7 +3,7 @@
  * This module implements strobe effect functionality as a plugin.
  * The strobe effect automatically starts when the plugin is activated.
  *
- * Copyright (c) 2025 the_louie
+ * Copyright (c) 2025 Arvind
  *
  * This example code is in the Public Domain (or CC0 licensed, at your option.)
  *
@@ -51,34 +51,6 @@ static esp_err_t strobe_timer_start(void);
 static esp_err_t strobe_timer_stop(void);
 static esp_err_t strobe_start(void);
 static esp_err_t strobe_stop(void);
-static void strobe_set_rgb(uint8_t r, uint8_t g, uint8_t b);
-
-/*******************************************************
- *                RGB LED Control Helper
- *******************************************************/
-
-/**
- * @brief Set RGB LED color on all available LED systems
- *
- * This function detects which RGB LED systems are enabled at compile-time
- * and sets the color on all available systems:
- * - Neopixel (always available via plugin_light_set_rgb)
- * - Common-cathode/anode RGB LED (if RGB_ENABLE is defined, via plugin_set_rgb_led)
- *
- * @param r Red component (0-255)
- * @param g Green component (0-255)
- * @param b Blue component (0-255)
- */
-static void strobe_set_rgb(uint8_t r, uint8_t g, uint8_t b)
-{
-    /* Neopixel is always available */
-    plugin_light_set_rgb(r, g, b);
-
-#ifdef RGB_ENABLE
-    /* Common-cathode/anode RGB LED is available if RGB_ENABLE is defined */
-    plugin_set_rgb_led((int)r, (int)g, (int)b);
-#endif /* RGB_ENABLE */
-}
 
 /*******************************************************
  *                Timer Management
@@ -146,7 +118,7 @@ static void strobe_timer_callback(void *arg)
 
     if (!strobe_is_on) {
         /* Turn ON */
-        strobe_set_rgb(strobe_defaults.r_on, strobe_defaults.g_on, strobe_defaults.b_on);
+        plugin_set_rgb(strobe_defaults.r_on, strobe_defaults.g_on, strobe_defaults.b_on);
         strobe_is_on = true;
         /* Schedule next toggle after duration_on */
         if (strobe_timer != NULL) {
@@ -155,7 +127,7 @@ static void strobe_timer_callback(void *arg)
         return;
     } else {
         /* Turn OFF */
-        strobe_set_rgb(strobe_defaults.r_off, strobe_defaults.g_off, strobe_defaults.b_off);
+        plugin_set_rgb(strobe_defaults.r_off, strobe_defaults.g_off, strobe_defaults.b_off);
         strobe_is_on = false;
         /* Schedule next toggle after duration_off */
         if (strobe_timer != NULL) {
@@ -206,7 +178,7 @@ static esp_err_t strobe_stop(void)
     }
 
     /* Set LED to off */
-    strobe_set_rgb(0, 0, 0);
+    plugin_set_rgb(0, 0, 0);
 
     ESP_LOGI(TAG, "Strobe effect stopped");
     return ESP_OK;

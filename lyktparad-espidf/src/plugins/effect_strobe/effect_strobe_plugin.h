@@ -3,7 +3,7 @@
  * This module provides strobe effect functionality as a plugin.
  * The strobe effect automatically starts when the plugin is activated.
  *
- * Copyright (c) 2025 the_louie
+ * Copyright (c) 2025 Arvind
  *
  * This example code is in the Public Domain (or CC0 licensed, at your option.)
  *

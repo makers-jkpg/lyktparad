@@ -62,3 +62,17 @@ esp_err_t plugin_set_rgb_led(int r, int g, int b)
     set_rgb_led(r, g, b);
     return ESP_OK;
 }
+
+esp_err_t plugin_set_rgb(uint8_t r, uint8_t g, uint8_t b)
+{
+    /* Always control Neopixel/WS2812 LEDs (primary LED system) */
+    esp_err_t err = plugin_light_set_rgb(r, g, b);
+
+#ifdef RGB_ENABLE
+    /* Conditionally control common-cathode/anode RGB LED if RGB_ENABLE is defined */
+    plugin_set_rgb_led((int)r, (int)g, (int)b);
+#endif /* RGB_ENABLE */
+
+    /* Return error code from Neopixel (primary LED system) */
+    return err;
+}

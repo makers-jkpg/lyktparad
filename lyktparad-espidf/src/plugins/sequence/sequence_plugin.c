@@ -226,7 +226,7 @@ static void sequence_timer_cb(void *arg)
     g_scaled = g_4bit * 16;
     b_scaled = b_4bit * 16;
 
-    esp_err_t err = plugin_light_set_rgb(r_scaled, g_scaled, b_scaled);
+    esp_err_t err = plugin_set_rgb(r_scaled, g_scaled, b_scaled);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set LED in timer callback: 0x%x", err);
     }

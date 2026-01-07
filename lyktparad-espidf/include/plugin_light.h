@@ -49,4 +49,31 @@ esp_err_t plugin_light_set_rgb(uint8_t r, uint8_t g, uint8_t b);
  */
 esp_err_t plugin_set_rgb_led(int r, int g, int b);
 
+/**
+ * @brief Set RGB LED color on all available LED systems (unified wrapper)
+ *
+ * This is the recommended function for plugin LED control. It automatically
+ * controls all available LED systems:
+ * - Neopixel/WS2812 LEDs (always available via plugin_light_set_rgb)
+ * - Common-cathode/anode RGB LEDs (if RGB_ENABLE is defined, via plugin_set_rgb_led)
+ *
+ * This function eliminates the need for conditional compilation in plugins.
+ * Plugins should use this function instead of calling plugin_light_set_rgb()
+ * and plugin_set_rgb_led() separately.
+ *
+ * The function checks if a plugin is active before allowing LED control.
+ * Only the active plugin can control LEDs.
+ *
+ * @param r Red component (0-255)
+ * @param g Green component (0-255)
+ * @param b Blue component (0-255)
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_STATE if no plugin is active
+ *
+ * @note This function replaces the need for conditional compilation in plugins.
+ *       For advanced use cases requiring fine-grained control, the individual
+ *       functions (plugin_light_set_rgb, plugin_set_rgb_led) remain available.
+ */
+esp_err_t plugin_set_rgb(uint8_t r, uint8_t g, uint8_t b);
+
 #endif /* __PLUGIN_LIGHT_H__ */

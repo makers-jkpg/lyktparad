@@ -3,7 +3,7 @@
  * This module implements fade effect functionality as a plugin.
  * The fade effect automatically starts when the plugin is activated.
  *
- * Copyright (c) 2025 the_louie
+ * Copyright (c) 2025 Arvind
  *
  * This example code is in the Public Domain (or CC0 licensed, at your option.)
  *
@@ -55,7 +55,6 @@ static esp_err_t fade_timer_start(void);
 static esp_err_t fade_timer_stop(void);
 static esp_err_t fade_start(void);
 static esp_err_t fade_stop(void);
-static void fade_set_rgb(uint8_t r, uint8_t g, uint8_t b);
 
 /*******************************************************
  *                Helper Functions
@@ -68,33 +67,6 @@ static inline uint8_t interp_u8(uint8_t start, uint8_t end, uint32_t elapsed, ui
     uint32_t s = start;
     uint32_t e = end;
     return (uint8_t)((s * (total - elapsed) + e * elapsed) / total);
-}
-
-/*******************************************************
- *                RGB LED Control Helper
- *******************************************************/
-
-/**
- * @brief Set RGB LED color on all available LED systems
- *
- * This function detects which RGB LED systems are enabled at compile-time
- * and sets the color on all available systems:
- * - Neopixel (always available via plugin_light_set_rgb)
- * - Common-cathode/anode RGB LED (if RGB_ENABLE is defined, via plugin_set_rgb_led)
- *
- * @param r Red component (0-255)
- * @param g Green component (0-255)
- * @param b Blue component (0-255)
- */
-static void fade_set_rgb(uint8_t r, uint8_t g, uint8_t b)
-{
-    /* Neopixel is always available */
-    plugin_light_set_rgb(r, g, b);
-
-#ifdef RGB_ENABLE
-    /* Common-cathode/anode RGB LED is available if RGB_ENABLE is defined */
-    plugin_set_rgb_led((int)r, (int)g, (int)b);
-#endif /* RGB_ENABLE */
 }
 
 /*******************************************************
@@ -162,7 +134,7 @@ static void fade_timer_callback(void *arg)
 
     if (fade_phase == 1) { /* fade_in: from on -> off */
         if (fade_defaults.fade_in_ms == 0) {
-            fade_set_rgb(fade_defaults.r_off, fade_defaults.g_off, fade_defaults.b_off);
+            plugin_set_rgb(fade_defaults.r_off, fade_defaults.g_off, fade_defaults.b_off);
             fade_phase = 2; /* go to hold */
             fade_elapsed_ms = 0;
             if (fade_defaults.hold_ms > 0) {
@@ -175,11 +147,11 @@ static void fade_timer_callback(void *arg)
             uint8_t r = interp_u8(fade_defaults.r_on, fade_defaults.r_off, elapsed, total);
             uint8_t g = interp_u8(fade_defaults.g_on, fade_defaults.g_off, elapsed, total);
             uint8_t b = interp_u8(fade_defaults.b_on, fade_defaults.b_off, elapsed, total);
-            fade_set_rgb(r, g, b);
+            plugin_set_rgb(r, g, b);
 
             fade_elapsed_ms += fade_step_ms;
             if (fade_elapsed_ms >= fade_defaults.fade_in_ms) {
-                fade_set_rgb(fade_defaults.r_off, fade_defaults.g_off, fade_defaults.b_off);
+                plugin_set_rgb(fade_defaults.r_off, fade_defaults.g_off, fade_defaults.b_off);
                 fade_phase = 2; /* hold */
                 fade_elapsed_ms = 0;
                 if (fade_defaults.hold_ms > 0) {
@@ -200,7 +172,7 @@ static void fade_timer_callback(void *arg)
             if (fade_timer != NULL) esp_timer_start_once(fade_timer, 1);
             return;
         } else {
-            fade_set_rgb(fade_defaults.r_on, fade_defaults.g_on, fade_defaults.b_on);
+            plugin_set_rgb(fade_defaults.r_on, fade_defaults.g_on, fade_defaults.b_on);
             fade_phase = 1;
             fade_elapsed_ms = 0;
             if (fade_timer != NULL) esp_timer_start_once(fade_timer, 1);
@@ -210,7 +182,7 @@ static void fade_timer_callback(void *arg)
 
     if (fade_phase == 3) { /* fade_out: from off -> on */
         if (fade_defaults.fade_out_ms == 0) {
-            fade_set_rgb(fade_defaults.r_on, fade_defaults.g_on, fade_defaults.b_on);
+            plugin_set_rgb(fade_defaults.r_on, fade_defaults.g_on, fade_defaults.b_on);
             fade_phase = 1;
             fade_elapsed_ms = 0;
             if (fade_timer != NULL) esp_timer_start_once(fade_timer, 1);
@@ -221,11 +193,11 @@ static void fade_timer_callback(void *arg)
             uint8_t r = interp_u8(fade_defaults.r_off, fade_defaults.r_on, elapsed, total);
             uint8_t g = interp_u8(fade_defaults.g_off, fade_defaults.g_on, elapsed, total);
             uint8_t b = interp_u8(fade_defaults.b_off, fade_defaults.b_on, elapsed, total);
-            fade_set_rgb(r, g, b);
+            plugin_set_rgb(r, g, b);
 
             fade_elapsed_ms += fade_step_ms;
             if (fade_elapsed_ms >= fade_defaults.fade_out_ms) {
-                fade_set_rgb(fade_defaults.r_on, fade_defaults.g_on, fade_defaults.b_on);
+                plugin_set_rgb(fade_defaults.r_on, fade_defaults.g_on, fade_defaults.b_on);
                 fade_phase = 1;
                 fade_elapsed_ms = 0;
                 if (fade_timer != NULL) esp_timer_start_once(fade_timer, 1);
@@ -262,7 +234,7 @@ static esp_err_t fade_start(void)
     }
 
     /* Set initial color to 'on' values, then start immediately */
-    fade_set_rgb(fade_defaults.r_on, fade_defaults.g_on, fade_defaults.b_on);
+    plugin_set_rgb(fade_defaults.r_on, fade_defaults.g_on, fade_defaults.b_on);
     esp_timer_start_once(fade_timer, 1);
 
     ESP_LOGI(TAG, "Fade effect started: on(%d,%d,%d) off(%d,%d,%d) in_ms=%u out_ms=%u hold_ms=%u",
@@ -280,7 +252,7 @@ static esp_err_t fade_stop(void)
     }
 
     /* Set LED to off */
-    fade_set_rgb(0, 0, 0);
+    plugin_set_rgb(0, 0, 0);
 
     ESP_LOGI(TAG, "Fade effect stopped");
     return ESP_OK;

@@ -778,9 +778,17 @@ You don't need to modify `CMakeLists.txt` or any build configuration files. The 
 
 **Plugin Exclusivity**: RGB LEDs are controlled exclusively by plugins when a plugin is active. This applies to both root nodes and child nodes, ensuring unified behavior across all mesh nodes.
 
-**Plugin LED Control Functions**:
-- `plugin_light_set_rgb(r, g, b)`: Control Neopixel/WS2812 LEDs (works on root and child nodes)
-- `plugin_set_rgb_led(r, g, b)`: Control common-cathode RGB LEDs (works on root and child nodes, requires `RGB_ENABLE`)
+**Recommended Function**:
+- `plugin_set_rgb(r, g, b)`: Unified function that automatically controls all available LED systems
+  - Always controls Neopixel/WS2812 LEDs (works on root and child nodes)
+  - Conditionally controls common-cathode RGB LEDs if `RGB_ENABLE` is defined
+  - Eliminates the need for conditional compilation in plugins
+  - Handles type conversion internally
+  - This is the recommended function for all plugin LED control
+
+**Advanced Functions** (for fine-grained control):
+- `plugin_light_set_rgb(r, g, b)`: Control Neopixel/WS2812 LEDs only (works on root and child nodes)
+- `plugin_set_rgb_led(r, g, b)`: Control common-cathode RGB LEDs only (works on root and child nodes, requires `RGB_ENABLE`)
 
 **Root Node Behavior**:
 - Root node RGB LEDs respond to plugin control calls exactly like child nodes
@@ -788,19 +796,32 @@ You don't need to modify `CMakeLists.txt` or any build configuration files. The 
 - Root node RGB command handler skips LED control when a plugin is active
 - Root node and child nodes have identical RGB LED behavior for the same plugin
 
-**Usage in Plugins**:
+**Usage in Plugins** (Recommended):
 ```c
-/* In timer callback or command handler */
+/* In timer callback or command handler - unified function handles all LED types */
+esp_err_t err = plugin_set_rgb(255, 0, 0);  /* Set to red on all available LED systems */
+if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to set LED: 0x%x", err);
+}
+```
+
+**Usage in Plugins** (Advanced - for fine-grained control):
+```c
+/* Only control Neopixel LEDs */
 esp_err_t err = plugin_light_set_rgb(255, 0, 0);  /* Set to red */
 if (err != ESP_OK) {
     ESP_LOGE(TAG, "Failed to set LED: 0x%x", err);
 }
 
-/* If RGB_ENABLE is defined, also control common-cathode RGB LED */
+/* Only control common-cathode RGB LED (if RGB_ENABLE is defined) */
+#ifdef RGB_ENABLE
 plugin_set_rgb_led(255, 0, 0);  /* Set to red */
+#endif
 ```
 
-**Important**: These functions check if a plugin is active before allowing LED control. Only the active plugin can control LEDs. If no plugin is active, these functions return `ESP_ERR_INVALID_STATE`.
+**Important**: All LED control functions check if a plugin is active before allowing LED control. Only the active plugin can control LEDs. If no plugin is active, these functions return `ESP_ERR_INVALID_STATE`.
+
+**Backward Compatibility**: The individual functions (`plugin_light_set_rgb`, `plugin_set_rgb_led`) remain available for advanced use cases, but new plugins should use the unified `plugin_set_rgb()` function.
 
 ## Examples
 
