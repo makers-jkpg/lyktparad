@@ -56,6 +56,14 @@ The Sequence plugin provides synchronized color sequence playback across all mes
 - Tempo control (speed adjustment)
 - Start, stop, and reset controls
 - Beat synchronization for child nodes
+- Hardcoded default RGB-rainbow pattern (loaded automatically if no user data exists)
+
+**Default Data:**
+- The sequence plugin includes a hardcoded RGB-rainbow pattern that is automatically loaded at initialization if no user sequence data exists
+- Default tempo: 50ms (rhythm = 5)
+- Default length: 16 rows (256 squares)
+- Users can override the default data by uploading their own sequence via the web UI
+- Currently, only RGB-rainbow is supported as default data (future extensibility planned)
 
 **Commands:**
 - Sequence data storage and broadcast
