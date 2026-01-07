@@ -72,7 +72,7 @@ static bool root_rgb_has_been_set = false;
 static void heartbeat_timer_start(void)
 {
     if (heartbeat_timer != NULL) {
-        esp_err_t err = esp_timer_start_periodic(heartbeat_timer, 500000); /* 500ms */
+        esp_err_t err = esp_timer_start_periodic(heartbeat_timer, 1000000); /* 1000ms */
         if (err == ESP_OK) {
             ESP_LOGI(MESH_TAG, "[HEARTBEAT] Timer started");
         } else {
@@ -132,22 +132,12 @@ static void heartbeat_timer_cb(void *arg)
     /* Calculate actual child node count (excluding root node) */
     int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
 
-    // #region agent log
-    ESP_LOGI(MESH_TAG, "[DEBUG HYP-A] heartbeat_timer_cb entry - route_table_size:%d child_node_count:%d heartbeat_count:%lu",
-             route_table_size, child_node_count, (unsigned long)cnt);
-    // #endregion
-
     /* Log routing table size changes for debugging */
     static int last_route_table_size = -1;
     if (route_table_size != last_route_table_size) {
         ESP_LOGI(mesh_common_get_tag(), "[ROUTING TABLE CHANGE] Size changed: %d -> %d", last_route_table_size, route_table_size);
         last_route_table_size = route_table_size;
     }
-
-    // #region agent log
-    ESP_LOGI(MESH_TAG, "[DEBUG HYP-B] heartbeat_timer_cb before send loop - route_table_size:%d child_node_count:%d will_send:%s",
-             route_table_size, child_node_count, (route_table_size > 0) ? "true" : "false");
-    // #endregion
 
     for (i = 0; i < route_table_size; i++) {
         err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);

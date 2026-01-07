@@ -119,8 +119,6 @@ void esp_mesh_p2p_rx_main(void *arg)
             continue;
         }
 
-        ESP_LOGI(mesh_common_get_tag(), "[RCVD NOT ROOT]");
-
         recv_count++;
         /* Route plugin protocol commands: [PLUGIN_ID:1] [CMD:1] [LENGTH:2?] [DATA:N] */
         if (data.proto == MESH_PROTO_BIN && data.size >= 2 && data.data[0] >= 0x0B && data.data[0] <= 0xEE) {
