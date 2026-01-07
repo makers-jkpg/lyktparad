@@ -132,6 +132,29 @@
  */
 // #define ROOT_STATUS_LED_GPIO      3  // Optional: GPIO pin for root status LED (disabled by default)
 
+/* Root Status LED Invert Flag - Optional flag to invert LED logic (active-low LEDs)
+ *
+ * This is an OPTIONAL feature that is DISABLED BY DEFAULT (not set in this example).
+ * If undefined, root status LED uses active-high logic (GPIO HIGH = LED ON, GPIO LOW = LED OFF).
+ *
+ * When defined, the LED logic is inverted:
+ * - LED ON (led_state = true) → GPIO LOW (0)
+ * - LED OFF (led_state = false) → GPIO HIGH (1)
+ *
+ * Use this flag if your hardware uses:
+ * - Active-low LEDs (LED ON when GPIO is LOW)
+ * - LEDs connected through inverters
+ * - Any hardware configuration requiring inverted GPIO logic
+ *
+ * To enable this feature, uncomment the line below:
+ * #define ROOT_STATUS_LED_INVERT
+ *
+ * Note: This flag only affects GPIO level logic - blinking patterns and timing remain the same
+ * Note: All GPIO level assignments in root_status_led.c respect this flag
+ * Note: This flag is optional and disabled by default (maintains backward compatibility)
+ */
+// #define ROOT_STATUS_LED_INVERT  // Optional: Invert LED logic (active-low LEDs)
+
 /*******************************************************
  *                External Web Server Configuration
  *******************************************************/
