@@ -15,6 +15,8 @@
 #include "effect_fade_plugin.h"
 #include "plugin_system.h"
 #include "plugin_light.h"
+#include "mesh_common.h"
+#include "config/mesh_config.h"
 #include "config/mesh_device_config.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -27,7 +29,7 @@ static const char *TAG = "effect_fade_plugin";
 /* Plugin ID storage (assigned during registration) */
 static uint8_t fade_plugin_id = 0;
 
-/* Hardcoded default fade parameters */
+/* Hardcoded default fade parameters - total cycle = 1000ms (1 heartbeat interval) */
 static const struct {
     uint8_t r_on, g_on, b_on;
     uint8_t r_off, g_off, b_off;
@@ -37,18 +39,18 @@ static const struct {
 } fade_defaults = {
     .r_on = 255, .g_on = 255, .b_on = 255,  /* White */
     .r_off = 0, .g_off = 0, .b_off = 0,      /* Black */
-    .fade_in_ms = 500,
-    .fade_out_ms = 500,
-    .hold_ms = 200
+    .fade_in_ms = 400,  /* fade_in: 400ms */
+    .fade_out_ms = 400, /* fade_out: 400ms */
+    .hold_ms = 200      /* hold: 200ms (total = 1000ms) */
 };
 
 /* State variables */
 static esp_timer_handle_t fade_timer = NULL;
-static uint8_t fade_phase = 0; /* 0=idle, 1=fade_in, 2=hold, 3=fade_out */
-static uint32_t fade_elapsed_ms = 0;
+static uint8_t fade_last_counter = 0; /* Last counter value seen */
+static int64_t fade_cycle_start_us = 0; /* Cycle start time in microseconds */
 static bool fade_running = false;
 static bool fade_paused = false;
-static const uint32_t fade_step_ms = 20; /* step resolution for fades */
+static const uint32_t fade_update_interval_ms = 20; /* Update interval for smooth interpolation */
 
 /* Forward declarations */
 static void fade_timer_callback(void *arg);
@@ -77,7 +79,20 @@ static inline uint8_t interp_u8(uint8_t start, uint8_t end, uint32_t elapsed, ui
 static esp_err_t fade_timer_start(void)
 {
     if (fade_timer != NULL) {
-        ESP_LOGD(TAG, "Timer already created");
+        /* Timer already exists, start periodic timer with update interval for smooth interpolation */
+        esp_err_t err = esp_timer_start_periodic(fade_timer, (uint64_t)fade_update_interval_ms * 1000ULL);
+        if (err == ESP_OK) {
+            ESP_LOGD(TAG, "Fade timer started (periodic, %dms)", fade_update_interval_ms);
+        } else if (err == ESP_ERR_INVALID_STATE) {
+            /* Timer already running, that's okay */
+            ESP_LOGD(TAG, "Fade timer already running");
+        } else {
+            ESP_LOGE(TAG, "Failed to start fade timer: %s", esp_err_to_name(err));
+            return err;
+        }
+        /* Reinitialize cycle start time and counter when restarting existing timer */
+        fade_cycle_start_us = esp_timer_get_time();
+        fade_last_counter = mesh_common_get_local_heartbeat_counter();
         return ESP_OK;
     }
 
@@ -94,7 +109,19 @@ static esp_err_t fade_timer_start(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "Fade timer created");
+    err = esp_timer_start_periodic(fade_timer, (uint64_t)fade_update_interval_ms * 1000ULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start fade timer: %s", esp_err_to_name(err));
+        esp_timer_delete(fade_timer);
+        fade_timer = NULL;
+        return err;
+    }
+
+    /* Initialize cycle start time */
+    fade_cycle_start_us = esp_timer_get_time();
+    fade_last_counter = mesh_common_get_local_heartbeat_counter();
+
+    ESP_LOGI(TAG, "Fade timer created and started (periodic, %dms, synchronized to heartbeat)", fade_update_interval_ms);
     return ESP_OK;
 }
 
@@ -102,15 +129,14 @@ static esp_err_t fade_timer_stop(void)
 {
     if (fade_timer != NULL) {
         esp_timer_stop(fade_timer);
-        esp_timer_delete(fade_timer);
-        fade_timer = NULL;
+        /* Don't delete timer - keep it for reuse */
     }
 
-    fade_phase = 0;
-    fade_elapsed_ms = 0;
+    fade_last_counter = 0;
+    fade_cycle_start_us = 0;
     fade_running = false;
 
-    ESP_LOGI(TAG, "Fade timer stopped and state cleared");
+    ESP_LOGI(TAG, "Fade timer stopped");
     return ESP_OK;
 }
 
@@ -118,14 +144,24 @@ static esp_err_t fade_timer_stop(void)
  *                Timer Callback
  *******************************************************/
 
+/**
+ * @brief Timer callback synchronized to heartbeat counter
+ *
+ * This callback fires every fade_update_interval_ms (20ms) when the plugin is active.
+ * It reads the synchronized local heartbeat counter to determine the fade cycle progress.
+ * Each complete fade cycle (fade_in + hold + fade_out) takes exactly 1 heartbeat interval (1000ms).
+ * The counter is used to synchronize cycles across all nodes, while the timer provides smooth interpolation.
+ */
 static void fade_timer_callback(void *arg)
 {
+    (void)arg;
+
     /* Check if paused - if so, don't process timer callback */
     if (fade_paused) {
         return;
     }
-    (void)arg;
-    /* Check if effect is running (fade_running is set before timer starts) */
+
+    /* Check if effect is running */
     if (!fade_running) {
         return;
     }
@@ -137,82 +173,55 @@ static void fade_timer_callback(void *arg)
         return;
     }
 
-    if (fade_phase == 1) { /* fade_in: from on -> off */
-        if (fade_defaults.fade_in_ms == 0) {
-            plugin_set_rgb(fade_defaults.r_off, fade_defaults.g_off, fade_defaults.b_off);
-            fade_phase = 2; /* go to hold */
-            fade_elapsed_ms = 0;
-            if (fade_defaults.hold_ms > 0) {
-                if (fade_timer != NULL) esp_timer_start_once(fade_timer, (uint64_t)fade_defaults.hold_ms * 1000ULL);
-                return;
-            }
-        } else {
-            uint32_t elapsed = fade_elapsed_ms;
-            uint32_t total = fade_defaults.fade_in_ms;
-            uint8_t r = interp_u8(fade_defaults.r_on, fade_defaults.r_off, elapsed, total);
-            uint8_t g = interp_u8(fade_defaults.g_on, fade_defaults.g_off, elapsed, total);
-            uint8_t b = interp_u8(fade_defaults.b_on, fade_defaults.b_off, elapsed, total);
-            plugin_set_rgb(r, g, b);
+    /* Read synchronized local heartbeat counter */
+    uint8_t counter = mesh_common_get_local_heartbeat_counter();
 
-            fade_elapsed_ms += fade_step_ms;
-            if (fade_elapsed_ms >= fade_defaults.fade_in_ms) {
-                plugin_set_rgb(fade_defaults.r_off, fade_defaults.g_off, fade_defaults.b_off);
-                fade_phase = 2; /* hold */
-                fade_elapsed_ms = 0;
-                if (fade_defaults.hold_ms > 0) {
-                    if (fade_timer != NULL) esp_timer_start_once(fade_timer, (uint64_t)fade_defaults.hold_ms * 1000ULL);
-                    return;
-                }
-            } else {
-                if (fade_timer != NULL) esp_timer_start_once(fade_timer, (uint64_t)fade_step_ms * 1000ULL);
-                return;
-            }
-        }
+    /* Check if counter has changed (new cycle started or synchronized after mesh reconnect) */
+    /* Counter normally increments by 1 each heartbeat interval, but may jump when synchronized */
+    if (counter != fade_last_counter) {
+        /* Counter changed - new cycle started or resynchronized, reset cycle start time */
+        fade_cycle_start_us = esp_timer_get_time();
+        fade_last_counter = counter;
     }
 
-    if (fade_phase == 2) { /* hold between fades */
-        if (fade_defaults.fade_out_ms > 0) {
-            fade_phase = 3; /* start fade_out */
-            fade_elapsed_ms = 0;
-            if (fade_timer != NULL) esp_timer_start_once(fade_timer, 1);
-            return;
-        } else {
-            plugin_set_rgb(fade_defaults.r_on, fade_defaults.g_on, fade_defaults.b_on);
-            fade_phase = 1;
-            fade_elapsed_ms = 0;
-            if (fade_timer != NULL) esp_timer_start_once(fade_timer, 1);
-            return;
-        }
+    /* Calculate elapsed time since cycle start */
+    int64_t current_time_us = esp_timer_get_time();
+    int64_t elapsed_us = current_time_us - fade_cycle_start_us;
+    uint32_t cycle_progress_ms = (uint32_t)(elapsed_us / 1000ULL);
+
+    /* Wrap cycle progress to heartbeat interval (1000ms) */
+    if (cycle_progress_ms >= MESH_CONFIG_HEARTBEAT_INTERVAL) {
+        /* Cycle complete, reset to start of cycle */
+        cycle_progress_ms = cycle_progress_ms % MESH_CONFIG_HEARTBEAT_INTERVAL;
+        fade_cycle_start_us = current_time_us - (int64_t)cycle_progress_ms * 1000ULL;
     }
 
-    if (fade_phase == 3) { /* fade_out: from off -> on */
-        if (fade_defaults.fade_out_ms == 0) {
-            plugin_set_rgb(fade_defaults.r_on, fade_defaults.g_on, fade_defaults.b_on);
-            fade_phase = 1;
-            fade_elapsed_ms = 0;
-            if (fade_timer != NULL) esp_timer_start_once(fade_timer, 1);
-            return;
-        } else {
-            uint32_t elapsed = fade_elapsed_ms;
-            uint32_t total = fade_defaults.fade_out_ms;
-            uint8_t r = interp_u8(fade_defaults.r_off, fade_defaults.r_on, elapsed, total);
-            uint8_t g = interp_u8(fade_defaults.g_off, fade_defaults.g_on, elapsed, total);
-            uint8_t b = interp_u8(fade_defaults.b_off, fade_defaults.b_on, elapsed, total);
-            plugin_set_rgb(r, g, b);
+    /* Determine phase and calculate RGB values */
+    uint8_t r, g, b;
 
-            fade_elapsed_ms += fade_step_ms;
-            if (fade_elapsed_ms >= fade_defaults.fade_out_ms) {
-                plugin_set_rgb(fade_defaults.r_on, fade_defaults.g_on, fade_defaults.b_on);
-                fade_phase = 1;
-                fade_elapsed_ms = 0;
-                if (fade_timer != NULL) esp_timer_start_once(fade_timer, 1);
-                return;
-            } else {
-                if (fade_timer != NULL) esp_timer_start_once(fade_timer, (uint64_t)fade_step_ms * 1000ULL);
-                return;
-            }
-        }
+    if (cycle_progress_ms < fade_defaults.fade_in_ms) {
+        /* Phase 1: fade_in (on -> off) */
+        uint32_t elapsed = cycle_progress_ms;
+        uint32_t total = fade_defaults.fade_in_ms;
+        r = interp_u8(fade_defaults.r_on, fade_defaults.r_off, elapsed, total);
+        g = interp_u8(fade_defaults.g_on, fade_defaults.g_off, elapsed, total);
+        b = interp_u8(fade_defaults.b_on, fade_defaults.b_off, elapsed, total);
+    } else if (cycle_progress_ms < fade_defaults.fade_in_ms + fade_defaults.hold_ms) {
+        /* Phase 2: hold (off) */
+        r = fade_defaults.r_off;
+        g = fade_defaults.g_off;
+        b = fade_defaults.b_off;
+    } else {
+        /* Phase 3: fade_out (off -> on) */
+        uint32_t elapsed = cycle_progress_ms - fade_defaults.fade_in_ms - fade_defaults.hold_ms;
+        uint32_t total = fade_defaults.fade_out_ms;
+        r = interp_u8(fade_defaults.r_off, fade_defaults.r_on, elapsed, total);
+        g = interp_u8(fade_defaults.g_off, fade_defaults.g_on, elapsed, total);
+        b = interp_u8(fade_defaults.b_off, fade_defaults.b_on, elapsed, total);
     }
+
+    /* Update RGB LED */
+    plugin_set_rgb(r, g, b);
 }
 
 /*******************************************************
@@ -227,26 +236,24 @@ static esp_err_t fade_start(void)
     }
 
     /* Initialize state */
-    fade_phase = 1; /* start with fade_in (on -> off) */
-    fade_elapsed_ms = 0;
     fade_running = true;
     fade_paused = false; /* Clear pause flag when starting */
 
-    /* Ensure timer exists */
+    /* Ensure timer exists and is started (this also initializes cycle start time and counter) */
     if (fade_timer_start() != ESP_OK) {
         ESP_LOGE(TAG, "Failed to create/start fade timer");
         fade_running = false;
         return ESP_FAIL;
     }
 
-    /* Set initial color to 'on' values, then start immediately */
+    /* Set initial color to 'on' values (start of fade_in phase) */
     plugin_set_rgb(fade_defaults.r_on, fade_defaults.g_on, fade_defaults.b_on);
-    esp_timer_start_once(fade_timer, 1);
 
-    ESP_LOGI(TAG, "Fade effect started: on(%d,%d,%d) off(%d,%d,%d) in_ms=%u out_ms=%u hold_ms=%u",
+    ESP_LOGI(TAG, "Fade effect started: on(%d,%d,%d) off(%d,%d,%d) in_ms=%u out_ms=%u hold_ms=%u (cycle=%ums)",
              fade_defaults.r_on, fade_defaults.g_on, fade_defaults.b_on,
              fade_defaults.r_off, fade_defaults.g_off, fade_defaults.b_off,
-             fade_defaults.fade_in_ms, fade_defaults.fade_out_ms, fade_defaults.hold_ms);
+             fade_defaults.fade_in_ms, fade_defaults.fade_out_ms, fade_defaults.hold_ms,
+             fade_defaults.fade_in_ms + fade_defaults.hold_ms + fade_defaults.fade_out_ms);
     return ESP_OK;
 }
 
@@ -283,7 +290,7 @@ static esp_err_t effect_fade_on_pause(void)
     /* Set paused flag to prevent timer callback from continuing */
     fade_paused = true;
 
-    ESP_LOGI(TAG, "Fade effect paused (phase=%d, elapsed=%lu ms)", fade_phase, fade_elapsed_ms);
+    ESP_LOGI(TAG, "Fade effect paused");
     return ESP_OK;
 }
 
@@ -295,8 +302,8 @@ static esp_err_t effect_fade_on_reset(void)
     }
 
     /* Reset state */
-    fade_phase = 0;
-    fade_elapsed_ms = 0;
+    fade_last_counter = 0;
+    fade_cycle_start_us = 0;
     fade_running = false;
     fade_paused = false;
 

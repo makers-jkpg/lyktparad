@@ -3,6 +3,13 @@
  * This module provides fade effect functionality as a plugin.
  * The fade effect automatically starts when the plugin is activated.
  *
+ * The fade effect is synchronized to the internal heartbeat counter system.
+ * Each complete fade cycle (fade_in + hold + fade_out) takes exactly
+ * 1 heartbeat interval (1000ms). The plugin uses a periodic timer that
+ * reads the synchronized local heartbeat counter to determine cycle progress.
+ * Effects continue running even when mesh heartbeats stop (node out of range)
+ * and automatically resynchronize when the node rejoins the mesh.
+ *
  * Copyright (c) 2025 Arvind
  *
  * This example code is in the Public Domain (or CC0 licensed, at your option.)

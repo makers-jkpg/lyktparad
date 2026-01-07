@@ -15,6 +15,8 @@
 #include "effect_strobe_plugin.h"
 #include "plugin_system.h"
 #include "plugin_light.h"
+#include "mesh_common.h"
+#include "config/mesh_config.h"
 #include "config/mesh_device_config.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -27,7 +29,8 @@ static const char *TAG = "effect_strobe_plugin";
 /* Plugin ID storage (assigned during registration) */
 static uint8_t strobe_plugin_id = 0;
 
-/* Hardcoded default strobe parameters */
+/* Hardcoded default strobe parameters - 4 strobes per heartbeat interval (1000ms) */
+/* Each strobe = 250ms (125ms on, 125ms off) */
 static const struct {
     uint8_t r_on, g_on, b_on;
     uint8_t r_off, g_off, b_off;
@@ -36,15 +39,17 @@ static const struct {
 } strobe_defaults = {
     .r_on = 255, .g_on = 255, .b_on = 255,  /* White */
     .r_off = 0, .g_off = 0, .b_off = 0,      /* Black */
-    .duration_on_ms = 100,
-    .duration_off_ms = 100
+    .duration_on_ms = 125,  /* 125ms on per strobe */
+    .duration_off_ms = 125  /* 125ms off per strobe (total strobe = 250ms, 4 strobes = 1000ms) */
 };
 
 /* State variables */
 static esp_timer_handle_t strobe_timer = NULL;
-static bool strobe_is_on = false;
+static uint8_t strobe_last_counter = 0; /* Last counter value seen */
+static int64_t strobe_cycle_start_us = 0; /* Cycle start time in microseconds */
 static bool strobe_running = false;
 static bool strobe_paused = false;
+static const uint32_t strobe_update_interval_ms = 20; /* Update interval for smooth updates */
 
 /* Forward declarations */
 static void strobe_timer_callback(void *arg);
@@ -60,7 +65,20 @@ static esp_err_t strobe_stop(void);
 static esp_err_t strobe_timer_start(void)
 {
     if (strobe_timer != NULL) {
-        ESP_LOGD(TAG, "Timer already created");
+        /* Timer already exists, start periodic timer with update interval */
+        esp_err_t err = esp_timer_start_periodic(strobe_timer, (uint64_t)strobe_update_interval_ms * 1000ULL);
+        if (err == ESP_OK) {
+            ESP_LOGD(TAG, "Strobe timer started (periodic, %dms)", strobe_update_interval_ms);
+        } else if (err == ESP_ERR_INVALID_STATE) {
+            /* Timer already running, that's okay */
+            ESP_LOGD(TAG, "Strobe timer already running");
+        } else {
+            ESP_LOGE(TAG, "Failed to start strobe timer: %s", esp_err_to_name(err));
+            return err;
+        }
+        /* Reinitialize cycle start time and counter when restarting existing timer */
+        strobe_cycle_start_us = esp_timer_get_time();
+        strobe_last_counter = mesh_common_get_local_heartbeat_counter();
         return ESP_OK;
     }
 
@@ -77,7 +95,19 @@ static esp_err_t strobe_timer_start(void)
         return err;
     }
 
-    ESP_LOGI(TAG, "Strobe timer created");
+    err = esp_timer_start_periodic(strobe_timer, (uint64_t)strobe_update_interval_ms * 1000ULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start strobe timer: %s", esp_err_to_name(err));
+        esp_timer_delete(strobe_timer);
+        strobe_timer = NULL;
+        return err;
+    }
+
+    /* Initialize cycle start time and counter */
+    strobe_cycle_start_us = esp_timer_get_time();
+    strobe_last_counter = mesh_common_get_local_heartbeat_counter();
+
+    ESP_LOGI(TAG, "Strobe timer created and started (periodic, %dms, synchronized to heartbeat)", strobe_update_interval_ms);
     return ESP_OK;
 }
 
@@ -85,14 +115,14 @@ static esp_err_t strobe_timer_stop(void)
 {
     if (strobe_timer != NULL) {
         esp_timer_stop(strobe_timer);
-        esp_timer_delete(strobe_timer);
-        strobe_timer = NULL;
+        /* Don't delete timer - keep it for reuse */
     }
 
-    strobe_is_on = false;
+    strobe_last_counter = 0;
+    strobe_cycle_start_us = 0;
     strobe_running = false;
 
-    ESP_LOGI(TAG, "Strobe timer stopped and state cleared");
+    ESP_LOGI(TAG, "Strobe timer stopped");
     return ESP_OK;
 }
 
@@ -100,45 +130,71 @@ static esp_err_t strobe_timer_stop(void)
  *                Timer Callback
  *******************************************************/
 
+/**
+ * @brief Timer callback synchronized to heartbeat counter
+ *
+ * This callback fires every strobe_update_interval_ms (20ms) when the plugin is active.
+ * It reads the synchronized local heartbeat counter to determine the strobe cycle progress.
+ * Each complete strobe cycle (4 strobes) takes exactly 1 heartbeat interval (1000ms).
+ * Each strobe = 250ms (125ms on, 125ms off).
+ * The counter is used to synchronize cycles across all nodes, while the timer provides smooth updates.
+ */
 static void strobe_timer_callback(void *arg)
 {
+    (void)arg;
+
     /* Check if paused - if so, don't process timer callback */
     if (strobe_paused) {
         return;
     }
-    (void)arg;
 
-    /* Check if effect is running (strobe_running is set before timer starts) */
+    /* Check if effect is running */
     if (!strobe_running) {
         return;
     }
 
     /* Check if strobe plugin is active (double-check for safety) */
-    bool is_active = plugin_is_active("effect_strobe");
-    if (!is_active) {
+    if (!plugin_is_active("effect_strobe")) {
         ESP_LOGW(TAG, "Strobe timer callback called but plugin is not active, stopping timer");
         strobe_timer_stop();
         return;
     }
 
-    if (!strobe_is_on) {
-        /* Turn ON */
+    /* Read synchronized local heartbeat counter */
+    uint8_t counter = mesh_common_get_local_heartbeat_counter();
+
+    /* Check if counter has changed (new cycle started or synchronized after mesh reconnect) */
+    /* Counter normally increments by 1 each heartbeat interval, but may jump when synchronized */
+    if (counter != strobe_last_counter) {
+        /* Counter changed - new cycle started or resynchronized, reset cycle start time */
+        strobe_cycle_start_us = esp_timer_get_time();
+        strobe_last_counter = counter;
+    }
+
+    /* Calculate elapsed time since cycle start */
+    int64_t current_time_us = esp_timer_get_time();
+    int64_t elapsed_us = current_time_us - strobe_cycle_start_us;
+    uint32_t cycle_progress_ms = (uint32_t)(elapsed_us / 1000ULL);
+
+    /* Wrap cycle progress to heartbeat interval (1000ms) */
+    if (cycle_progress_ms >= MESH_CONFIG_HEARTBEAT_INTERVAL) {
+        /* Cycle complete, reset to start of cycle */
+        cycle_progress_ms = cycle_progress_ms % MESH_CONFIG_HEARTBEAT_INTERVAL;
+        strobe_cycle_start_us = current_time_us - (int64_t)cycle_progress_ms * 1000ULL;
+    }
+
+    /* Calculate position within strobe cycle */
+    uint32_t strobe_duration_ms = strobe_defaults.duration_on_ms + strobe_defaults.duration_off_ms; /* 250ms per strobe */
+    uint32_t strobe_position_ms = cycle_progress_ms % strobe_duration_ms; /* Position within current strobe (0-250ms) */
+
+    /* Determine if strobe is on or off based on position within strobe */
+    bool strobe_is_on = (strobe_position_ms < strobe_defaults.duration_on_ms);
+
+    /* Update RGB LED based on strobe state */
+    if (strobe_is_on) {
         plugin_set_rgb(strobe_defaults.r_on, strobe_defaults.g_on, strobe_defaults.b_on);
-        strobe_is_on = true;
-        /* Schedule next toggle after duration_on */
-        if (strobe_timer != NULL) {
-            esp_timer_start_once(strobe_timer, (uint64_t)strobe_defaults.duration_on_ms * 1000ULL);
-        }
-        return;
     } else {
-        /* Turn OFF */
         plugin_set_rgb(strobe_defaults.r_off, strobe_defaults.g_off, strobe_defaults.b_off);
-        strobe_is_on = false;
-        /* Schedule next toggle after duration_off */
-        if (strobe_timer != NULL) {
-            esp_timer_start_once(strobe_timer, (uint64_t)strobe_defaults.duration_off_ms * 1000ULL);
-        }
-        return;
     }
 }
 
@@ -154,25 +210,24 @@ static esp_err_t strobe_start(void)
     }
 
     /* Initialize state */
-    strobe_is_on = false;
     strobe_running = true;
     strobe_paused = false; /* Clear pause flag when starting */
 
-    /* Ensure timer exists */
-    esp_err_t timer_create_err = strobe_timer_start();
-    if (timer_create_err != ESP_OK) {
+    /* Ensure timer exists and is started (this also initializes cycle start time and counter) */
+    if (strobe_timer_start() != ESP_OK) {
         ESP_LOGE(TAG, "Failed to create/start strobe timer");
         strobe_running = false;
         return ESP_FAIL;
     }
 
-    /* Start immediately */
-    esp_timer_start_once(strobe_timer, 1);
+    /* Set initial color to off (start of first strobe) */
+    plugin_set_rgb(strobe_defaults.r_off, strobe_defaults.g_off, strobe_defaults.b_off);
 
-    ESP_LOGI(TAG, "Strobe effect started: on(%d,%d,%d) off(%d,%d,%d) on_ms=%u off_ms=%u",
+    ESP_LOGI(TAG, "Strobe effect started: on(%d,%d,%d) off(%d,%d,%d) on_ms=%u off_ms=%u (4 strobes per %ums)",
              strobe_defaults.r_on, strobe_defaults.g_on, strobe_defaults.b_on,
              strobe_defaults.r_off, strobe_defaults.g_off, strobe_defaults.b_off,
-             strobe_defaults.duration_on_ms, strobe_defaults.duration_off_ms);
+             strobe_defaults.duration_on_ms, strobe_defaults.duration_off_ms,
+             MESH_CONFIG_HEARTBEAT_INTERVAL);
     return ESP_OK;
 }
 
@@ -209,7 +264,7 @@ static esp_err_t effect_strobe_on_pause(void)
     /* Set paused flag to prevent timer callback from continuing */
     strobe_paused = true;
 
-    ESP_LOGI(TAG, "Strobe effect paused (is_on=%d)", strobe_is_on);
+    ESP_LOGI(TAG, "Strobe effect paused");
     return ESP_OK;
 }
 
@@ -221,7 +276,8 @@ static esp_err_t effect_strobe_on_reset(void)
     }
 
     /* Reset state */
-    strobe_is_on = false;
+    strobe_last_counter = 0;
+    strobe_cycle_start_us = 0;
     strobe_running = false;
     strobe_paused = false;
 
