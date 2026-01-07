@@ -18,7 +18,8 @@
 #define __PLUGINS_H__
 
 /* Include plugin headers */
-#include "plugins/effects/effects_plugin.h"
+#include "plugins/effect_strobe/effect_strobe_plugin.h"
+#include "plugins/effect_fade/effect_fade_plugin.h"
 #include "plugins/sequence/sequence_plugin.h"
 
 /**
@@ -29,8 +30,11 @@
  */
 static inline void plugins_init(void)
 {
-    /* Register effects plugin */
-    effects_plugin_register();
+    /* Register effect_strobe plugin */
+    effect_strobe_plugin_register();
+
+    /* Register effect_fade plugin */
+    effect_fade_plugin_register();
 
     /* Register sequence plugin */
     sequence_plugin_register();

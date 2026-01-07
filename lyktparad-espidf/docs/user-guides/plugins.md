@@ -1,6 +1,8 @@
 # Plugins - User Guide
 
-**Last Updated:** 2025-01-XX
+**Last Updated:** 2025-01-27
+
+**Note**: Basic UI feature added for plugins without custom HTML files. Plugin protocol redesigned with plugin ID prefix (0x0B-0xEE). API endpoints added for plugin control (stop, pause, reset).
 
 ## Table of Contents
 
@@ -26,23 +28,39 @@ Plugins are modular extensions to the mesh network firmware that provide additio
 
 ### How Plugins Work
 
-Plugins register with the system during firmware initialization and receive a unique command ID. When mesh commands are received, the system automatically routes commands to the appropriate plugin based on the command ID.
+Plugins register with the system during firmware initialization and receive a unique plugin ID (0x0B-0xEE). When mesh commands are received, the system automatically routes commands to the appropriate plugin based on the plugin ID in the command. The plugin protocol is self-contained and stateless - each command includes the plugin ID, making commands independent of activation state.
 
 ## Available Plugins
 
-### Effects Plugin
+### Effect Strobe Plugin
 
-The Effects plugin provides synchronized visual effects across all mesh nodes.
+The Effect Strobe plugin provides synchronized strobe (on/off flashing) effects across all mesh nodes.
 
 **Features:**
-- Strobe effects (on/off flashing)
-- Fade effects (smooth color transitions)
-- Configurable timing and colors
-- Repeat count support
+- Automatic effect start when plugin is activated
+- White strobe effect (100ms on, 100ms off)
+- Continuous operation until plugin deactivation
+- Hardcoded default parameters (no configuration needed)
 
-**Commands:**
-- Effect commands are sent via mesh with effect parameters
-- Supports strobe and fade effect types
+**Usage:**
+- Activate the plugin to start the strobe effect automatically
+- Deactivate the plugin to stop the effect
+- Effect runs continuously with default parameters
+
+### Effect Fade Plugin
+
+The Effect Fade plugin provides synchronized fade (smooth color transitions) effects across all mesh nodes.
+
+**Features:**
+- Automatic effect start when plugin is activated
+- Smooth fade transitions (500ms fade in, 200ms hold, 500ms fade out)
+- Continuous operation until plugin deactivation
+- Hardcoded default parameters (no configuration needed)
+
+**Usage:**
+- Activate the plugin to start the fade effect automatically
+- Deactivate the plugin to stop the effect
+- Effect runs continuously with default parameters
 
 ### Sequence Plugin
 
@@ -54,6 +72,14 @@ The Sequence plugin provides synchronized color sequence playback across all mes
 - Tempo control (speed adjustment)
 - Start, stop, and reset controls
 - Beat synchronization for child nodes
+- Hardcoded default RGB-rainbow pattern (loaded automatically if no user data exists)
+
+**Default Data:**
+- The sequence plugin includes a hardcoded RGB-rainbow pattern that is automatically loaded at initialization if no user sequence data exists
+- Default tempo: 50ms (rhythm = 5)
+- Default length: 16 rows (256 squares)
+- Users can override the default data by uploading their own sequence via the web UI
+- Currently, only RGB-rainbow is supported as default data (future extensibility planned)
 
 **Commands:**
 - Sequence data storage and broadcast
@@ -70,33 +96,54 @@ The Sequence plugin provides synchronized color sequence playback across all mes
 
 ### Command Format
 
-Plugins receive commands via the mesh network. Commands are sent as binary data with:
-- Command ID: Plugin's assigned command ID (0x10-0xEF)
-- Command byte: Specific command within the plugin
-- Additional data: Command-specific parameters
+Plugins receive commands via the mesh network using a self-contained protocol format:
 
-### Effects Plugin Usage
+```
+[PLUGIN_ID:1] [CMD:1] [LENGTH:2?] [DATA:N]
+```
 
-#### Strobe Effect
+- **PLUGIN_ID** (1 byte): Plugin's assigned plugin ID (0x0B-0xEE)
+- **CMD** (1 byte): Command type:
+  - `PLUGIN_CMD_START` (0x01): Start plugin playback
+  - `PLUGIN_CMD_PAUSE` (0x02): Pause plugin playback
+  - `PLUGIN_CMD_RESET` (0x03): Reset plugin state
+  - `PLUGIN_CMD_DATA` (0x04): Plugin-specific data (variable length)
+  - `PLUGIN_CMD_BEAT` (0x05): Beat synchronization (4 bytes: PLUGIN_ID + CMD + POINTER + COUNTER)
+- **LENGTH** (2 bytes, optional): Length prefix for variable-length data (only for DATA commands)
+- **DATA** (N bytes, optional): Command-specific parameters
 
-Send a strobe effect command with:
-- Effect ID: `EFFECT_STROBE` (1)
-- On color: RGB values for "on" state
-- Off color: RGB values for "off" state
-- Duration on: Time in milliseconds for "on" state
-- Duration off: Time in milliseconds for "off" state
-- Repeat count: Number of cycles (0 = infinite)
+**Command Sizes**:
+- START, PAUSE, RESET: 2 bytes (PLUGIN_ID + CMD)
+- BEAT: 4 bytes (PLUGIN_ID + CMD + POINTER + COUNTER)
+  - POINTER: Current position (0-255)
+  - COUNTER: Synchronization counter (0-255, increments on root node, wraps around)
 
-#### Fade Effect
+**Total size**: Maximum 1024 bytes (including all fields)
 
-Send a fade effect command with:
-- Effect ID: `EFFECT_FADE` (2)
-- Start color: RGB values for fade start
-- End color: RGB values for fade end
-- Fade in time: Time in milliseconds for fade in
-- Fade out time: Time in milliseconds for fade out
-- Hold time: Time in milliseconds to hold at end color
-- Repeat count: Number of cycles (0 = infinite)
+**Mutual Exclusivity**: When a START command is received for a plugin, the system automatically stops any other running plugin before activating the target plugin.
+
+### Effect Strobe Plugin Usage
+
+The Effect Strobe plugin automatically starts its effect when activated. No commands are needed - simply activate the plugin to start the strobe effect.
+
+**Default Parameters:**
+- On color: RGB(255, 255, 255) - white
+- Off color: RGB(0, 0, 0) - black
+- Duration on: 100ms
+- Duration off: 100ms
+- Repeat: Infinite (runs until plugin deactivated)
+
+### Effect Fade Plugin Usage
+
+The Effect Fade plugin automatically starts its effect when activated. No commands are needed - simply activate the plugin to start the fade effect.
+
+**Default Parameters:**
+- On color: RGB(255, 255, 255) - white
+- Off color: RGB(0, 0, 0) - black
+- Fade in: 500ms (smooth fade from on to off)
+- Fade out: 500ms (smooth fade from off to on)
+- Hold duration: 200ms (hold at off color before fading back)
+- Repeat: Infinite (runs until plugin deactivated)
 
 ### Sequence Plugin Usage
 
@@ -125,74 +172,87 @@ On the root node:
 On child nodes:
 - Sequence data is received and stored
 - Playback follows root node timing
-- Beat commands update pointer position for synchronization
+- Beat commands update pointer position for synchronization (includes pointer and counter)
 
 ## Web Interface
 
 ### Accessing the Web Interface
 
-Plugins with web interfaces are accessible through:
-- **Embedded Webserver**: Connect to the root node's IP address (if root node)
-- **External Webserver**: Access via the Node.js server (if running)
+The embedded webserver on the root node provides a simple plugin control interface accessible at the root node's IP address. The external webserver (Node.js) may provide additional features for plugins with custom HTML interfaces.
 
-### Plugin Selection
+### Embedded Webserver Interface
 
-The web interface includes a dropdown menu at the top right of the page that allows you to select which plugin's interface to view. Only one plugin's interface is visible at a time.
+The embedded webserver serves a simple static HTML page that provides basic plugin control functionality:
 
-**Using the Dropdown:**
-1. Click the dropdown menu at the top right of the page
-2. Select the plugin you want to view from the list
-3. The selected plugin's interface will be displayed
-4. Your selection is saved and will persist across page reloads
+**Features:**
+- **Plugin Selection Dropdown**: Lists all available plugins
+- **Active Plugin Display**: Shows which plugin is currently active
+- **Control Buttons**:
+  - **Play**: Activates the selected plugin (equivalent to START)
+  - **Pause**: Temporarily pauses the plugin's operation
+  - **Rewind**: Resets the plugin's internal state
+- **Status Messages**: Shows success/error feedback for operations
+- **Auto-refresh**: Active plugin status is polled every 2 seconds
 
-**Page Layout:**
-- **Header (Top 150px)**: Fixed header showing "MAKERS JÖNKÖPING LJUSPARAD 2026" title and the plugin dropdown
-- **Content Area**: Takes up the remaining viewport height, showing the selected plugin's interface
+**Using the Interface:**
+1. Connect to the root node's IP address in your web browser
+2. Select a plugin from the dropdown menu
+3. Click **Play** to activate the plugin
+4. Use **Pause** to pause, or **Rewind** to reset the plugin state
+5. The active plugin indicator updates automatically
 
-**Plugin Visibility:**
-- Only the selected plugin's HTML is visible
-- Other plugins are hidden automatically
-- The dropdown shows all available plugins with formatted names (e.g., "Effects", "Sequence")
+**Note**: The embedded webserver provides a simple control interface. For plugins with custom HTML interfaces, use the external webserver which serves plugin-specific HTML files.
 
-### Sequence Plugin Web Interface
+### External Webserver Plugin Interfaces
 
-The Sequence plugin provides a full web interface for creating and controlling sequences.
+Plugins with custom HTML files are served by the external webserver (Node.js). These interfaces provide full-featured control and configuration for plugins that require complex UIs.
 
-#### Grid Editor
+**Accessing Plugin Interfaces:**
+- Plugin HTML files are served at `/plugins/<plugin-name>/<plugin-name>.html` or `/plugins/<plugin-name>/index.html`
+- JavaScript and CSS files are served from `/plugins/<plugin-name>/js/` and `/plugins/<plugin-name>/css/` respectively
 
-- **16x16 Color Grid**: Click squares to set colors
-- **Color Picker**: Select colors for grid squares
-- **Row Management**: Add or remove rows (1-16 rows)
-- **Visual Preview**: See sequence as you design it
+**Sequence Plugin Interface:**
+The Sequence plugin provides a full web interface accessible via the external webserver:
+- **Grid Editor**: 16x16 color grid for sequence design
+- **Tempo Controls**: Adjust playback speed
+- **Playback Controls**: Start, stop, and reset
+- **Export/Import**: CSV file support
 
-#### Tempo Controls
-
-- **Tempo Slider**: Adjust playback speed (1-255)
-- **Tempo Display**: Shows current tempo value
-- **Real-time Updates**: Tempo changes apply immediately
-
-#### Playback Controls
-
-- **Start Button**: Begin sequence playback
-- **Stop Button**: Stop sequence playback
-- **Reset Button**: Reset to beginning
-- **Status Display**: Shows current playback state
-
-#### Export/Import
-
-- **Export**: Download sequence as CSV file
-- **Import**: Upload sequence from CSV file
-- **Format**: CSV format with color data
-
-### Effects Plugin
-
-The Effects plugin does not currently provide a web interface. Effects are controlled via mesh commands or API calls.
+**Effect Strobe and Effect Fade Plugins:**
+The Effect Strobe and Effect Fade plugins do not currently provide web interfaces. Effects are automatically started when the plugins are activated via the plugin control API or web interface.
 
 ## API Integration
 
 ### HTTP API
 
 Plugins can be controlled via HTTP API endpoints on both embedded and external webservers.
+
+#### General Plugin API
+
+**Plugin Activation/Deactivation:**
+- `POST /api/plugin/activate` - Activate a plugin by name
+  - Request: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}`
+- `POST /api/plugin/deactivate` - Deactivate a plugin by name
+  - Request: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}`
+- `GET /api/plugin/active` - Get currently active plugin
+  - Response: `{"plugin": "plugin_name"}` or `{"plugin": null}`
+
+**Plugin Control Commands:**
+- `POST /api/plugin/stop` - Stop plugin (gracefully pauses then deactivates)
+  - Request: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}`
+- `POST /api/plugin/pause` - Pause plugin playback
+  - Request: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}`
+- `POST /api/plugin/reset` - Reset plugin state
+  - Request: `{"name": "plugin_name"}`
+  - Response: `{"success": true, "plugin": "plugin_name"}`
+
+**Plugin Discovery:**
+- `GET /api/plugins` - Get list of all registered plugins
+  - Response: `{"plugins": ["plugin1", "plugin2", ...]}`
 
 #### Sequence Plugin API
 
@@ -233,9 +293,29 @@ GET /api/sequence/status
 GET /api/sequence/pointer
 ```
 
-#### Effects Plugin API
+#### Effect Strobe and Effect Fade Plugin API
 
-Effects are typically controlled via mesh commands rather than HTTP API, but API endpoints may be available depending on implementation.
+Effect plugins are controlled via the general plugin activation/deactivation API:
+
+**Activate Effect Strobe:**
+```
+POST /api/plugin/activate
+{"name": "effect_strobe"}
+```
+
+**Activate Effect Fade:**
+```
+POST /api/plugin/activate
+{"name": "effect_fade"}
+```
+
+**Deactivate Effect:**
+```
+POST /api/plugin/deactivate
+{"name": "effect_strobe"}  /* or "effect_fade" */
+```
+
+Effects automatically start when activated and stop when deactivated. No additional commands are needed.
 
 ### UDP Bridge API
 
@@ -258,15 +338,16 @@ The UDP bridge can forward API commands to the mesh network, allowing remote con
 ### Web Interface Not Loading
 
 **Symptoms:**
-- Plugin web interface doesn't appear
-- JavaScript errors in browser console
-- CSS styles not applied
+- Embedded webserver page doesn't load
+- Plugin list is empty
+- Control buttons don't work
 
 **Solutions:**
-- Check that plugin HTML/JS/CSS files exist
-- Verify webserver is running (embedded or external)
+- Verify root node has obtained an IP address
+- Check that webserver is running (check serial logs)
+- Verify you're accessing the root node (not a child node)
 - Check browser console for errors
-- Clear browser cache and reload
+- For external webserver plugin interfaces: Verify external server is running and plugin files are copied
 
 ### Sequence Not Synchronized
 
@@ -283,14 +364,15 @@ The UDP bridge can forward API commands to the mesh network, allowing remote con
 ### Effects Not Playing
 
 **Symptoms:**
-- Effect commands sent but no visual output
+- Effect doesn't start when plugin is activated
 - Effect stops unexpectedly
 
 **Solutions:**
-- Check effect parameters are valid
+- Verify plugin is activated (check active plugin status)
+- Check that only one plugin is active at a time (plugin exclusivity)
 - Verify LED hardware is connected
-- Check effect timer is running
-- Review firmware logs for errors
+- Check effect timer is running (review firmware logs)
+- Verify plugin registered successfully during initialization
 
 ### Command ID Conflicts
 
@@ -299,8 +381,10 @@ The UDP bridge can forward API commands to the mesh network, allowing remote con
 - Unexpected behavior
 
 **Solutions:**
-- Command IDs are assigned automatically - conflicts should not occur
-- If issues persist, check plugin registration order
+- Plugin IDs are assigned automatically - conflicts should not occur
+- Plugin IDs are deterministic based on registration order in firmware
+- If issues persist, verify all nodes have the same firmware version
+- Check plugin registration order matches across all nodes
 - Verify only one plugin with same name is registered
 
 ## Additional Resources

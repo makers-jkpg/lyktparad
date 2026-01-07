@@ -118,7 +118,10 @@ function jsonToBinary(commandId, jsonBody) {
 
         case UDP_CMD_API_PLUGIN_ACTIVATE:
         case UDP_CMD_API_PLUGIN_DEACTIVATE:
-            // POST /api/plugin/activate or /api/plugin/deactivate: { "name": "effects" }
+        case UDP_CMD_API_PLUGIN_STOP:
+        case UDP_CMD_API_PLUGIN_PAUSE:
+        case UDP_CMD_API_PLUGIN_RESET:
+            // POST /api/plugin/activate, /api/plugin/deactivate, /api/plugin/stop, /api/plugin/pause, /api/plugin/reset: { "name": "effects" }
             // Binary: [name_len:1][name:N bytes]
             const name = jsonBody.name || '';
             const nameBytes = Buffer.from(name, 'utf8');

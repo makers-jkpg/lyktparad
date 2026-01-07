@@ -24,16 +24,15 @@
 #include "mesh_web.h"
 #include "mesh_commands.h"
 #include "light_neopixel.h"
-#include "plugins/effects/effects_plugin.h"
+#include "plugin_system.h"
 #include "light_common_cathode.h"
 #include "config/mesh_config.h"
+#include "config/mesh_device_config.h"
 #include "mesh_ota.h"
 #include "mesh_udp_bridge.h"
 #ifdef ROOT_STATUS_LED_GPIO
 #include "root_status_led.h"
 #endif
-#include "plugins/sequence/sequence_plugin.h"
-#include "mesh_udp_bridge.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/inet.h"
@@ -70,7 +69,7 @@ static bool root_rgb_has_been_set = false;
 static void heartbeat_timer_start(void)
 {
     if (heartbeat_timer != NULL) {
-        esp_err_t err = esp_timer_start_periodic(heartbeat_timer, 500000); /* 500ms */
+        esp_err_t err = esp_timer_start_periodic(heartbeat_timer, 1000000); /* 1000ms */
         if (err == ESP_OK) {
             ESP_LOGI(MESH_TAG, "[HEARTBEAT] Timer started");
         } else {
@@ -102,9 +101,6 @@ static void heartbeat_timer_cb(void *arg)
         return;
     }
 
-    /* Send strobe effect command to all child nodes - this call will be moved to wherever it belongs in the future */
-//    mesh_send_strobe_effect();
-    mesh_send_fade_effect();
 
     mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
     int route_table_size = 0;
@@ -133,22 +129,12 @@ static void heartbeat_timer_cb(void *arg)
     /* Calculate actual child node count (excluding root node) */
     int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
 
-    // #region agent log
-    ESP_LOGI(MESH_TAG, "[DEBUG HYP-A] heartbeat_timer_cb entry - route_table_size:%d child_node_count:%d heartbeat_count:%lu",
-             route_table_size, child_node_count, (unsigned long)cnt);
-    // #endregion
-
     /* Log routing table size changes for debugging */
     static int last_route_table_size = -1;
     if (route_table_size != last_route_table_size) {
         ESP_LOGI(mesh_common_get_tag(), "[ROUTING TABLE CHANGE] Size changed: %d -> %d", last_route_table_size, route_table_size);
         last_route_table_size = route_table_size;
     }
-
-    // #region agent log
-    ESP_LOGI(MESH_TAG, "[DEBUG HYP-B] heartbeat_timer_cb before send loop - route_table_size:%d child_node_count:%d will_send:%s",
-             route_table_size, child_node_count, (route_table_size > 0) ? "true" : "false");
-    // #endregion
 
     for (i = 0; i < route_table_size; i++) {
         err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
@@ -173,132 +159,32 @@ static void heartbeat_timer_cb(void *arg)
     }
     // #endregion
 
+    /* Skip LED control if plugin is active (plugin controls LED exclusively)
+     * This check ensures that if LED control is ever added back to the heartbeat handler,
+     * it will not override plugin control. Heartbeat counting and mesh command sending
+     * continue normally regardless of plugin state.
+     */
+    const char *active_plugin = plugin_get_active();
+    if (active_plugin != NULL) {
+        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - skipping LED change (plugin '%s' active)", (unsigned long)cnt, active_plugin);
+    }
+
     /* Unified LED behavior for all nodes (root and child):
      * - Even heartbeat: LED OFF
      * - Odd heartbeat: LED ON (BLUE default or custom RGB)
-     * - Skip LED changes if sequence mode is active (sequence controls LED)
+     * - Skip LED changes if plugin is active (plugin controls LED)
      */
-    if (sequence_plugin_root_is_active()) {
-        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - skipping LED change (sequence active)", (unsigned long)cnt);
-    } else if (!(cnt % 2)) {
-        /* even heartbeat: turn off light */
-        mesh_light_set_colour(0);
-        set_rgb_led(0, 0, 0);
-        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu (even) - LED OFF", (unsigned long)cnt);
-    } else {
-        /* odd heartbeat: turn on light using last RGB color or default to MESH_LIGHT_BLUE */
-        if (root_rgb_has_been_set) {
-            /* Use the color from the latest MESH_CMD_SET_RGB command */
-            mesh_light_set_rgb(root_rgb_r, root_rgb_g, root_rgb_b);
-            set_rgb_led(root_rgb_r, root_rgb_g, root_rgb_b);
-            ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu (odd) - LED RGB(%d,%d,%d)",
-                     (unsigned long)cnt, root_rgb_r, root_rgb_g, root_rgb_b);
-        } else {
-            /* Default to MESH_LIGHT_BLUE if no RGB command has been received */
-            mesh_light_set_colour(MESH_LIGHT_BLUE);
-            set_rgb_led(0, 0, 155);  /* Match MESH_LIGHT_BLUE RGB values */
-            ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu (odd) - LED BLUE (default)", (unsigned long)cnt);
-        }
-    }
+    /* Heartbeat counting and mesh command sending continue, but RGB LED control is removed
+     * RGB LEDs are now exclusive to plugins via plugin_light_set_rgb() and plugin_set_rgb_led()
+     * Status indication uses root status LED (ROOT_STATUS_LED_GPIO) instead
+     */
+    ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu", (unsigned long)cnt);
 }
 
 /*******************************************************
  *                Root-Specific Functions
  *******************************************************/
 
-esp_err_t mesh_send_fade_effect()
-{
-    /* only root should send the heartbeat */
-    if (!esp_mesh_is_root()) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
-    int route_table_size = 0;
-    int i;
-
-    esp_err_t err;
-    mesh_data_t data;
-    uint8_t *tx_buf = mesh_common_get_tx_buf();
-
-    struct effect_params_fade_t *fade_params = (struct effect_params_fade_t *)tx_buf;
-    fade_params->base.command = MESH_CMD_EFFECT;
-    fade_params->base.effect_id = EFFECT_FADE;
-    fade_params->base.start_delay_ms = 0;  /* will be set per-node below */
-    fade_params->r_on = 0;
-    fade_params->g_on = 0;
-    fade_params->b_on = 0;
-    fade_params->r_off = 255;
-    fade_params->g_off = 0;
-    fade_params->b_off = 0;
-    fade_params->fade_in_ms = 100;
-    fade_params->fade_out_ms = 100;
-    fade_params->duration_ms = 100;
-    fade_params->repeat_count = 1;
-
-    data.data = tx_buf;
-    data.size = sizeof(struct effect_params_fade_t);
-    data.proto = MESH_PROTO_BIN;
-    data.tos = MESH_TOS_P2P;
-
-    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
-
-    for (i = 0; i < route_table_size; i++) {
-        fade_params->base.start_delay_ms = i * 100;  /* stagger start delay by 50ms per node */
-        err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
-        if (err) {
-            ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
-        }
-    }
-    ESP_LOGI(mesh_common_get_tag(), "Fade effect sent");
-    return ESP_OK;
-}
-esp_err_t mesh_send_strobe_effect()
-{
-    /* only root should send the heartbeat */
-    if (!esp_mesh_is_root()) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
-    int route_table_size = 0;
-    int i;
-
-    esp_err_t err;
-    mesh_data_t data;
-    uint8_t *tx_buf = mesh_common_get_tx_buf();
-
-    struct effect_params_strobe_t *strobe_params = (struct effect_params_strobe_t *)tx_buf;
-    strobe_params->base.command = MESH_CMD_EFFECT;
-    strobe_params->base.effect_id = EFFECT_STROBE;
-    strobe_params->base.start_delay_ms = 0;  /* will be set per-node below */
-    strobe_params->r_on = 255;
-    strobe_params->g_on = 255;
-    strobe_params->b_on = 255;
-    strobe_params->r_off = 0;
-    strobe_params->g_off = 0;
-    strobe_params->b_off = 0;
-    strobe_params->duration_on = 10;
-    strobe_params->duration_off = 100;
-    strobe_params->repeat_count = 1;
-
-    data.data = tx_buf;
-    data.size = sizeof(struct effect_params_strobe_t);
-    data.proto = MESH_PROTO_BIN;
-    data.tos = MESH_TOS_P2P;
-
-    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
-
-    for (i = 0; i < route_table_size; i++) {
-        strobe_params->base.start_delay_ms = i * 100;  /* stagger start delay by 50ms per node */
-        err = esp_mesh_send(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
-        if (err) {
-            ESP_LOGD(MESH_TAG, "heartbeat broadcast err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
-        }
-    }
-    ESP_LOGI(mesh_common_get_tag(), "Strobe effect sent");
-    return ESP_OK;
-}
 
 esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
 {
@@ -335,12 +221,9 @@ esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
     root_rgb_b = b;
     root_rgb_has_been_set = true;
 
-    /* Update root node's own LED */
-    err = mesh_light_set_rgb(r, g, b);
-    if (err != ESP_OK) {
-        ESP_LOGE(mesh_common_get_tag(), "[RGB] failed to set root node LED: 0x%x", err);
-    }
-    set_rgb_led(r, g, b);
+    /* RGB LED control removed - LEDs are now exclusive to plugins
+     * State is still stored for web UI queries via mesh_get_current_rgb()
+     */
 
     if (child_node_count == 0) {
         ESP_LOGD(mesh_common_get_tag(), "[RGB SENT] R:%d G:%d B:%d - no child nodes", r, g, b);
@@ -404,21 +287,27 @@ void mesh_root_handle_rgb_command(uint8_t r, uint8_t g, uint8_t b)
         return;
     }
 
-    /* Store RGB values for use in heartbeat handler */
+    /* Store RGB values for web interface queries */
     root_rgb_r = r;
     root_rgb_g = g;
     root_rgb_b = b;
     root_rgb_has_been_set = true;
 
-    /* Update root node's LED immediately */
-    esp_err_t err = mesh_light_set_rgb(r, g, b);
-    if (err != ESP_OK) {
-        ESP_LOGE(mesh_common_get_tag(), "[RGB] failed to set root node LED: 0x%x", err);
+    /* If plugin is active, don't override plugin control
+     * This check ensures that if LED control is ever added back to this function,
+     * it will not override plugin control. State storage for web UI continues regardless.
+     */
+    const char *active_plugin = plugin_get_active();
+    if (active_plugin != NULL) {
+        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] RGB command ignored - plugin '%s' active", active_plugin);
+        return;
     }
-    set_rgb_led(r, g, b);
 
-    /* Stop sequence playback if active */
-    sequence_plugin_root_stop();
+    /* RGB LED control removed - LEDs are now exclusive to plugins
+     * State is still stored for web UI queries via mesh_get_current_rgb()
+     * RGB commands should be routed to plugin system instead
+     * Note: Plugin pause logic removed - plugins control RGB LEDs exclusively
+     */
 
     ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] RGB command received via mesh: R:%d G:%d B:%d", r, g, b);
 }
@@ -555,7 +444,7 @@ static void mesh_root_event_callback(void *arg, esp_event_base_t event_base,
  * UDP broadcast listener runs in background as a runtime fallback.
  * Discovery does not affect web server operation (embedded server always works).
  */
-static void discovery_task(void *pvParameters)
+__attribute__((unused)) static void discovery_task(void *pvParameters)
 {
     char server_ip[16] = {0};
     uint16_t server_port = 0;
@@ -672,6 +561,7 @@ static void mesh_root_ip_callback(void *arg, esp_event_base_t event_base,
     } else {
         ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Web server started successfully");
 
+#ifndef ONLY_ONBOARD_HTTP
         /* Start UDP broadcast listener (runtime fallback discovery mechanism) */
         /* mDNS discovery is the primary method and is tried first via discovery_task. */
         /* UDP broadcast listener runs in the background and is used as a runtime fallback */
@@ -690,6 +580,9 @@ static void mesh_root_ip_callback(void *arg, esp_event_base_t event_base,
         } else {
             ESP_LOGI(mesh_common_get_tag(), "[DISCOVERY] Discovery task started");
         }
+#else
+        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] ONLY_ONBOARD_HTTP enabled - external webserver functionality disabled");
+#endif /* ONLY_ONBOARD_HTTP */
     }
 }
 

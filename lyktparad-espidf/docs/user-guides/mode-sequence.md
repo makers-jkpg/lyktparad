@@ -53,6 +53,13 @@ When you first access the interface:
 - **All squares**: Start with black color (RGB: 0, 0, 0)
 - **Row count selector**: Set to 4 rows
 
+**Default Sequence Data:**
+- The sequence plugin automatically loads a hardcoded RGB-rainbow pattern at initialization if no user sequence data exists
+- Default tempo: 50ms (rhythm = 5)
+- Default length: 16 rows (256 squares)
+- This provides immediate visual feedback when the sequence plugin is activated
+- Users can override the default data by uploading their own sequence via the web UI
+
 ## Features Overview
 
 ### Grid Interface
@@ -224,7 +231,13 @@ See `docs/example-patterns/SOS.csv` for the complete pattern.
 
 ### Example 3: Rainbow Gradient
 
-This creates a smooth rainbow gradient across the grid:
+The sequence plugin includes a hardcoded RGB-rainbow pattern that is automatically loaded if no user data exists. To use it:
+
+1. Activate the sequence plugin (if not already active)
+2. The default RGB-rainbow pattern is already loaded (16 rows, 50ms tempo)
+3. Start playback to see the rainbow animation
+
+Alternatively, you can import the CSV file manually:
 
 1. Set row count to 16 (256 squares)
 2. Use the import function
@@ -233,6 +246,8 @@ This creates a smooth rainbow gradient across the grid:
 5. Sync to nodes
 
 See `docs/example-patterns/RGB-rainbow.csv` for the complete pattern.
+
+**Note**: The default RGB-rainbow pattern is hardcoded in the firmware and loads automatically at initialization if no user sequence data exists. This provides immediate visual feedback without requiring manual sequence upload.
 
 ## Creating Sequences with External Tools
 

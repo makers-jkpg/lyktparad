@@ -13,10 +13,11 @@
  * CONDITIONS OF ANY KIND, either express or implied.
  */
 
+#include "config/mesh_device_config.h"
+
 #ifdef ROOT_STATUS_LED_GPIO
 
 #include "root_status_led.h"
-#include "config/mesh_device_config.h"
 #include "mesh_common.h"
 #include "esp_mesh.h"
 #include "driver/gpio.h"
@@ -24,6 +25,16 @@
 #include "esp_timer.h"
 
 static const char *TAG = "root_status_led";
+
+/* GPIO level helper macro - applies invert logic if ROOT_STATUS_LED_INVERT is defined
+ * When ROOT_STATUS_LED_INVERT is defined: LED ON (true) → GPIO LOW (0), LED OFF (false) → GPIO HIGH (1)
+ * When ROOT_STATUS_LED_INVERT is undefined: LED ON (true) → GPIO HIGH (1), LED OFF (false) → GPIO LOW (0)
+ */
+#ifdef ROOT_STATUS_LED_INVERT
+#define ROOT_STATUS_LED_GPIO_LEVEL(state) ((state) ? 0 : 1)
+#else
+#define ROOT_STATUS_LED_GPIO_LEVEL(state) ((state) ? 1 : 0)
+#endif
 
 /* Blinking pattern step structure */
 typedef struct {
@@ -114,7 +125,7 @@ static void root_status_led_blink_timer_cb(void *arg)
     const pattern_step_t *step = &current_pattern_steps[current_step_index];
 
     /* Set LED state */
-    gpio_set_level(ROOT_STATUS_LED_GPIO, step->led_state ? 1 : 0);
+    gpio_set_level(ROOT_STATUS_LED_GPIO, ROOT_STATUS_LED_GPIO_LEVEL(step->led_state));
 
     /* Advance to next step */
     current_step_index++;
@@ -144,7 +155,7 @@ static void root_status_led_stop_blinking(void)
     current_pattern_step_count = 0;
     current_pattern_steps = NULL;
     if (is_initialized) {
-        gpio_set_level(ROOT_STATUS_LED_GPIO, 0);
+        gpio_set_level(ROOT_STATUS_LED_GPIO, ROOT_STATUS_LED_GPIO_LEVEL(false));
     }
 }
 
@@ -181,7 +192,7 @@ static void root_status_led_start_blinking(root_led_pattern_t pattern)
 
     /* Start with first step */
     const pattern_step_t *step = &steps[0];
-    gpio_set_level(ROOT_STATUS_LED_GPIO, step->led_state ? 1 : 0);
+    gpio_set_level(ROOT_STATUS_LED_GPIO, ROOT_STATUS_LED_GPIO_LEVEL(step->led_state));
 
     /* Schedule next step */
     if (step_count > 1) {
@@ -234,7 +245,7 @@ esp_err_t root_status_led_init(void)
         current_pattern = ROOT_LED_PATTERN_STARTUP;
         root_status_led_start_blinking(ROOT_LED_PATTERN_STARTUP);
     } else {
-        gpio_set_level(ROOT_STATUS_LED_GPIO, 0);
+        gpio_set_level(ROOT_STATUS_LED_GPIO, ROOT_STATUS_LED_GPIO_LEVEL(false));
         current_pattern = ROOT_LED_PATTERN_OFF;
     }
 

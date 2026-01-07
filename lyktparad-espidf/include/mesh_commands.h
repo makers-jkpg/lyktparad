@@ -26,12 +26,13 @@
 #define  MESH_CMD_HEARTBEAT      (0x01)
 #define  MESH_CMD_LIGHT_ON_OFF   (0x02)
 #define  MESH_CMD_SET_RGB        (0x03)
-#define  MESH_CMD_SEQUENCE       (0x04)  /* Sequence command: 386 bytes total (1 byte command + 1 byte rhythm + 384 bytes color data) */
-#define  MESH_CMD_SEQUENCE_START (0x05)  /* Start sequence playback */
-#define  MESH_CMD_SEQUENCE_STOP  (0x06)  /* Stop sequence playback */
-#define  MESH_CMD_SEQUENCE_RESET (0x07)  /* Reset sequence pointer to 0 */
-#define  MESH_CMD_SEQUENCE_BEAT  (0x08)  /* Tempo synchronization beat (2 bytes: command + 1-byte pointer) */
-#define  MESH_CMD_EFFECT         (0x09)  /* Effect command */
+
+/* Plugin Command Byte Constants (used in plugin protocol after plugin ID) */
+#define  PLUGIN_CMD_START        (0x01)  /* Start plugin playback */
+#define  PLUGIN_CMD_PAUSE        (0x02)  /* Pause plugin playback */
+#define  PLUGIN_CMD_RESET        (0x03)  /* Reset plugin state */
+#define  PLUGIN_CMD_DATA         (0x04)  /* Plugin data command: variable length */
+#define  PLUGIN_CMD_BEAT         (0x05)  /* Plugin beat synchronization */
 
 /*******************************************************
  *                Command ID Allocation
@@ -39,21 +40,31 @@
 
 /* Command ID allocation strategy:
  *
- * 0x01-0x0F: Core functionality commands (15 commands)
+ * 0x00-0x0A: Reserved (core commands and reserved range)
  *   - 0x01: MESH_CMD_HEARTBEAT
  *   - 0x02: MESH_CMD_LIGHT_ON_OFF
  *   - 0x03: MESH_CMD_SET_RGB
- *   - 0x04-0x08: Sequence commands (MESH_CMD_SEQUENCE, START, STOP, RESET, BEAT)
- *   - 0x09: MESH_CMD_EFFECT
- *   - 0x0A-0x0F: Reserved for future core commands
+ *   - 0x04-0x09: Legacy plugin commands (DEPRECATED - use plugin protocol)
+ *   - 0x0A: Reserved for future core commands
  *
- * 0x10-0xEF: Plugin commands (224 plugins maximum)
- *   - Command IDs are automatically assigned during plugin registration
- *   - Plugins register themselves and receive command IDs sequentially starting from 0x10
- *   - Command IDs are assigned at initialization time, before mesh starts
+ * 0x0B-0xEE: Plugin IDs (228 plugins maximum)
+ *   - Plugin IDs are automatically assigned during plugin registration
+ *   - Plugins register themselves and receive IDs sequentially starting from 0x0B
+ *   - Plugin IDs are assigned at initialization time, before mesh starts
+ *   - Registration order is deterministic (fixed in plugins.h), ensuring consistency across nodes
  *   - See plugin_system.h for plugin registration API
  *
- * 0xF0-0xFF: Internal mesh use (16 commands)
+ * Plugin Protocol Format:
+ *   [PLUGIN_ID:1] [CMD:1] [LENGTH:2?] [DATA:N]
+ *   - PLUGIN_ID: Plugin identifier (0x0B-0xEE)
+ *   - CMD: Command byte (PLUGIN_CMD_START=0x01, PAUSE=0x02, RESET=0x03, DATA=0x04, BEAT=0x05)
+ *   - LENGTH: Optional 2-byte length prefix for variable-length data (network byte order, only for DATA commands)
+ *   - DATA: Optional command-specific data
+ *   - Total size: Maximum 1024 bytes (including all fields)
+ *   - Fixed-size commands: START, PAUSE, RESET (2 bytes: PLUGIN_ID + CMD), BEAT (4 bytes: PLUGIN_ID + CMD + POINTER + COUNTER)
+ *   - Variable-size commands: DATA (4 bytes header: PLUGIN_ID + CMD + LENGTH + data)
+ *
+ * 0xEF-0xFF: Reserved (internal mesh use)
  *   - Reserved for internal mesh operations (OTA, web server IP broadcast, etc.)
  */
 

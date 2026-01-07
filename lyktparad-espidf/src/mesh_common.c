@@ -95,22 +95,6 @@ static bool is_router_connected = false; /* Track router connection for root nod
 static mesh_addr_t mesh_parent_addr;
 static int mesh_layer = -1;
 static esp_netif_t *netif_sta = NULL;
-static TaskHandle_t led_restore_task_handle = NULL; /* Track LED restore task to prevent duplicates */
-static esp_timer_handle_t scan_fail_toggle_timer = NULL; /* Timer for toggling LED on scan failures */
-static uint8_t scan_toggle_r = 155, scan_toggle_g = 0, scan_toggle_b = 0; /* Stored RGB color for toggle (default RED) */
-static bool scan_toggle_state = false; /* Current toggle state (false = off, true = on) */
-
-/* Task function to restore red LED after 250ms delay */
-static void led_restore_red_task(void *arg)
-{
-    vTaskDelay(pdMS_TO_TICKS(250));
-    /* Only restore red if still non-root and not connected to mesh */
-    if (!esp_mesh_is_root() && !is_mesh_connected) {
-        mesh_light_set_colour(MESH_LIGHT_RED);
-    }
-    led_restore_task_handle = NULL; /* Clear handle before deleting */
-    vTaskDelete(NULL);
-}
 
 /* Task function for non-blocking registration on role change */
 static void registration_task(void *pvParameters)
@@ -122,30 +106,9 @@ static void registration_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
-/* Timer callback to toggle LED on each failed connection attempt during scanning */
-static void scan_fail_toggle_timer_cb(void *arg)
-{
-    /* Only toggle if we're still a non-root node and not connected */
-    if (esp_mesh_is_root() || is_mesh_connected) {
-        /* Stop timer if we became root or connected */
-        if (scan_fail_toggle_timer != NULL) {
-            esp_timer_stop(scan_fail_toggle_timer);
-            esp_timer_delete(scan_fail_toggle_timer);
-            scan_fail_toggle_timer = NULL;
-        }
-        return;
-    }
-
-    /* Toggle between stored color and off */
-    scan_toggle_state = !scan_toggle_state;
-    if (scan_toggle_state) {
-        /* Turn on with stored color */
-        mesh_light_set_rgb(scan_toggle_r, scan_toggle_g, scan_toggle_b);
-    } else {
-        /* Turn off */
-        mesh_light_set_colour(0);
-    }
-}
+/* Scan failure toggle timer removed - RGB LEDs are now exclusive to plugins
+ * Status indication uses root status LED (ROOT_STATUS_LED_GPIO) instead
+ */
 
 /* Light control structures */
 mesh_light_ctl_t light_on = {
@@ -321,8 +284,9 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             }
         }
 
-        /* Ensure LED shows unconnected state */
-        mesh_light_set_colour(MESH_LIGHT_RED);
+        /* RGB LED control removed - LEDs are now exclusive to plugins
+         * Status indication uses root status LED (ROOT_STATUS_LED_GPIO) instead
+         */
 
 #ifdef ROOT_STATUS_LED_GPIO
         /* Update status LED based on current mesh role (mesh role is now known) */
@@ -334,8 +298,9 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "<MESH_EVENT_STOPPED>");
         is_mesh_connected = false;
         mesh_layer = esp_mesh_get_layer();
-        /* Turn LED back to unconnected state */
-        mesh_light_set_colour(MESH_LIGHT_RED);
+        /* RGB LED control removed - LEDs are now exclusive to plugins
+         * Status indication uses root status LED (ROOT_STATUS_LED_GPIO) instead
+         */
 #ifdef ROOT_STATUS_LED_GPIO
         /* Update status LED - mesh stopped, node is no longer root */
         root_status_led_update();
@@ -378,6 +343,12 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         if (is_root && root_event_callback) {
             root_event_callback(arg, event_base, event_id, event_data);
         }
+#ifdef ROOT_STATUS_LED_GPIO
+        /* Update status LED pattern when node count changes */
+        if (is_root) {
+            root_status_led_update_status();
+        }
+#endif
     }
     break;
     case MESH_EVENT_ROUTING_TABLE_ADD: {
@@ -427,17 +398,9 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
                      MESH_ID[0], MESH_ID[1], MESH_ID[2], MESH_ID[3], MESH_ID[4], MESH_ID[5]);
         }
 
-        /* For non-root nodes: turn off LED for 250ms when searching for root */
-        if (!esp_mesh_is_root()) {
-            /* Cancel any existing restore task to prevent multiple tasks */
-            if (led_restore_task_handle != NULL) {
-                vTaskDelete(led_restore_task_handle);
-                led_restore_task_handle = NULL;
-            }
-            mesh_light_set_colour(0); /* Turn off LED */
-            /* Create a task to restore red LED after 250ms */
-            xTaskCreate(led_restore_red_task, "led_restore", 2048, NULL, 1, &led_restore_task_handle);
-        }
+        /* RGB LED control removed - LEDs are now exclusive to plugins
+         * Status indication uses root status LED (ROOT_STATUS_LED_GPIO) instead
+         */
     }
     break;
     case MESH_EVENT_PARENT_CONNECTED: {
@@ -482,20 +445,13 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
             }
         }
         // #endregion
-        /* Cancel any pending LED restore task since we're now connected */
-        if (led_restore_task_handle != NULL) {
-            vTaskDelete(led_restore_task_handle);
-            led_restore_task_handle = NULL;
-        }
-        /* Stop scan failure toggle timer since we're now connected */
-        if (scan_fail_toggle_timer != NULL) {
-            esp_timer_stop(scan_fail_toggle_timer);
-            esp_timer_delete(scan_fail_toggle_timer);
-            scan_fail_toggle_timer = NULL;
-        }
-        /* Set LED state when connected - heartbeat will take over from here */
-        /* Turn off LED (heartbeat will control it for all nodes) */
-        mesh_light_set_colour(0);
+        /* RGB LED control removed - LEDs are now exclusive to plugins
+         * Status indication uses root status LED (ROOT_STATUS_LED_GPIO) instead
+         */
+        /* RGB LED control removed - LEDs are now exclusive to plugins
+         * Status indication uses root status LED (ROOT_STATUS_LED_GPIO) instead
+         * Heartbeat no longer controls RGB LEDs
+         */
         if (is_root && root_event_callback) {
             root_event_callback(arg, event_base, event_id, event_data);
         }
@@ -511,19 +467,9 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         mesh_ota_cleanup_on_disconnect();
         is_mesh_connected = false;
         mesh_layer = esp_mesh_get_layer();
-        /* Cancel any pending LED restore task */
-        if (led_restore_task_handle != NULL) {
-            vTaskDelete(led_restore_task_handle);
-            led_restore_task_handle = NULL;
-        }
-        /* Stop scan failure toggle timer if running (non-root node disconnected) */
-        if (scan_fail_toggle_timer != NULL) {
-            esp_timer_stop(scan_fail_toggle_timer);
-            esp_timer_delete(scan_fail_toggle_timer);
-            scan_fail_toggle_timer = NULL;
-        }
-        /* Turn LED back to unconnected state */
-        mesh_light_set_colour(MESH_LIGHT_RED);
+        /* RGB LED control removed - LEDs are now exclusive to plugins
+         * Status indication uses root status LED (ROOT_STATUS_LED_GPIO) instead
+         */
     }
     break;
     case MESH_EVENT_LAYER_CHANGE: {
@@ -707,38 +653,10 @@ void mesh_common_event_handler(void *arg, esp_event_base_t event_base,
         ESP_LOGI(MESH_TAG, "<MESH_EVENT_FIND_NETWORK>new channel:%d, router BSSID:"MACSTR"",
                  find_network->channel, MAC2STR(find_network->router_bssid));
 
-        /* For non-root nodes: Start LED toggle timer on each scan attempt (failed connection) */
-        if (!esp_mesh_is_root() && !is_mesh_connected) {
-            /* Stop existing timer if any */
-            if (scan_fail_toggle_timer != NULL) {
-                esp_timer_stop(scan_fail_toggle_timer);
-                esp_timer_delete(scan_fail_toggle_timer);
-                scan_fail_toggle_timer = NULL;
-            }
-
-            /* Store current color (RED for non-root nodes scanning) */
-            scan_toggle_r = 155;
-            scan_toggle_g = 0;
-            scan_toggle_b = 0;
-            scan_toggle_state = false; /* Start with LED off */
-
-            /* Create and start periodic timer to toggle LED on each failed attempt (~300ms based on logs) */
-            esp_timer_create_args_t timer_args = {
-                .callback = scan_fail_toggle_timer_cb,
-                .name = "scan_fail_toggle"
-            };
-            esp_err_t timer_err = esp_timer_create(&timer_args, &scan_fail_toggle_timer);
-            if (timer_err == ESP_OK) {
-                esp_err_t start_err = esp_timer_start_periodic(scan_fail_toggle_timer, 300 * 1000); /* Toggle every 300ms (300000 microseconds) */
-                if (start_err != ESP_OK) {
-                    ESP_LOGE(MESH_TAG, "[SCAN FAIL TOGGLE] Failed to start timer: 0x%x", start_err);
-                    esp_timer_delete(scan_fail_toggle_timer);
-                    scan_fail_toggle_timer = NULL;
-                }
-            } else {
-                ESP_LOGE(MESH_TAG, "[SCAN FAIL TOGGLE] Failed to create timer: 0x%x", timer_err);
-            }
-        }
+        /* RGB LED control removed - LEDs are now exclusive to plugins
+         * Status indication uses root status LED (ROOT_STATUS_LED_GPIO) instead
+         * Scan failure toggle timer no longer needed (was only for RGB LED indication)
+         */
     }
     break;
     case MESH_EVENT_ROUTER_SWITCH: {

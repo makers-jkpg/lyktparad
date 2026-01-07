@@ -143,44 +143,40 @@ Mesh Role Change Event
 All mesh nodes (root and child) now use the same heartbeat-based LED behavior. The RGB LEDs alternate between OFF and ON based on heartbeat parity.
 
 **Behavior Rules**:
-1. **Even Heartbeat** (counter % 2 == 0): RGB LED is turned OFF
-2. **Odd Heartbeat** (counter % 2 == 1): RGB LED is turned ON
-3. **Default Color**: If no custom RGB color has been set, the LED uses BLUE (RGB: 0, 0, 155)
-4. **Custom Color**: If a custom RGB color has been set via color command, the LED uses that color
-5. **Sequence Precedence**: If a sequence is active, heartbeat-based LED changes are skipped (sequence controls the LED)
+1. **Plugin Exclusivity**: RGB LEDs are controlled exclusively by plugins when a plugin is active (applies to both root and child nodes)
+2. **Even Heartbeat** (counter % 2 == 0): RGB LED is turned OFF (only when no plugin is active)
+3. **Odd Heartbeat** (counter % 2 == 1): RGB LED is turned ON (only when no plugin is active)
+4. **Default Color**: If no custom RGB color has been set, the LED uses BLUE (RGB: 0, 0, 155)
+5. **Custom Color**: If a custom RGB color has been set via color command, the LED uses that color
+6. **Plugin Precedence**: If a plugin is active, heartbeat-based LED changes are skipped (plugin controls the LED)
 
 **Implementation**: `lyktparad-espidf/src/mesh_root.c` and `lyktparad-espidf/src/mesh_child.c`
 
 **Root Node Heartbeat Handler**:
 
-```169:195:lyktparad-espidf/src/mesh_root.c
+The heartbeat handler checks if a plugin is active before applying LED control. If a plugin is active, LED control is skipped (plugin controls the LED exclusively). Heartbeat counting and mesh command sending continue normally regardless of plugin state.
+
+```165:180:lyktparad-espidf/src/mesh_root.c
+    /* Skip LED control if plugin is active (plugin controls LED exclusively)
+     * This check ensures that if LED control is ever added back to the heartbeat handler,
+     * it will not override plugin control. Heartbeat counting and mesh command sending
+     * continue normally regardless of plugin state.
+     */
+    const char *active_plugin = plugin_get_active();
+    if (active_plugin != NULL) {
+        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - skipping LED change (plugin '%s' active)", (unsigned long)cnt, active_plugin);
+    }
+
     /* Unified LED behavior for all nodes (root and child):
      * - Even heartbeat: LED OFF
      * - Odd heartbeat: LED ON (BLUE default or custom RGB)
-     * - Skip LED changes if sequence mode is active (sequence controls LED)
+     * - Skip LED changes if plugin is active (plugin controls LED)
      */
-    if (mode_sequence_root_is_active()) {
-        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - skipping LED change (sequence active)", (unsigned long)cnt);
-    } else if (!(cnt % 2)) {
-        /* even heartbeat: turn off light */
-        mesh_light_set_colour(0);
-        set_rgb_led(0, 0, 0);
-        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu (even) - LED OFF", (unsigned long)cnt);
-    } else {
-        /* odd heartbeat: turn on light using last RGB color or default to MESH_LIGHT_BLUE */
-        if (root_rgb_has_been_set) {
-            /* Use the color from the latest MESH_CMD_SET_RGB command */
-            mesh_light_set_rgb(root_rgb_r, root_rgb_g, root_rgb_b);
-            set_rgb_led(root_rgb_r, root_rgb_g, root_rgb_b);
-            ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu (odd) - LED RGB(%d,%d,%d)",
-                     (unsigned long)cnt, root_rgb_r, root_rgb_g, root_rgb_b);
-        } else {
-            /* Default to MESH_LIGHT_BLUE if no RGB command has been received */
-            mesh_light_set_colour(MESH_LIGHT_BLUE);
-            set_rgb_led(0, 0, 155);  /* Match MESH_LIGHT_BLUE RGB values */
-            ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu (odd) - LED BLUE (default)", (unsigned long)cnt);
-        }
-    }
+    /* Heartbeat counting and mesh command sending continue, but RGB LED control is removed
+     * RGB LEDs are now exclusive to plugins via plugin_light_set_rgb() and plugin_set_rgb_led()
+     * Status indication uses root status LED (ROOT_STATUS_LED_GPIO) instead
+     */
+    ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu", (unsigned long)cnt);
 ```
 
 **Child Node Heartbeat Handler**:
@@ -214,7 +210,9 @@ Root nodes now respond to RGB color commands just like child nodes. When an RGB 
 
 **RGB Command Handler**: `lyktparad-espidf/src/mesh_root.c`
 
-```290:323:lyktparad-espidf/src/mesh_root.c
+The RGB command handler checks if a plugin is active before applying LED control. If a plugin is active, LED control is skipped (plugin controls the LED exclusively). State storage for web UI queries continues regardless of plugin state.
+
+```276:306:lyktparad-espidf/src/mesh_root.c
 /**
  * @brief Handle RGB command received via mesh network (for unified behavior)
  *
@@ -232,21 +230,27 @@ void mesh_root_handle_rgb_command(uint8_t r, uint8_t g, uint8_t b)
         return;
     }
 
-    /* Store RGB values for use in heartbeat handler */
+    /* Store RGB values for web interface queries */
     root_rgb_r = r;
     root_rgb_g = g;
     root_rgb_b = b;
     root_rgb_has_been_set = true;
 
-    /* Update root node's LED immediately */
-    esp_err_t err = mesh_light_set_rgb(r, g, b);
-    if (err != ESP_OK) {
-        ESP_LOGE(mesh_common_get_tag(), "[RGB] failed to set root node LED: 0x%x", err);
+    /* If plugin is active, don't override plugin control
+     * This check ensures that if LED control is ever added back to this function,
+     * it will not override plugin control. State storage for web UI continues regardless.
+     */
+    const char *active_plugin = plugin_get_active();
+    if (active_plugin != NULL) {
+        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] RGB command ignored - plugin '%s' active", active_plugin);
+        return;
     }
-    set_rgb_led(r, g, b);
 
-    /* Stop sequence playback if active */
-    mode_sequence_root_stop();
+    /* RGB LED control removed - LEDs are now exclusive to plugins
+     * State is still stored for web UI queries via mesh_get_current_rgb()
+     * RGB commands should be routed to plugin system instead
+     * Note: Plugin pause logic removed - plugins control RGB LEDs exclusively
+     */
 
     ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] RGB command received via mesh: R:%d G:%d B:%d", r, g, b);
 }
@@ -254,15 +258,45 @@ void mesh_root_handle_rgb_command(uint8_t r, uint8_t g, uint8_t b)
 
 **RGB Values Storage**: Root nodes store the last received RGB values in static variables (`root_rgb_r`, `root_rgb_g`, `root_rgb_b`, `root_rgb_has_been_set`), similar to how child nodes store RGB values.
 
-### Sequence Compatibility
+### Plugin Exclusivity
 
-When a sequence is active, heartbeat-based LED changes are skipped. The sequence controls the LED directly, ensuring sequences work correctly on root nodes just like child nodes.
+When a plugin is active, RGB LEDs are controlled exclusively by the plugin. This applies to all plugins (sequence, effect_strobe, effect_fade, etc.) and ensures unified behavior across all mesh nodes (root and child).
 
-**Sequence Check**: The heartbeat handler checks if a sequence is active before applying heartbeat-based LED changes:
+**Plugin LED Control Functions**:
+- `plugin_light_set_rgb(r, g, b)`: Control Neopixel/WS2812 LEDs (works on root and child nodes)
+- `plugin_set_rgb_led(r, g, b)`: Control common-cathode RGB LEDs (works on root and child nodes, requires `RGB_ENABLE`)
 
-```174:175:lyktparad-espidf/src/mesh_root.c
-    if (mode_sequence_root_is_active()) {
-        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - skipping LED change (sequence active)", (unsigned long)cnt);
+**Root Node Plugin Checks**:
+- Heartbeat handler checks `plugin_get_active()` and skips LED control if a plugin is active
+- RGB command handler checks `plugin_get_active()` and skips LED control if a plugin is active
+- Root node RGB LEDs respond to plugin control calls exactly like child nodes
+
+**Plugin Check in Heartbeat Handler**:
+
+```165:175:lyktparad-espidf/src/mesh_root.c
+    /* Skip LED control if plugin is active (plugin controls LED exclusively)
+     * This check ensures that if LED control is ever added back to the heartbeat handler,
+     * it will not override plugin control. Heartbeat counting and mesh command sending
+     * continue normally regardless of plugin state.
+     */
+    const char *active_plugin = plugin_get_active();
+    if (active_plugin != NULL) {
+        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - skipping LED change (plugin '%s' active)", (unsigned long)cnt, active_plugin);
+    }
+```
+
+**Plugin Check in RGB Command Handler**:
+
+```293:299:lyktparad-espidf/src/mesh_root.c
+    /* If plugin is active, don't override plugin control
+     * This check ensures that if LED control is ever added back to this function,
+     * it will not override plugin control. State storage for web UI continues regardless.
+     */
+    const char *active_plugin = plugin_get_active();
+    if (active_plugin != NULL) {
+        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] RGB command ignored - plugin '%s' active", active_plugin);
+        return;
+    }
 ```
 
 ## Root Status LED

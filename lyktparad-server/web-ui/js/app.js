@@ -132,6 +132,75 @@ async function deactivatePlugin(pluginName) {
   }
 }
 
+async function stopPlugin(pluginName) {
+  try {
+    const response = await fetch('/api/plugin/stop', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: pluginName })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to stop plugin');
+    }
+
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    console.error('Plugin stop error:', error);
+    throw error;
+  }
+}
+
+async function pausePlugin(pluginName) {
+  try {
+    const response = await fetch('/api/plugin/pause', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: pluginName })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to pause plugin');
+    }
+
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    console.error('Plugin pause error:', error);
+    throw error;
+  }
+}
+
+async function resetPlugin(pluginName) {
+  try {
+    const response = await fetch('/api/plugin/reset', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ name: pluginName })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to reset plugin');
+    }
+
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    console.error('Plugin reset error:', error);
+    throw error;
+  }
+}
+
 async function getActivePlugin() {
   try {
     const response = await fetch('/api/plugin/active');

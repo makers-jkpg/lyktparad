@@ -6,7 +6,7 @@
 
 1. [Overview](#overview)
 2. [Architecture](#architecture)
-3. [Web UI Extraction](#web-ui-extraction)
+3. [Embedded vs External Webserver UI](#embedded-vs-external-webserver-ui)
 4. [External Web Server Infrastructure](#external-web-server-infrastructure)
 5. [OTA Web UI Features](#ota-web-ui-features)
 6. [Static File Serving](#static-file-serving)
@@ -21,11 +21,10 @@
 
 ### Purpose
 
-The External Web Server and UI system provides an optional external web server (`lyktparad-server`) that hosts the web UI and provides enhanced user experience features. The system consists of three main components:
+The External Web Server and UI system provides an optional external web server (`lyktparad-server`) that hosts the web UI and provides enhanced user experience features. The system consists of two main components:
 
-1. **Web UI Extraction**: Extracts embedded HTML/CSS/JavaScript from the ESP32 root node's embedded web server into separate files for use by the external server.
-2. **External Web Server Infrastructure**: Provides a Node.js/Express.js-based web server that serves static files, handles CORS, and provides a foundation for API proxying.
-3. **OTA Web UI Features**: Implements a dedicated "Firmware Update" section with controls for initiating OTA updates, monitoring progress, and viewing update status for all mesh nodes.
+1. **External Web Server Infrastructure**: Provides a Node.js/Express.js-based web server that serves static files, handles CORS, and provides a foundation for API proxying.
+2. **OTA Web UI Features**: Implements a dedicated "Firmware Update" section with controls for initiating OTA updates, monitoring progress, and viewing update status for all mesh nodes.
 
 The external web server is completely optional - ESP32 root nodes always run their embedded web server and can be accessed directly via their IP address. The external server provides a better user experience if available, but is never required for mesh functionality.
 
@@ -33,7 +32,7 @@ The external web server is completely optional - ESP32 root nodes always run the
 
 **Optional Infrastructure**: The external web server is completely optional. ESP32 devices must continue operating normally even if the external server is unavailable or communication fails. The embedded web server (`mesh_web_server_start()`) MUST ALWAYS run regardless of external server status.
 
-**Separation of Concerns**: The embedded web UI remains unchanged in `mesh_web.c` and continues to work. The extraction creates separate files for use by the external server, allowing both to coexist.
+**Separation of Concerns**: The embedded web UI serves a simple plugin control interface. The external server serves its own independent UI files, allowing both to coexist without conflicts.
 
 **Static File Serving**: The external server serves static HTML, CSS, and JavaScript files from the `web-ui/` directory, providing a clean separation between frontend and backend code.
 
@@ -58,10 +57,10 @@ The external web server is completely optional - ESP32 root nodes always run the
 │  │  (mesh_web_server_start() on port 80)                    │  │
 │  │                                                           │  │
 │  │  ┌────────────────────────────────────────────────────┐  │  │
-│  │  │  Embedded HTML/CSS/JavaScript                      │  │  │
-│  │  │  (html_page[] in mesh_web.c)                       │  │  │
-│  │  │  - Lines ~39-1590                                   │  │  │
-│  │  │  - Unchanged and functional                         │  │  │
+│  │  │  Simple Static HTML Page                            │  │  │
+│  │  │  (simple_html_page[] in mesh_web.c)                │  │  │
+│  │  │  - Plugin selection and control                     │  │  │
+│  │  │  - Play, Pause, Rewind buttons                      │  │  │
 │  │  └────────────────────────────────────────────────────┘  │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │                                                                  │
@@ -79,7 +78,8 @@ The external web server is completely optional - ESP32 root nodes always run the
 │  └──────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
                         │
-                        │ (Extraction Process)
+                        │ HTTP/UDP Communication
+                        │ (API Proxy)
                         ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  External Web Server (lyktparad-server)                          │
@@ -157,155 +157,72 @@ The external web server is completely optional - ESP32 root nodes always run the
 - **HTTP** - Standard web protocol for client-server communication
 - **UDP** - Lightweight protocol for server-to-ESP32 communication (via API proxy)
 
-## Web UI Extraction
+## Embedded vs External Webserver UI
 
 ### Overview
 
-The Web UI Extraction process extracts embedded HTML, CSS, and JavaScript from the ESP32 root node's embedded web server (`mesh_web.c`) into separate files for use by the external server. The embedded web UI remains unchanged and continues to function normally.
+The system uses two separate web interfaces:
 
-### Extraction Process
+1. **Embedded Webserver**: Serves a simple static HTML page for basic plugin control (plugin selection, play, pause, rewind)
+2. **External Webserver**: Serves a full-featured web UI with grid control, color picker, sequence editor, and OTA update interface
 
-#### HTML Extraction
+These are completely separate - the external server does not extract or use the embedded webserver's HTML.
 
-**Location in Source**: `lyktparad-espidf/src/mesh_web.c` (lines ~39-1590)
+### Embedded Webserver UI
 
-**Embedded HTML String**:
+**Location**: `lyktparad-espidf/src/mesh_web.c`
+
+**HTML Definition**:
 ```c
-static const char html_page[] =
-"<!DOCTYPE html>"
-"<html lang=\"en\">"
-"<head>"
-// ... HTML content ...
+static const char simple_html_page[] =
+"<!DOCTYPE html>\n"
+"<html lang=\"en\">\n"
+// ... Simple plugin control HTML ...
 "</html>";
 ```
 
-**Extracted File**: `lyktparad-server/web-ui/index.html`
+**Features**:
+- Plugin selection dropdown
+- Play, Pause, and Rewind buttons
+- Active plugin status display
+- Status messages for operations
 
-**Extraction Steps**:
-1. Extract HTML content from `<html>` start tag to `</html>` end tag
-2. Remove embedded `<style>` tag and CSS content
-3. Replace with external CSS link: `<link rel="stylesheet" href="css/styles.css">`
-4. Remove embedded `<script>` tag and JavaScript content
-5. Replace with external JavaScript link: `<script src="js/app.js"></script>`
-6. Preserve all HTML structure, IDs, classes, and attributes
-7. Update any hardcoded paths to relative paths
+**Purpose**: Provides basic plugin control when accessing the root node directly via its IP address.
 
-#### CSS Extraction
+### External Webserver UI
 
-**Location in Source**: Within `html_page[]` string, `<style>` tag (lines ~46-406)
+**Location**: `lyktparad-server/web-ui/`
 
-**Embedded CSS**:
-```html
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { /* ... */ }
-/* ... CSS rules ... */
-</style>
-```
-
-**Extracted File**: `lyktparad-server/web-ui/css/styles.css`
-
-**Extraction Steps**:
-1. Extract all CSS content from `<style>` start tag to `</style>` end tag
-2. Remove `<style>` and `</style>` tags (keep only CSS content)
-3. Format CSS with proper indentation
-4. Organize CSS into logical sections:
-   - Reset/Base styles
-   - Layout styles
-   - Component styles
-   - Grid styles
-   - Sequence control styles
-   - OTA section styles
-   - Responsive styles (media queries)
-5. Preserve all CSS rules, selectors, and properties exactly
-6. Add section comments for major CSS blocks
-
-#### JavaScript Extraction
-
-**Location in Source**: Within `html_page[]` string, `<script>` tag (lines ~767-1587)
-
-**Embedded JavaScript**:
-```html
-<script>
-// Global variables
-// ... JavaScript code ...
-// Event listeners
-// ... JavaScript code ...
-</script>
-```
-
-**Extracted File**: `lyktparad-server/web-ui/js/app.js`
-
-**Extraction Steps**:
-1. Extract all JavaScript content from `<script>` start tag to `</script>` end tag
-2. Remove `<script>` and `</script>` tags (keep only JavaScript content)
-3. Format JavaScript with proper indentation
-4. Organize JavaScript into logical sections:
-   - Global variables
-   - Utility functions
-   - API functions
-   - Event handlers
-   - Initialization code
-5. Verify all API calls use relative paths (starting with `/api/`)
-6. Update any hardcoded URLs to relative paths if needed
-7. Preserve all functionality exactly
-
-### File Structure
-
+**File Structure**:
 ```
 lyktparad-server/
 ├── web-ui/
-│   ├── index.html          # Extracted HTML (root page)
+│   ├── index.html          # Main HTML page
 │   ├── css/
-│   │   └── styles.css      # Extracted CSS
+│   │   └── styles.css      # CSS stylesheet
 │   ├── js/
-│   │   ├── app.js          # Extracted JavaScript (main UI)
+│   │   ├── app.js          # Main UI JavaScript
 │   │   ├── ota-api.js      # OTA API integration module
 │   │   └── ota-ui.js       # OTA UI logic module
 │   └── API.md              # API documentation
 └── ...
 ```
 
-### API Endpoint Extraction
+**Features**:
+- Grid control for color sequences
+- Color picker
+- Sequence editor
+- OTA update interface
+- Plugin interfaces (served from `/plugins/<plugin-name>/`)
 
-The extraction process also documents all API endpoints used by the JavaScript:
+**Purpose**: Provides enhanced UI experience when using the external webserver.
 
-**Main UI Endpoints**:
-- `GET /api/nodes` - Get node count
-- `GET /api/color` - Get current color
-- `POST /api/color` - Set color
-- `POST /api/sequence` - Sync sequence
-- `GET /api/sequence/pointer` - Get sequence pointer
-- `GET /api/sequence/status` - Get sequence status
-- `POST /api/sequence/start` - Start sequence
-- `POST /api/sequence/stop` - Stop sequence
-- `POST /api/sequence/reset` - Reset sequence
+### Separation of Concerns
 
-**OTA Endpoints** (used by OTA UI):
-- `GET /api/ota/version` - Get current firmware version
-- `POST /api/ota/download` - Start OTA download
-- `GET /api/ota/status` - Get download status and progress
-- `POST /api/ota/cancel` - Cancel ongoing download
-- `GET /api/ota/distribution/status` - Get distribution status
-- `GET /api/ota/distribution/progress` - Get distribution progress
-- `POST /api/ota/distribution/cancel` - Cancel distribution
-- `POST /api/ota/reboot` - Initiate coordinated reboot
-
-All endpoints use relative paths and are documented in `web-ui/API.md`.
-
-### Preservation Requirements
-
-**Critical Requirements**:
-1. Embedded web UI in `mesh_web.c` MUST remain unchanged
-2. Embedded web server MUST continue to function normally
-3. All extracted functionality MUST be preserved exactly
-4. No modifications to ESP32 code are required
-
-**Verification**:
-- Embedded HTML/CSS/JavaScript remains intact in `mesh_web.c`
-- Embedded web server serves the same UI as before
-- Extracted files contain all functionality from embedded code
-- No functionality is lost during extraction
+- **Embedded webserver**: Simple, lightweight plugin control interface
+- **External webserver**: Full-featured UI with advanced capabilities
+- **No extraction**: External server UI is independent and not derived from embedded UI
+- **Both functional**: Both servers can run simultaneously without conflicts
 
 ## External Web Server Infrastructure
 
