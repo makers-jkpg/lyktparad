@@ -160,28 +160,10 @@ void esp_mesh_p2p_rx_main(void *arg)
                           ((uint32_t)(uint8_t)data.data[3] << 8) |
                           ((uint32_t)(uint8_t)data.data[4] << 0);
             ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat received from "MACSTR", count:%" PRIu32, MAC2STR(from.addr), hb);
-            /* Skip heartbeat LED changes if sequence mode is active (sequence controls LED) */
-            bool sequence_active = false;
-            esp_err_t query_err = plugin_query_state("sequence", 0x01, &sequence_active);  /* SEQUENCE_QUERY_IS_ACTIVE */
-            if (query_err == ESP_OK && sequence_active) {
-                ESP_LOGD(mesh_common_get_tag(), "[NODE ACTION] Heartbeat #%lu - skipping LED change (sequence active)", (unsigned long)hb);
-            } else if (!(hb%2)) {
-                /* even heartbeat: turn off light */
-                mesh_light_set_colour(0);
-                ESP_LOGI(mesh_common_get_tag(), "[NODE ACTION] Heartbeat #%lu (even) - LED OFF", (unsigned long)hb);
-            } else {
-                /* odd heartbeat: turn on light using last RGB color or default to MESH_LIGHT_BLUE */
-                if (rgb_has_been_set) {
-                    /* Use the color from the latest MESH_CMD_SET_RGB command */
-                    mesh_light_set_rgb(last_rgb_r, last_rgb_g, last_rgb_b);
-                    ESP_LOGI(mesh_common_get_tag(), "[NODE ACTION] Heartbeat #%lu (odd) - LED RGB(%d,%d,%d)",
-                             (unsigned long)hb, last_rgb_r, last_rgb_g, last_rgb_b);
-                } else {
-                    /* Default to MESH_LIGHT_BLUE if no RGB command has been received */
-                    mesh_light_set_colour(MESH_LIGHT_BLUE);
-                    ESP_LOGI(mesh_common_get_tag(), "[NODE ACTION] Heartbeat #%lu (odd) - LED BLUE (default)", (unsigned long)hb);
-                }
-            }
+            /* Heartbeat counting and mesh command handling continue, but RGB LED control is removed
+             * RGB LEDs are now exclusive to plugins via plugin_light_set_rgb() and plugin_set_rgb_led()
+             */
+            ESP_LOGD(mesh_common_get_tag(), "[NODE ACTION] Heartbeat #%lu", (unsigned long)hb);
 
         } else if (data.proto == MESH_PROTO_BIN && data.size == 4 && data.data[0] == MESH_CMD_SET_RGB) {
             /* detect RGB command: command prefix (0x03) + 3-byte RGB values */
@@ -189,19 +171,14 @@ void esp_mesh_p2p_rx_main(void *arg)
             uint8_t g = data.data[2];
             uint8_t b = data.data[3];
             ESP_LOGI(MESH_TAG, "[NODE ACTION] RGB command received from "MACSTR", R:%d G:%d B:%d", MAC2STR(from.addr), r, g, b);
-            /* Pause active plugin if sequence plugin is active */
-            if (plugin_is_active("sequence")) {
-                plugin_execute_operation("sequence", 0x03, NULL);  /* SEQUENCE_OP_PAUSE */
-            }
-            /* Store RGB values for use in heartbeat handler */
+            /* Store RGB values (for potential future use, but RGB LED control is removed)
+             * RGB LEDs are now exclusive to plugins via plugin_light_set_rgb() and plugin_set_rgb_led()
+             * RGB commands should be routed to plugin system instead
+             */
             last_rgb_r = r;
             last_rgb_g = g;
             last_rgb_b = b;
             rgb_has_been_set = true;
-            err = mesh_light_set_rgb(r, g, b);
-            if (err != ESP_OK) {
-                ESP_LOGE(mesh_common_get_tag(), "[RGB] failed to set LED: 0x%x", err);
-            }
         } else if (data.proto == MESH_PROTO_BIN && data.size >= 1) {
             uint8_t cmd = data.data[0];
             /* Check for web server IP broadcast command */

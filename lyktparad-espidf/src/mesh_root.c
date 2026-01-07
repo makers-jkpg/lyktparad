@@ -181,28 +181,11 @@ static void heartbeat_timer_cb(void *arg)
      * - Odd heartbeat: LED ON (BLUE default or custom RGB)
      * - Skip LED changes if sequence mode is active (sequence controls LED)
      */
-    if (plugin_is_active("sequence")) {
-        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - skipping LED change (sequence active)", (unsigned long)cnt);
-    } else if (!(cnt % 2)) {
-        /* even heartbeat: turn off light */
-        mesh_light_set_colour(0);
-        set_rgb_led(0, 0, 0);
-        ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu (even) - LED OFF", (unsigned long)cnt);
-    } else {
-        /* odd heartbeat: turn on light using last RGB color or default to MESH_LIGHT_BLUE */
-        if (root_rgb_has_been_set) {
-            /* Use the color from the latest MESH_CMD_SET_RGB command */
-            mesh_light_set_rgb(root_rgb_r, root_rgb_g, root_rgb_b);
-            set_rgb_led(root_rgb_r, root_rgb_g, root_rgb_b);
-            ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu (odd) - LED RGB(%d,%d,%d)",
-                     (unsigned long)cnt, root_rgb_r, root_rgb_g, root_rgb_b);
-        } else {
-            /* Default to MESH_LIGHT_BLUE if no RGB command has been received */
-            mesh_light_set_colour(MESH_LIGHT_BLUE);
-            set_rgb_led(0, 0, 155);  /* Match MESH_LIGHT_BLUE RGB values */
-            ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu (odd) - LED BLUE (default)", (unsigned long)cnt);
-        }
-    }
+    /* Heartbeat counting and mesh command sending continue, but RGB LED control is removed
+     * RGB LEDs are now exclusive to plugins via plugin_light_set_rgb() and plugin_set_rgb_led()
+     * Status indication uses root status LED (ROOT_STATUS_LED_GPIO) instead
+     */
+    ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu", (unsigned long)cnt);
 }
 
 /*******************************************************
@@ -382,12 +365,9 @@ esp_err_t mesh_send_rgb(uint8_t r, uint8_t g, uint8_t b)
     root_rgb_b = b;
     root_rgb_has_been_set = true;
 
-    /* Update root node's own LED */
-    err = mesh_light_set_rgb(r, g, b);
-    if (err != ESP_OK) {
-        ESP_LOGE(mesh_common_get_tag(), "[RGB] failed to set root node LED: 0x%x", err);
-    }
-    set_rgb_led(r, g, b);
+    /* RGB LED control removed - LEDs are now exclusive to plugins
+     * State is still stored for web UI queries via mesh_get_current_rgb()
+     */
 
     if (child_node_count == 0) {
         ESP_LOGD(mesh_common_get_tag(), "[RGB SENT] R:%d G:%d B:%d - no child nodes", r, g, b);
@@ -451,23 +431,17 @@ void mesh_root_handle_rgb_command(uint8_t r, uint8_t g, uint8_t b)
         return;
     }
 
-    /* Store RGB values for use in heartbeat handler */
+    /* Store RGB values for web interface queries */
     root_rgb_r = r;
     root_rgb_g = g;
     root_rgb_b = b;
     root_rgb_has_been_set = true;
 
-    /* Update root node's LED immediately */
-    esp_err_t err = mesh_light_set_rgb(r, g, b);
-    if (err != ESP_OK) {
-        ESP_LOGE(mesh_common_get_tag(), "[RGB] failed to set root node LED: 0x%x", err);
-    }
-    set_rgb_led(r, g, b);
-
-    /* Pause active plugin if sequence plugin is active */
-    if (plugin_is_active("sequence")) {
-        plugin_execute_operation("sequence", 0x03, NULL);  /* SEQUENCE_OP_PAUSE */
-    }
+    /* RGB LED control removed - LEDs are now exclusive to plugins
+     * State is still stored for web UI queries via mesh_get_current_rgb()
+     * RGB commands should be routed to plugin system instead
+     * Note: Plugin pause logic removed - plugins control RGB LEDs exclusively
+     */
 
     ESP_LOGI(mesh_common_get_tag(), "[ROOT ACTION] RGB command received via mesh: R:%d G:%d B:%d", r, g, b);
 }

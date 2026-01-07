@@ -73,8 +73,10 @@ esp_err_t mesh_light_init(void)
         return err;
     }
 
-    /* set default initial color - RED for unconnected state */
-    mesh_light_set_colour(MESH_LIGHT_RED);
+    /* RGB LEDs are plugin-exclusive - set to OFF (0,0,0) by default at startup
+     * LEDs will only be controlled by plugins via plugin_light_set_rgb() or plugin_set_rgb_led()
+     */
+    mesh_light_set_rgb(0, 0, 0);
     return ESP_OK;
 }
 
