@@ -497,8 +497,8 @@ esp_err_t plugin_system_handle_plugin_command(uint8_t *data, uint16_t len)
     uint8_t cmd = data[1];
 
     /* Validate command byte */
-    if (cmd != PLUGIN_CMD_START && cmd != PLUGIN_CMD_PAUSE && cmd != PLUGIN_CMD_RESET && cmd != PLUGIN_CMD_BEAT) {
-        ESP_LOGE(TAG, "Plugin command routing failed: invalid command byte 0x%02X (expected 0x%02X-0x%02X)", cmd, PLUGIN_CMD_START, PLUGIN_CMD_BEAT);
+    if (cmd != PLUGIN_CMD_START && cmd != PLUGIN_CMD_PAUSE && cmd != PLUGIN_CMD_RESET) {
+        ESP_LOGE(TAG, "Plugin command routing failed: invalid command byte 0x%02X (expected 0x%02X-0x%02X)", cmd, PLUGIN_CMD_START, PLUGIN_CMD_RESET);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -580,25 +580,6 @@ esp_err_t plugin_system_handle_plugin_command(uint8_t *data, uint16_t len)
             err = plugin->callbacks.on_reset();
             break;
 
-        case PLUGIN_CMD_BEAT:
-            /* Root nodes should ignore BEAT commands received via mesh
-             * Root nodes broadcast BEAT commands but don't process them when received back
-             * This prevents root nodes from processing their own broadcasts
-             */
-            if (esp_mesh_is_root()) {
-                return ESP_OK; /* Silently ignore - root node doesn't process BEAT via mesh */
-            }
-            if (plugin->callbacks.on_beat == NULL) {
-                ESP_LOGD(TAG, "Plugin command routing: plugin '%s' has no on_beat callback", plugin->name);
-                return ESP_ERR_INVALID_STATE;
-            }
-            if (len < 4) {
-                ESP_LOGE(TAG, "Plugin command routing failed: BEAT command requires len>=4, got %d", len);
-                return ESP_ERR_INVALID_ARG;
-            }
-            /* Pass remaining data (skip plugin ID and command bytes) to on_beat: pointer + counter */
-            err = plugin->callbacks.on_beat(&data[2], len - 2);
-            break;
 
         default:
             ESP_LOGE(TAG, "Plugin command routing failed: unhandled command byte 0x%02X", cmd);

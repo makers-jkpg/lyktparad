@@ -22,6 +22,7 @@
 #include "mesh_commands.h"
 #include "plugin_system.h"
 #include "mesh_udp_bridge.h"
+#include "plugins/sequence/sequence_plugin.h"
 #include "light_neopixel.h"
 #include "light_common_cathode.h"
 #include "config/mesh_config.h"
@@ -87,8 +88,8 @@ void esp_mesh_p2p_rx_main(void *arg)
                     /* Route plugin protocol commands: [PLUGIN_ID:1] [CMD:1] [LENGTH:2?] [DATA:N] */
                     uint8_t plugin_cmd = data.data[1];
                     if (plugin_cmd == PLUGIN_CMD_START || plugin_cmd == PLUGIN_CMD_PAUSE ||
-                        plugin_cmd == PLUGIN_CMD_RESET || plugin_cmd == PLUGIN_CMD_BEAT) {
-                        /* Plugin control commands (START, PAUSE, RESET, BEAT) */
+                        plugin_cmd == PLUGIN_CMD_RESET) {
+                        /* Plugin control commands (START, PAUSE, RESET) */
                         err = plugin_system_handle_plugin_command(data.data, data.size);
                         if (err == ESP_OK) {
                             ESP_LOGD(mesh_common_get_tag(), "[PLUGIN CONTROL] Plugin ID 0x%02X, command 0x%02X routed", cmd, plugin_cmd);
@@ -125,7 +126,7 @@ void esp_mesh_p2p_rx_main(void *arg)
             uint8_t plugin_id = data.data[0];
             uint8_t plugin_cmd = data.data[1];
             if (plugin_cmd == PLUGIN_CMD_START || plugin_cmd == PLUGIN_CMD_PAUSE ||
-                plugin_cmd == PLUGIN_CMD_RESET || plugin_cmd == PLUGIN_CMD_BEAT) {
+                plugin_cmd == PLUGIN_CMD_RESET) {
                 /* Plugin control commands (START, PAUSE, RESET, BEAT) */
                 err = plugin_system_handle_plugin_command(data.data, data.size);
                 if (err == ESP_OK) {
@@ -151,17 +152,24 @@ void esp_mesh_p2p_rx_main(void *arg)
                 }
             }
         }
-        /* detect heartbeat: command prefix (0x01) + 4-byte big-endian counter */
-        if (data.proto == MESH_PROTO_BIN && data.size == 5 && data.data[0] == MESH_CMD_HEARTBEAT) {
-            uint32_t hb = ((uint32_t)(uint8_t)data.data[1] << 24) |
-                          ((uint32_t)(uint8_t)data.data[2] << 16) |
-                          ((uint32_t)(uint8_t)data.data[3] << 8) |
-                          ((uint32_t)(uint8_t)data.data[4] << 0);
-            ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat received from "MACSTR", count:%" PRIu32, MAC2STR(from.addr), hb);
+        /* detect heartbeat: command prefix (0x01) + pointer (1 byte) + counter (1 byte) */
+        if (data.proto == MESH_PROTO_BIN && data.size == 3 && data.data[0] == MESH_CMD_HEARTBEAT) {
+            uint8_t pointer = data.data[1];
+            uint8_t counter = data.data[2];
+            ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat received from "MACSTR", pointer:%u, counter:%u", MAC2STR(from.addr), pointer, counter);
+
+            /* Route heartbeat to sequence plugin if active */
+            if (plugin_is_active("sequence")) {
+                esp_err_t heartbeat_err = sequence_plugin_handle_heartbeat(pointer, counter);
+                if (heartbeat_err != ESP_OK && heartbeat_err != ESP_ERR_INVALID_STATE) {
+                    ESP_LOGW(mesh_common_get_tag(), "[HEARTBEAT] Sequence plugin heartbeat handler error: 0x%x", heartbeat_err);
+                }
+            }
+
             /* Heartbeat counting and mesh command handling continue, but RGB LED control is removed
              * RGB LEDs are now exclusive to plugins via plugin_light_set_rgb() and plugin_set_rgb_led()
              */
-            ESP_LOGD(mesh_common_get_tag(), "[NODE ACTION] Heartbeat #%lu", (unsigned long)hb);
+            ESP_LOGD(mesh_common_get_tag(), "[NODE ACTION] Heartbeat - pointer:%u, counter:%u", pointer, counter);
 
         } else if (data.proto == MESH_PROTO_BIN && data.size == 4 && data.data[0] == MESH_CMD_SET_RGB) {
             /* detect RGB command: command prefix (0x03) + 3-byte RGB values */

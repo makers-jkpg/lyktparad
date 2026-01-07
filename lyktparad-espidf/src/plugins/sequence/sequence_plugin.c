@@ -41,7 +41,6 @@ static uint8_t sequence_plugin_id = 0;
 #define SEQUENCE_OP_START          0x02
 #define SEQUENCE_OP_PAUSE          0x03
 #define SEQUENCE_OP_RESET          0x04
-#define SEQUENCE_OP_BROADCAST_BEAT 0x05
 
 /* Helper type constants for get_helper callback */
 #define SEQUENCE_HELPER_PAYLOAD_SIZE    0x01
@@ -110,7 +109,6 @@ static uint8_t sequence_length = 16;  /* Sequence length in rows (1-16), default
 static uint16_t sequence_pointer = 0;  /* Current position in sequence (0-255) */
 static esp_timer_handle_t sequence_timer = NULL;  /* Timer handle for sequence playback */
 static bool sequence_active = false;  /* Playback state */
-static uint8_t beat_counter = 0;  /* BEAT command counter (0-255, wraps around) */
 
 /* Forward declarations */
 static void sequence_timer_cb(void *arg);
@@ -236,10 +234,7 @@ static void sequence_timer_cb(void *arg)
     uint16_t max_squares = sequence_length * 16;
     sequence_pointer = (sequence_pointer + 1) % max_squares;
 
-    /* Root node: broadcast BEAT at row boundaries */
-    if (esp_mesh_is_root() && (sequence_pointer % 16 == 0)) {
-        sequence_plugin_root_broadcast_beat();
-    }
+    /* Root node: heartbeat timer will include sequence pointer in heartbeat payload */
 }
 
 /*******************************************************
@@ -252,8 +247,8 @@ static void sequence_timer_cb(void *arg)
  * Handles plugin data commands:
  * - PLUGIN_CMD_DATA (0x04): Store and start sequence data
  *
- * Note: PLUGIN_CMD_START, PLUGIN_CMD_PAUSE, PLUGIN_CMD_RESET, and
- * PLUGIN_CMD_BEAT are handled via plugin callbacks (on_start, on_pause, on_reset, on_beat).
+ * Note: PLUGIN_CMD_START, PLUGIN_CMD_PAUSE, and PLUGIN_CMD_RESET are handled via plugin callbacks (on_start, on_pause, on_reset).
+ * Sequence synchronization is now handled via MESH_CMD_HEARTBEAT.
  *
  * The plugin ID has already been validated by the plugin system before this handler is called.
  *
@@ -517,39 +512,6 @@ static esp_err_t sequence_on_reset(void)
     }
 }
 
-static esp_err_t sequence_on_beat(uint8_t *data, uint16_t len)
-{
-    if (data == NULL || len != 2) {
-        ESP_LOGE(TAG, "Invalid BEAT command data: data=%p, len=%d (expected len=2 for pointer + counter)", data, len);
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    /* BEAT is only for child nodes, root nodes broadcast it */
-    if (esp_mesh_is_root()) {
-        ESP_LOGW(TAG, "Root node received BEAT callback (should not happen)");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    /* Child node: update pointer from BEAT data */
-    uint8_t pointer = data[0];
-    uint8_t counter = data[1];
-    if (sequence_length == 0) {
-        ESP_LOGE(TAG, "No sequence data available for BEAT (length=0)");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    uint16_t max_squares = sequence_length * 16;
-
-    if (pointer >= max_squares) {
-        ESP_LOGE(TAG, "Invalid BEAT pointer: %d (max: %d)", pointer, max_squares - 1);
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    sequence_pointer = pointer;
-    ESP_LOGD(TAG, "BEAT received - pointer updated to %d, counter: %d", sequence_pointer, counter);
-
-    return ESP_OK;
-}
 
 /*******************************************************
  *                Query Interface Callbacks
@@ -614,8 +576,6 @@ static esp_err_t sequence_execute_operation(uint32_t operation_type, void *param
         case SEQUENCE_OP_RESET:
             return sequence_plugin_root_reset();
 
-        case SEQUENCE_OP_BROADCAST_BEAT:
-            return sequence_plugin_root_broadcast_beat();
 
         default:
             ESP_LOGE(TAG, "sequence_execute_operation failed: invalid operation_type 0x%08X", operation_type);
@@ -687,7 +647,6 @@ void sequence_plugin_register(void)
             .on_start = sequence_on_start,
             .on_pause = sequence_on_pause,
             .on_reset = sequence_on_reset,
-            .on_beat = sequence_on_beat,
             .get_state = sequence_get_state,
             .execute_operation = sequence_execute_operation,
             .get_helper = sequence_get_helper,
@@ -852,59 +811,6 @@ static esp_err_t sequence_broadcast_control(uint8_t plugin_cmd)
     return ESP_OK;
 }
 
-esp_err_t sequence_plugin_root_broadcast_beat(void)
-{
-    if (!esp_mesh_is_root()) {
-        ESP_LOGE(TAG, "Not root node, cannot broadcast BEAT");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    uint16_t max_squares = sequence_length * 16;
-    if (sequence_pointer >= max_squares) {
-        sequence_pointer = 0;
-    }
-
-    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
-    int route_table_size = 0;
-    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
-
-    int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
-    if (child_node_count == 0) {
-        ESP_LOGD(TAG, "BEAT broadcast - no child nodes");
-        return ESP_OK;
-    }
-
-    uint8_t *tx_buf = mesh_common_get_tx_buf();
-    tx_buf[0] = sequence_plugin_id;  /* Plugin ID */
-    tx_buf[1] = PLUGIN_CMD_BEAT;  /* Command byte */
-    tx_buf[2] = sequence_pointer & 0xFF;  /* Pointer */
-    uint8_t counter_sent = beat_counter;  /* Save counter value for logging */
-    tx_buf[3] = beat_counter;  /* Counter (0-255) */
-    beat_counter = (beat_counter + 1) % 256;  /* Increment and wrap counter */
-
-    mesh_data_t data;
-    data.data = tx_buf;
-    data.size = 4;  /* Plugin ID(1) + CMD(1) + pointer(1) + counter(1) */
-    data.proto = MESH_PROTO_BIN;
-    data.tos = MESH_TOS_P2P;
-
-    int success_count = 0;
-    int fail_count = 0;
-    for (int i = 0; i < route_table_size; i++) {
-        esp_err_t err = mesh_send_with_bridge(&route_table[i], &data, MESH_DATA_P2P, NULL, 0);
-        if (err == ESP_OK) {
-            success_count++;
-        } else {
-            fail_count++;
-            ESP_LOGD(TAG, "BEAT send err:0x%x to "MACSTR, err, MAC2STR(route_table[i].addr));
-        }
-    }
-
-    ESP_LOGI(TAG, "BEAT command broadcast - pointer:%d, counter:%d, sent to %d/%d child nodes (success:%d, failed:%d)",
-             sequence_pointer, counter_sent, success_count, child_node_count, success_count, fail_count);
-
-    return ESP_OK;
-}
 
 esp_err_t sequence_plugin_root_start(void)
 {
@@ -989,6 +895,47 @@ esp_err_t sequence_plugin_root_reset(void)
 uint16_t sequence_plugin_root_get_pointer(void)
 {
     return sequence_pointer;
+}
+
+uint8_t sequence_plugin_get_pointer_for_heartbeat(void)
+{
+    /* Return current sequence pointer if plugin is active, 0 otherwise */
+    if (plugin_is_active("sequence") && sequence_active) {
+        return (uint8_t)(sequence_pointer & 0xFF);  /* Convert to 1-byte (0-255) */
+    }
+    return 0;
+}
+
+esp_err_t sequence_plugin_handle_heartbeat(uint8_t pointer, uint8_t counter)
+{
+    /* Heartbeat is only for child nodes, root nodes send it */
+    if (esp_mesh_is_root()) {
+        ESP_LOGW(TAG, "Root node received heartbeat handler call (should not happen)");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Only update pointer if sequence plugin is active */
+    if (!plugin_is_active("sequence")) {
+        ESP_LOGD(TAG, "Heartbeat received but sequence plugin not active, ignoring");
+        return ESP_OK;
+    }
+
+    if (sequence_length == 0) {
+        ESP_LOGE(TAG, "No sequence data available for heartbeat (length=0)");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint16_t max_squares = sequence_length * 16;
+
+    if (pointer >= max_squares) {
+        ESP_LOGE(TAG, "Invalid heartbeat pointer: %d (max: %d)", pointer, max_squares - 1);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    sequence_pointer = pointer;
+    ESP_LOGD(TAG, "Heartbeat received - pointer updated to %d, counter: %d", sequence_pointer, counter);
+
+    return ESP_OK;
 }
 
 bool sequence_plugin_root_is_active(void)

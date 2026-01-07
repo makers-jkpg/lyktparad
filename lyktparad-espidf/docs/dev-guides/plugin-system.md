@@ -93,7 +93,6 @@ The Plugin System provides a modular architecture for extending the mesh network
 │  - on_start: START command callback (optional)          │
 │  - on_pause: PAUSE command callback (optional)          │
 │  - on_reset: RESET command callback (optional)          │
-│  - on_beat: BEAT command callback (optional)            │
 │  - on_activate: Activation callback (optional)         │
 │  - on_deactivate: Deactivation callback (optional)      │
 │  - timer_callback: Periodic updates (optional)          │
@@ -124,23 +123,16 @@ The plugin protocol uses a self-contained format where the plugin ID is included
   - `PLUGIN_CMD_PAUSE` (0x02): Pause plugin playback
   - `PLUGIN_CMD_RESET` (0x03): Reset plugin state
   - `PLUGIN_CMD_DATA` (0x04): Plugin-specific data command (variable length)
-  - `PLUGIN_CMD_BEAT` (0x05): Beat synchronization
 - **LENGTH** (2 bytes, optional): Length prefix for variable-length data (network byte order, only for DATA commands)
 - **DATA** (N bytes, optional): Command-specific data
 - **Total size**: Maximum 1024 bytes (including all fields)
 
 **Fixed-size commands**:
 - START, PAUSE, RESET: 2 bytes total (PLUGIN_ID + CMD)
-- BEAT: 4 bytes total (PLUGIN_ID + CMD + POINTER + COUNTER)
-  - POINTER (1 byte): Current position pointer (0-255)
-  - COUNTER (1 byte): Synchronization counter (0-255, wraps around, maintained by root node)
 
 **Variable-size commands** (DATA): 4 bytes header (PLUGIN_ID + CMD + LENGTH) + data
 
-**BEAT Command Details**:
-- The BEAT command includes both a pointer and a counter for synchronization
-- The counter increments on the root node (0-255, wraps to 0) and is broadcast to child nodes
-- The `on_beat` callback receives `data[0]` = pointer, `data[1]` = counter, with `len = 2`
+**Note**: Sequence synchronization is handled via `MESH_CMD_HEARTBEAT` (core mesh command), not via plugin BEAT commands. The heartbeat format is `[MESH_CMD_HEARTBEAT:1] [POINTER:1] [COUNTER:1]` (3 bytes total), where POINTER is the sequence pointer (0-255, 0 when sequence inactive) and COUNTER is a synchronization counter (0-255, wraps).
 
 **Mutual Exclusivity**: When a START command is received for a plugin, the system automatically stops any other running plugin before activating the target plugin.
 
@@ -241,7 +233,6 @@ void my_plugin_plugin_register(void)
             .on_start = my_plugin_on_start,  /* Optional */
             .on_pause = my_plugin_on_pause,  /* Optional */
             .on_reset = my_plugin_on_reset,  /* Optional */
-            .on_beat = my_plugin_on_beat,  /* Optional */
             .on_activate = my_plugin_on_activate,  /* Optional */
             .on_deactivate = my_plugin_on_deactivate,  /* Optional */
             .timer_callback = my_plugin_timer_callback,  /* Optional */
@@ -341,7 +332,7 @@ static esp_err_t my_plugin_command_handler(uint8_t *data, uint16_t len)
 
 The command handler receives data in the format `[CMD:1] [LENGTH:2?] [DATA:N]`:
 
-- **For fixed-size commands** (START, PAUSE, RESET, BEAT): `len = 1`, `data[0]` = command byte
+- **Note**: The `command_handler` callback is only used for `PLUGIN_CMD_DATA` commands. Fixed-size commands (START, PAUSE, RESET) are handled by their dedicated callbacks (`on_start`, `on_pause`, `on_reset`) and do not go through `command_handler`.
 - **For variable-size commands** (DATA): `len >= 3`, `data[0]` = `PLUGIN_CMD_DATA` (0x04), `data[1-2]` = length prefix (network byte order), `data[3]` onwards = actual data
 
 **Example DATA command:**
@@ -439,7 +430,7 @@ Plugins can optionally provide three query interface callbacks:
 esp_err_t (*get_state)(uint32_t query_type, void *result);
 ```
 
-**`execute_operation`**: Execute plugin operations (store, start, pause, reset, broadcast_beat, etc.)
+**`execute_operation`**: Execute plugin operations (store, start, pause, reset, etc.)
 ```c
 esp_err_t (*execute_operation)(uint32_t operation_type, void *params);
 ```
@@ -478,7 +469,6 @@ void my_plugin_plugin_register(void)
             .on_start = NULL,  /* Optional - called when START command received */
             .on_pause = NULL,  /* Optional - called when PAUSE command received */
             .on_reset = NULL,  /* Optional - called when RESET command received */
-            .on_beat = NULL,  /* Optional - called when BEAT command received (receives data[0]=pointer, data[1]=counter, len=2) */
             .on_activate = NULL,  /* Optional - called when plugin activated */
             .on_deactivate = NULL,  /* Optional - called when plugin deactivated */
             .timer_callback = my_plugin_timer_callback,     /* Optional */
@@ -855,7 +845,6 @@ void my_plugin_plugin_register(void)
             .on_start = NULL,
             .on_pause = NULL,
             .on_reset = NULL,
-            .on_beat = NULL,
             .on_activate = NULL,
             .on_deactivate = NULL,
             .timer_callback = NULL,
@@ -932,7 +921,6 @@ void my_plugin_plugin_register(void)
             .on_start = NULL,
             .on_pause = NULL,
             .on_reset = NULL,
-            .on_beat = NULL,
             .on_activate = NULL,
             .on_deactivate = NULL,
             .timer_callback = my_plugin_timer_callback,

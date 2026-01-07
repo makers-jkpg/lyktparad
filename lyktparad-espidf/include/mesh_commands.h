@@ -32,7 +32,6 @@
 #define  PLUGIN_CMD_PAUSE        (0x02)  /* Pause plugin playback */
 #define  PLUGIN_CMD_RESET        (0x03)  /* Reset plugin state */
 #define  PLUGIN_CMD_DATA         (0x04)  /* Plugin data command: variable length */
-#define  PLUGIN_CMD_BEAT         (0x05)  /* Plugin beat synchronization */
 
 /*******************************************************
  *                Command ID Allocation
@@ -41,7 +40,7 @@
 /* Command ID allocation strategy:
  *
  * 0x00-0x0A: Reserved (core commands and reserved range)
- *   - 0x01: MESH_CMD_HEARTBEAT
+ *   - 0x01: MESH_CMD_HEARTBEAT (format: [CMD:1] [POINTER:1] [COUNTER:1], 3 bytes total)
  *   - 0x02: MESH_CMD_LIGHT_ON_OFF
  *   - 0x03: MESH_CMD_SET_RGB
  *   - 0x04-0x09: Legacy plugin commands (DEPRECATED - use plugin protocol)
@@ -57,12 +56,13 @@
  * Plugin Protocol Format:
  *   [PLUGIN_ID:1] [CMD:1] [LENGTH:2?] [DATA:N]
  *   - PLUGIN_ID: Plugin identifier (0x0B-0xEE)
- *   - CMD: Command byte (PLUGIN_CMD_START=0x01, PAUSE=0x02, RESET=0x03, DATA=0x04, BEAT=0x05)
+ *   - CMD: Command byte (PLUGIN_CMD_START=0x01, PAUSE=0x02, RESET=0x03, DATA=0x04)
  *   - LENGTH: Optional 2-byte length prefix for variable-length data (network byte order, only for DATA commands)
  *   - DATA: Optional command-specific data
  *   - Total size: Maximum 1024 bytes (including all fields)
- *   - Fixed-size commands: START, PAUSE, RESET (2 bytes: PLUGIN_ID + CMD), BEAT (4 bytes: PLUGIN_ID + CMD + POINTER + COUNTER)
+ *   - Fixed-size commands: START, PAUSE, RESET (2 bytes: PLUGIN_ID + CMD)
  *   - Variable-size commands: DATA (4 bytes header: PLUGIN_ID + CMD + LENGTH + data)
+ *   - Note: Sequence synchronization is handled via MESH_CMD_HEARTBEAT, not via plugin BEAT commands
  *
  * 0xEF-0xFF: Reserved (internal mesh use)
  *   - Reserved for internal mesh operations (OTA, web server IP broadcast, etc.)

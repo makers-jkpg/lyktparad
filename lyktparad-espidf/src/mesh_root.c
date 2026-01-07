@@ -26,6 +26,7 @@
 #include "light_neopixel.h"
 #include "plugin_system.h"
 #include "light_common_cathode.h"
+#include "plugins/sequence/sequence_plugin.h"
 #include "config/mesh_config.h"
 #include "config/mesh_device_config.h"
 #include "mesh_ota.h"
@@ -110,17 +111,20 @@ static void heartbeat_timer_cb(void *arg)
     mesh_data_t data;
     uint8_t *tx_buf = mesh_common_get_tx_buf();
 
-    /* payload: command prefix (0x01) + 4-byte big-endian counter */
+    /* Get sequence pointer if sequence plugin is active, otherwise use 0 */
+    /* sequence_plugin_get_pointer_for_heartbeat() handles the inactive case internally */
+    uint16_t seq_pointer = sequence_plugin_get_pointer_for_heartbeat();
+    uint8_t pointer = (uint8_t)(seq_pointer & 0xFF);  /* Convert to 1-byte (0-255) */
+
+    /* payload: command prefix (0x01) + pointer (1 byte) + counter (1 byte) */
     heartbeat_count++;
-    uint32_t cnt = heartbeat_count;
+    uint8_t counter = (uint8_t)(heartbeat_count & 0xFF);  /* 1-byte counter (0-255, wraps) */
     tx_buf[0] = MESH_CMD_HEARTBEAT;  /* Command prefix */
-    tx_buf[1] = (cnt >> 24) & 0xff;  /* Counter MSB */
-    tx_buf[2] = (cnt >> 16) & 0xff;
-    tx_buf[3] = (cnt >> 8) & 0xff;
-    tx_buf[4] = (cnt >> 0) & 0xff;    /* Counter LSB */
+    tx_buf[1] = pointer;  /* Sequence pointer (0-255, 0 when sequence inactive) */
+    tx_buf[2] = counter;  /* Counter (0-255, wraps) */
 
     data.data = tx_buf;
-    data.size = 5;
+    data.size = 3;  /* New format: CMD(1) + pointer(1) + counter(1) */
     data.proto = MESH_PROTO_BIN;
     data.tos = MESH_TOS_P2P;
 
@@ -166,7 +170,7 @@ static void heartbeat_timer_cb(void *arg)
      */
     const char *active_plugin = plugin_get_active();
     if (active_plugin != NULL) {
-        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu - skipping LED change (plugin '%s' active)", (unsigned long)cnt, active_plugin);
+        ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%u - skipping LED change (plugin '%s' active)", counter, active_plugin);
     }
 
     /* Unified LED behavior for all nodes (root and child):
@@ -178,7 +182,7 @@ static void heartbeat_timer_cb(void *arg)
      * RGB LEDs are now exclusive to plugins via plugin_light_set_rgb() and plugin_set_rgb_led()
      * Status indication uses root status LED (ROOT_STATUS_LED_GPIO) instead
      */
-    ESP_LOGD(mesh_common_get_tag(), "[ROOT ACTION] Heartbeat #%lu", (unsigned long)cnt);
+    ESP_LOGI(mesh_common_get_tag(), "[ROOT HEARTBEAT] sent - pointer:%u, counter:%u", pointer, counter);
 }
 
 /*******************************************************

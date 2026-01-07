@@ -70,14 +70,33 @@ esp_err_t sequence_plugin_root_reset(void);
 uint16_t sequence_plugin_root_get_pointer(void);
 
 /**
+ * @brief Get sequence pointer for heartbeat (returns 0 if sequence inactive)
+ *
+ * This function returns the current sequence pointer as a 1-byte value (0-255)
+ * if the sequence plugin is active, or 0 if the plugin is inactive.
+ * Used by heartbeat timer to include sequence pointer in heartbeat payload.
+ *
+ * @return Sequence pointer (0-255) if active, 0 if inactive
+ */
+uint8_t sequence_plugin_get_pointer_for_heartbeat(void);
+
+/**
  * @brief Check if sequence playback is currently active on root node
  */
 bool sequence_plugin_root_is_active(void);
 
 /**
- * @brief Broadcast BEAT command to all child nodes (root node only)
+ * @brief Handle heartbeat command from mesh (child nodes only)
+ *
+ * This function is called when a heartbeat is received via mesh.
+ * It extracts the pointer and counter from the heartbeat payload
+ * and updates the sequence pointer if the sequence plugin is active.
+ *
+ * @param pointer Sequence pointer from heartbeat (0-255)
+ * @param counter Synchronization counter from heartbeat (0-255)
+ * @return ESP_OK on success, error code on failure
  */
-esp_err_t sequence_plugin_root_broadcast_beat(void);
+esp_err_t sequence_plugin_handle_heartbeat(uint8_t pointer, uint8_t counter);
 
 /*******************************************************
  *                Child Node Functions (for mesh_child.c)

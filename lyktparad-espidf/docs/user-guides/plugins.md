@@ -108,15 +108,13 @@ Plugins receive commands via the mesh network using a self-contained protocol fo
   - `PLUGIN_CMD_PAUSE` (0x02): Pause plugin playback
   - `PLUGIN_CMD_RESET` (0x03): Reset plugin state
   - `PLUGIN_CMD_DATA` (0x04): Plugin-specific data (variable length)
-  - `PLUGIN_CMD_BEAT` (0x05): Beat synchronization (4 bytes: PLUGIN_ID + CMD + POINTER + COUNTER)
 - **LENGTH** (2 bytes, optional): Length prefix for variable-length data (only for DATA commands)
 - **DATA** (N bytes, optional): Command-specific parameters
 
 **Command Sizes**:
 - START, PAUSE, RESET: 2 bytes (PLUGIN_ID + CMD)
-- BEAT: 4 bytes (PLUGIN_ID + CMD + POINTER + COUNTER)
-  - POINTER: Current position (0-255)
-  - COUNTER: Synchronization counter (0-255, increments on root node, wraps around)
+
+**Note**: Sequence synchronization is handled via `MESH_CMD_HEARTBEAT` (core mesh command), not via plugin BEAT commands. The heartbeat format is `[MESH_CMD_HEARTBEAT:1] [POINTER:1] [COUNTER:1]` (3 bytes total), where POINTER is the sequence pointer (0-255, 0 when sequence inactive) and COUNTER is a synchronization counter (0-255, wraps).
 
 **Total size**: Maximum 1024 bytes (including all fields)
 

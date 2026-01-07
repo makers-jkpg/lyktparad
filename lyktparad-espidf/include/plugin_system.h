@@ -140,16 +140,6 @@ typedef struct {
      */
     esp_err_t (*on_reset)(void);
 
-    /**
-     * @brief Plugin BEAT command callback (optional, may be NULL)
-     *
-     * Called when PLUGIN_CMD_BEAT (0x05) is received via plugin protocol.
-     *
-     * @param data Command data (data[0] = pointer, data[1] = counter (0-255))
-     * @param len Data length (expected 2: pointer + counter)
-     * @return ESP_OK on success, error code on failure
-     */
-    esp_err_t (*on_beat)(uint8_t *data, uint16_t len);
 
     /**
      * @brief Plugin state query callback (optional, may be NULL)
@@ -165,7 +155,7 @@ typedef struct {
     /**
      * @brief Plugin operation execution callback (optional, may be NULL)
      *
-     * Execute plugin operations (store, start, pause, reset, broadcast_beat, etc.).
+     * Execute plugin operations (store, start, pause, reset, etc.).
      *
      * @param operation_type Operation type identifier (plugin-specific enum or integer)
      * @param params Operation parameters (type depends on operation_type)
@@ -381,7 +371,7 @@ esp_err_t plugin_get_all_names(const char *names[], uint8_t max_count, uint8_t *
 /**
  * @brief Handle plugin control command routing
  *
- * This function routes plugin control commands (START, PAUSE, RESET, BEAT)
+ * This function routes plugin control commands (START, PAUSE, RESET)
  * using the new plugin protocol format: [PLUGIN_ID:1] [CMD:1] [DATA:N]
  *
  * The plugin ID is extracted from data[0], and the command byte is extracted
