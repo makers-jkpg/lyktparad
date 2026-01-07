@@ -108,11 +108,12 @@ Plugins receive commands via the mesh network using a self-contained protocol fo
   - `PLUGIN_CMD_PAUSE` (0x02): Pause plugin playback
   - `PLUGIN_CMD_RESET` (0x03): Reset plugin state
   - `PLUGIN_CMD_DATA` (0x04): Plugin-specific data (variable length)
+  - `PLUGIN_CMD_STOP` (0x05): Stop plugin (deactivate and reset state)
 - **LENGTH** (2 bytes, optional): Length prefix for variable-length data (only for DATA commands)
 - **DATA** (N bytes, optional): Command-specific parameters
 
 **Command Sizes**:
-- START, PAUSE, RESET: 2 bytes (PLUGIN_ID + CMD)
+- START, PAUSE, RESET, STOP: 2 bytes (PLUGIN_ID + CMD)
 
 **Note**: Sequence synchronization is handled via `MESH_CMD_HEARTBEAT` (core mesh command), not via plugin BEAT commands. The heartbeat format is `[MESH_CMD_HEARTBEAT:1] [POINTER:1] [COUNTER:1]` (3 bytes total), where POINTER is the sequence pointer (0-255, 0 when sequence inactive) and COUNTER is a synchronization counter (0-255, wraps).
 
@@ -189,6 +190,7 @@ The embedded webserver serves a simple static HTML page that provides basic plug
   - **Play**: Activates the selected plugin (equivalent to START)
   - **Pause**: Temporarily pauses the plugin's operation
   - **Rewind**: Resets the plugin's internal state
+  - **Stop**: Stops and deactivates the plugin (resets state and deactivates)
 - **Status Messages**: Shows success/error feedback for operations
 - **Auto-refresh**: Active plugin status is polled every 2 seconds
 
@@ -196,7 +198,7 @@ The embedded webserver serves a simple static HTML page that provides basic plug
 1. Connect to the root node's IP address in your web browser
 2. Select a plugin from the dropdown menu
 3. Click **Play** to activate the plugin
-4. Use **Pause** to pause, or **Rewind** to reset the plugin state
+4. Use **Pause** to pause, **Rewind** to reset the plugin state, or **Stop** to deactivate the plugin
 5. The active plugin indicator updates automatically
 
 **Note**: The embedded webserver provides a simple control interface. For plugins with custom HTML interfaces, use the external webserver which serves plugin-specific HTML files.
@@ -238,7 +240,7 @@ Plugins can be controlled via HTTP API endpoints on both embedded and external w
   - Response: `{"plugin": "plugin_name"}` or `{"plugin": null}`
 
 **Plugin Control Commands:**
-- `POST /api/plugin/stop` - Stop plugin (gracefully pauses then deactivates)
+- `POST /api/plugin/stop` - Stop plugin (calls on_stop callback if available, then deactivates)
   - Request: `{"name": "plugin_name"}`
   - Response: `{"success": true, "plugin": "plugin_name"}`
 - `POST /api/plugin/pause` - Pause plugin playback

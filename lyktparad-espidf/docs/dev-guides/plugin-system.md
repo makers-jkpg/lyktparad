@@ -93,6 +93,7 @@ The Plugin System provides a modular architecture for extending the mesh network
 │  - on_start: START command callback (optional)          │
 │  - on_pause: PAUSE command callback (optional)          │
 │  - on_reset: RESET command callback (optional)          │
+│  - on_stop: STOP command callback (optional)            │
 │  - on_activate: Activation callback (optional)         │
 │  - on_deactivate: Deactivation callback (optional)      │
 │  - timer_callback: Periodic updates (optional)          │
@@ -123,12 +124,13 @@ The plugin protocol uses a self-contained format where the plugin ID is included
   - `PLUGIN_CMD_PAUSE` (0x02): Pause plugin playback
   - `PLUGIN_CMD_RESET` (0x03): Reset plugin state
   - `PLUGIN_CMD_DATA` (0x04): Plugin-specific data command (variable length)
+  - `PLUGIN_CMD_STOP` (0x05): Stop plugin (deactivate and reset state)
 - **LENGTH** (2 bytes, optional): Length prefix for variable-length data (network byte order, only for DATA commands)
 - **DATA** (N bytes, optional): Command-specific data
 - **Total size**: Maximum 1024 bytes (including all fields)
 
 **Fixed-size commands**:
-- START, PAUSE, RESET: 2 bytes total (PLUGIN_ID + CMD)
+- START, PAUSE, RESET, STOP: 2 bytes total (PLUGIN_ID + CMD)
 
 **Variable-size commands** (DATA): 4 bytes header (PLUGIN_ID + CMD + LENGTH) + data
 
@@ -233,6 +235,7 @@ void my_plugin_plugin_register(void)
             .on_start = my_plugin_on_start,  /* Optional */
             .on_pause = my_plugin_on_pause,  /* Optional */
             .on_reset = my_plugin_on_reset,  /* Optional */
+            .on_stop = my_plugin_on_stop,  /* Optional */
             .on_activate = my_plugin_on_activate,  /* Optional */
             .on_deactivate = my_plugin_on_deactivate,  /* Optional */
             .timer_callback = my_plugin_timer_callback,  /* Optional */
@@ -332,7 +335,7 @@ static esp_err_t my_plugin_command_handler(uint8_t *data, uint16_t len)
 
 The command handler receives data in the format `[CMD:1] [LENGTH:2?] [DATA:N]`:
 
-- **Note**: The `command_handler` callback is only used for `PLUGIN_CMD_DATA` commands. Fixed-size commands (START, PAUSE, RESET) are handled by their dedicated callbacks (`on_start`, `on_pause`, `on_reset`) and do not go through `command_handler`.
+- **Note**: The `command_handler` callback is only used for `PLUGIN_CMD_DATA` commands. Fixed-size commands (START, PAUSE, RESET, STOP) are handled by their dedicated callbacks (`on_start`, `on_pause`, `on_reset`, `on_stop`) and do not go through `command_handler`.
 - **For variable-size commands** (DATA): `len >= 3`, `data[0]` = `PLUGIN_CMD_DATA` (0x04), `data[1-2]` = length prefix (network byte order), `data[3]` onwards = actual data
 
 **Example DATA command:**
@@ -469,6 +472,7 @@ void my_plugin_plugin_register(void)
             .on_start = NULL,  /* Optional - called when START command received */
             .on_pause = NULL,  /* Optional - called when PAUSE command received */
             .on_reset = NULL,  /* Optional - called when RESET command received */
+            .on_stop = NULL,  /* Optional - called when STOP command received */
             .on_activate = NULL,  /* Optional - called when plugin activated */
             .on_deactivate = NULL,  /* Optional - called when plugin deactivated */
             .timer_callback = my_plugin_timer_callback,     /* Optional */
@@ -670,7 +674,7 @@ The plugin system provides HTTP API endpoints for plugin control. These endpoint
   - Response: `{"plugin": "plugin_name"}` or `{"plugin": null}` if none active
 
 **Plugin Control Commands:**
-- `POST /api/plugin/stop` - Stop plugin (calls `on_pause` callback if available, then deactivates)
+- `POST /api/plugin/stop` - Stop plugin (calls `on_stop` callback if available, then deactivates)
   - Request body: `{"name": "plugin_name"}`
   - Response: `{"success": true, "plugin": "plugin_name"}` or `{"success": false, "error": "error_message"}`
 - `POST /api/plugin/pause` - Pause plugin playback
@@ -780,14 +784,15 @@ You don't need to modify `CMakeLists.txt` or any build configuration files. The 
 
 **Recommended Function**:
 - `plugin_set_rgb(r, g, b)`: Unified function that automatically controls all available LED systems
-  - Always controls Neopixel/WS2812 LEDs (works on root and child nodes)
+  - Conditionally controls Neopixel/WS2812 LEDs if `NEOPIXEL_ENABLE` is defined (enabled by default, works on root and child nodes)
   - Conditionally controls common-cathode RGB LEDs if `RGB_ENABLE` is defined
   - Eliminates the need for conditional compilation in plugins
   - Handles type conversion internally
+  - Returns ESP_OK if both LED types are disabled, or error code from Neopixel if enabled
   - This is the recommended function for all plugin LED control
 
 **Advanced Functions** (for fine-grained control):
-- `plugin_light_set_rgb(r, g, b)`: Control Neopixel/WS2812 LEDs only (works on root and child nodes)
+- `plugin_light_set_rgb(r, g, b)`: Control Neopixel/WS2812 LEDs only (works on root and child nodes, requires `NEOPIXEL_ENABLE`)
 - `plugin_set_rgb_led(r, g, b)`: Control common-cathode RGB LEDs only (works on root and child nodes, requires `RGB_ENABLE`)
 
 **Root Node Behavior**:
@@ -807,11 +812,13 @@ if (err != ESP_OK) {
 
 **Usage in Plugins** (Advanced - for fine-grained control):
 ```c
-/* Only control Neopixel LEDs */
+/* Only control Neopixel LEDs (if NEOPIXEL_ENABLE is defined) */
+#ifdef NEOPIXEL_ENABLE
 esp_err_t err = plugin_light_set_rgb(255, 0, 0);  /* Set to red */
 if (err != ESP_OK) {
     ESP_LOGE(TAG, "Failed to set LED: 0x%x", err);
 }
+#endif
 
 /* Only control common-cathode RGB LED (if RGB_ENABLE is defined) */
 #ifdef RGB_ENABLE
@@ -820,6 +827,12 @@ plugin_set_rgb_led(255, 0, 0);  /* Set to red */
 ```
 
 **Important**: All LED control functions check if a plugin is active before allowing LED control. Only the active plugin can control LEDs. If no plugin is active, these functions return `ESP_ERR_INVALID_STATE`.
+
+**LED Configuration**: Both LED systems are optional and can be enabled/disabled independently:
+- `NEOPIXEL_ENABLE`: Defined by default - comment out in `mesh_device_config.h` to disable Neopixel support
+- `RGB_ENABLE`: Undefined by default - uncomment in `mesh_device_config.h` to enable common-cathode RGB LED support
+- Both can be enabled simultaneously, or either can be disabled independently
+- Default behavior (both enabled) maintains backward compatibility
 
 **Backward Compatibility**: The individual functions (`plugin_light_set_rgb`, `plugin_set_rgb_led`) remain available for advanced use cases, but new plugins should use the unified `plugin_set_rgb()` function.
 

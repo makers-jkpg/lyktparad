@@ -8,7 +8,7 @@
 2. [Architecture](#architecture)
 3. [Plugin Directory Structure](#plugin-directory-structure)
 4. [Build System Integration](#build-system-integration)
-5. [File Embedding](#file-embedding)
+5. [Embedded Webserver HTML](#embedded-webserver-html)
 6. [External Webserver Integration](#external-webserver-integration)
 7. [Usage Examples](#usage-examples)
 8. [Implementation Details](#implementation-details)
@@ -65,15 +65,15 @@ The Plugin Build System provides automatic discovery, compilation, and integrati
                    │
                    ├─────────────────┬─────────────────────┐
                    ▼                 ▼                     ▼
-        ┌──────────────────┐ ┌──────────────┐ ┌──────────────────┐
-        │ Source Files     │ │ File         │ │ External         │
-        │ Compilation      │ │ Embedding    │ │ Webserver        │
-        │                  │ │              │ │ File Copying     │
-        │ - Add to SRCS    │ │ - Convert to │ │                  │
-        │ - Add to INCLUDE │ │   C strings  │ │ - Copy HTML/JS/  │
-        │   _DIRS          │ │ - Generate   │ │   CSS files      │
-        │                  │ │   headers    │ │ - Preserve dir   │
-        └──────────────────┘ └──────────────┘ └──────────────────┘
+        ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+        │ Source Files     │ │ Embedded         │ │ External         │
+        │ Compilation      │ │ Webserver HTML   │ │ Webserver        │
+        │                  │ │                  │ │ File Copying     │
+        │ - Add to SRCS    │ │ - Static HTML    │ │                  │
+        │ - Add to INCLUDE │ │   in mesh_web.c  │ │ - Copy HTML/JS/  │
+        │   _DIRS          │ │ - Simple plugin  │ │   CSS files      │
+        │                  │ │   control UI     │ │ - Preserve dir   │
+        └──────────────────┘ └──────────────────┘ └──────────────────┘
                    │                 │                     │
                    └─────────────────┴─────────────────────┘
                                      │
@@ -83,8 +83,8 @@ The Plugin Build System provides automatic discovery, compilation, and integrati
                           │                      │
                           │  - Plugin .c files   │
                           │    compiled          │
-                          │  - Generated headers │
-                          │    included          │
+                          │  - Static HTML       │
+                          │    embedded          │
                           └──────────────────────┘
 ```
 
@@ -92,9 +92,11 @@ The Plugin Build System provides automatic discovery, compilation, and integrati
 
 1. **Configuration Phase**: CMake scans `src/plugins/` directory and discovers plugins
 2. **Source Collection**: Plugin source files (`.c` and `.h`) are added to build
-3. **File Copying**: Plugin HTML/JS/CSS files are copied to external webserver directory
+3. **File Copying**: Plugin HTML/JS/CSS files are copied to external webserver directory (NOT embedded in firmware)
 4. **Compilation**: Plugin source files are compiled
 5. **Linking**: All plugin code is linked into the firmware
+
+**Note**: Plugin HTML/JS/CSS files are NOT embedded in firmware. They are only copied to the external webserver for serving. The embedded webserver uses a simple static HTML page defined directly in `mesh_web.c`.
 
 ## Plugin Directory Structure
 
@@ -143,15 +145,15 @@ src/plugins/
 │   ├── js/
 │   │   └── sequence.js
 │   └── css/
-│       └── effects.css
-└── sequence/
-    ├── sequence_plugin.h
-    ├── sequence_plugin.c
+│       └── sequence.css
+└── my_plugin/
+    ├── my_plugin_plugin.h
+    ├── my_plugin_plugin.c
     ├── index.html
     ├── js/
-    │   └── sequence.js
+    │   └── my_plugin.js
     └── css/
-        └── sequence.css
+        └── my_plugin.css
 ```
 
 ## Build System Integration
@@ -186,7 +188,7 @@ list(APPEND ALL_INCLUDE_DIRS ${PLUGIN_INCLUDE_DIRS})
 1. **Directory Scanning**: CMake scans `src/plugins/` for subdirectories
 2. **Validation**: Each subdirectory is checked for required files (`<plugin-name>_plugin.h` and `<plugin-name>_plugin.c`)
 3. **Source Collection**: Valid plugins have their `.c` files added to `PLUGIN_SOURCES` and include directories added to `PLUGIN_INCLUDE_DIRS`
-4. **Web File Collection**: Optional HTML/JS/CSS files are collected for embedding and copying
+4. **Web File Collection**: Optional HTML/JS/CSS files are collected for copying to external webserver
 
 ### Empty Directory Handling
 
@@ -195,173 +197,47 @@ The build system handles empty plugins directories gracefully:
 - If `src/plugins/` is empty, build continues normally
 - No warnings or errors are generated for missing plugins directory
 
-## File Embedding
+## Embedded Webserver HTML
 
 ### Overview
 
-HTML, JavaScript, and CSS files are converted to C string literals at build time using a Python script (`src/plugins/convert_file_to_c_string.py`). The script generates header files containing static const char arrays with the file content.
+The embedded webserver on the root node serves a simple static HTML page that is embedded directly in `mesh_web.c` as a C string literal. This page provides basic plugin control functionality: plugin selection, play, pause, and rewind buttons.
 
-### Conversion Process
+### HTML Page Structure
 
-1. **File Reading**: Source file is read as UTF-8
-2. **String Escaping**: Special characters are escaped for C string literals:
-   - Backslashes: `\` → `\\`
-   - Double quotes: `"` → `\"`
-   - Newlines: `\n` → `\\n`
-   - Carriage returns: `\r` → `\\r`
-   - Tabs: `\t` → `\\t`
-3. **Header Generation**: Header file is generated with:
-   - Header guards
-   - Static const char array with escaped content
-   - Size constant (excluding null terminator)
-
-### Generated Header Format
-
-For a plugin named `effects` with an HTML file:
-
-**Input**: `src/plugins/effects/effects.html`
-
-**Output**: `build/generated_plugin_headers/plugin_effects_html.h`
+The HTML page is defined as a static const char array in `mesh_web.c`:
 
 ```c
-/* Generated header file from effects.html
- *
- * This file was automatically generated. Do not edit manually.
- * Source: src/plugins/effects/effects.html
- *
- * Copyright (c) 2025 the_louie
- */
-
-#ifndef PLUGIN_EFFECTS_HTML_H
-#define PLUGIN_EFFECTS_HTML_H
-
-#include <stddef.h>
-
-/* Embedded HTML content as C string literal */
-static const char plugin_effects_html[] = "<!DOCTYPE html>...";
-static const size_t plugin_effects_html_size = sizeof(plugin_effects_html) - 1;  /* Exclude null terminator */
-
-#endif /* PLUGIN_EFFECTS_HTML_H */
+static const char simple_html_page[] =
+"<!DOCTYPE html>\n"
+"<html lang=\"en\">\n"
+// ... HTML content ...
+"</html>";
 ```
 
-### CMake Custom Commands
+### Features
 
-File embedding uses CMake custom commands:
+The embedded HTML page includes:
+- **Plugin Selection Dropdown**: Lists all available plugins
+- **Control Buttons**: Play (activate), Pause, and Rewind (reset)
+- **Active Plugin Display**: Shows which plugin is currently active
+- **Status Messages**: Success/error feedback for operations
+- **Auto-refresh**: Active plugin status is polled every 5 seconds
 
-```cmake
-add_custom_command(
-    OUTPUT "${header_file}"
-    COMMAND python3 "${CONVERT_SCRIPT}" "${html_file}" "${header_file}" "html"
-    DEPENDS "${html_file}" "${CONVERT_SCRIPT}"
-    COMMENT "Generating C string header from ${html_file}"
-    VERBATIM
-)
-```
+### API Integration
 
-### Usage in Plugin Code
+The HTML page uses JavaScript to interact with the plugin API endpoints:
+- `GET /api/plugins` - Load plugin list
+- `GET /api/plugin/active` - Get active plugin
+- `POST /api/plugin/activate` - Activate plugin
+- `POST /api/plugin/pause` - Pause plugin
+- `POST /api/plugin/reset` - Reset plugin
 
-Plugins can include generated headers to access embedded content:
+### Limitations
 
-```c
-#include "plugin_effects_html.h"
-
-// Access HTML content
-const char *html = plugin_effects_html;
-size_t html_len = plugin_effects_html_size;
-```
-
-## HTML Page Generation
-
-### Overview
-
-The build system generates the main HTML page by combining a template file with plugin HTML, CSS, and JavaScript fragments. This process is handled by `tools/generate_html.py`, which supports both embedded (C string literal) and external (HTML file) output modes.
-
-### Generation Process
-
-1. **Template Reading**: The script reads the template file (embedded or external)
-2. **Plugin Discovery**: Plugins are discovered from the plugins directory
-3. **Plugin Name Formatting**: Directory names are formatted for display (e.g., "effects" → "Effects")
-4. **Dropdown Generation**: A dropdown menu is generated listing all available plugins
-5. **CSS Generation**: Layout CSS is generated for the page header, content area, and plugin visibility
-6. **JavaScript Generation**: Selection JavaScript is generated for dropdown functionality and localStorage persistence
-7. **Plugin HTML Wrapping**: Each plugin's HTML is wrapped in a `<section>` tag with `data-plugin-name` attribute
-8. **Placeholder Replacement**: Template placeholders are replaced with generated content
-
-### Template Placeholders
-
-The template file supports the following placeholders:
-
-- `{{PAGE_TITLE}}`: Replaced with "MAKERS JÖNKÖPING LJUSPARAD 2026"
-- `{{PLUGIN_DROPDOWN}}`: Replaced with dropdown HTML
-- `{{PLUGIN_LAYOUT_CSS}}`: Replaced with layout CSS for page structure
-- `{{PLUGIN_SELECTION_JS}}`: Replaced with JavaScript for plugin selection
-- `{{PLUGIN_HTML}}`: Replaced with plugin HTML sections
-- `{{PLUGIN_CSS}}`: Replaced with plugin CSS (embedded) or CSS links (external)
-- `{{PLUGIN_JS}}`: Replaced with plugin JavaScript (embedded) or script tags (external)
-
-### Plugin HTML Wrapping
-
-Each plugin's HTML is automatically wrapped in a section tag:
-
-```html
-<section class="plugin-section plugin-{plugin_name}" data-plugin-name="{plugin_name}">
-    <!-- Plugin HTML content here -->
-</section>
-```
-
-The `data-plugin-name` attribute is used by JavaScript to identify and show/hide plugin sections.
-
-### Dropdown Generation
-
-The dropdown is generated with:
-- A placeholder option: "Select Plugin..."
-- An option for each plugin with:
-  - `value`: Plugin directory name (e.g., "effects")
-  - Display text: Formatted plugin name (e.g., "Effects")
-
-Plugin names are formatted by:
-1. Replacing underscores with spaces
-2. Capitalizing each word
-
-### Layout CSS Generation
-
-The generated CSS includes:
-- `.page-header`: Fixed header (150px height) at top of page
-- `.page-title`: Title styling
-- `.plugin-dropdown-container`: Dropdown positioning
-- `.plugin-selector`: Dropdown styling
-- `.page-content`: Content area with margin-top to account for fixed header
-- `.plugin-section`: Hidden by default (`display: none`)
-- `.plugin-section.active`: Visible when selected (`display: block`)
-- Responsive design media queries for mobile devices
-
-### Selection JavaScript Generation
-
-The generated JavaScript includes:
-- Plugin list array with all plugin names
-- `PluginSelector` object with:
-  - `init()`: Initializes dropdown and loads saved selection from localStorage
-  - `isValidPlugin()`: Validates plugin name
-  - `selectPlugin()`: Shows selected plugin, hides others
-- Event listener for dropdown changes
-- localStorage persistence for selection
-- DOM ready initialization
-
-### Build Integration
-
-HTML generation is integrated into the CMake build system:
-
-**Embedded Mode**:
-- Template: `templates/embedded_template.html`
-- Output: `build/generated_html.h` (C string literal)
-- Used by: ESP32 embedded webserver
-
-**External Mode**:
-- Template: `lyktparad-server/web-ui/index.html`
-- Output: `lyktparad-server/web-ui/index.html` (overwrites template)
-- Used by: Node.js external webserver
-
-Both modes use the same generation logic, ensuring consistency between embedded and external webservers.
+- The embedded webserver does NOT serve plugin-specific HTML files
+- Plugin HTML/JS/CSS files are only served by the external webserver
+- The embedded page provides basic control only, not full plugin interfaces
 
 ## External Webserver Integration
 
