@@ -1120,7 +1120,7 @@ static esp_err_t api_plugin_activate_handler(httpd_req_t *req)
 
     content[ret] = '\0';
 
-    /* Parse JSON: {"name": "effects"} or {"name": "sequence"} */
+    /* Parse JSON: {"name": "effect_strobe"} or {"name": "effect_fade"} or {"name": "sequence"} */
     char plugin_name[64] = {0};
     if (sscanf(content, "{\"name\":\"%63[^\"]\"}", plugin_name) != 1) {
         httpd_resp_set_status(req, "400 Bad Request");
@@ -1166,7 +1166,7 @@ static esp_err_t api_plugin_deactivate_handler(httpd_req_t *req)
 
     content[ret] = '\0';
 
-    /* Parse JSON: {"name": "effects"} or {"name": "sequence"} */
+    /* Parse JSON: {"name": "effect_strobe"} or {"name": "effect_fade"} or {"name": "sequence"} */
     char plugin_name[64] = {0};
     if (sscanf(content, "{\"name\":\"%63[^\"]\"}", plugin_name) != 1) {
         httpd_resp_set_status(req, "400 Bad Request");
@@ -1228,7 +1228,7 @@ static esp_err_t api_plugin_stop_handler(httpd_req_t *req)
 
     content[ret] = '\0';
 
-    /* Parse JSON: {"name": "effects"} or {"name": "sequence"} */
+    /* Parse JSON: {"name": "effect_strobe"} or {"name": "effect_fade"} or {"name": "sequence"} */
     char plugin_name[64] = {0};
     if (sscanf(content, "{\"name\":\"%63[^\"]\"}", plugin_name) != 1) {
         httpd_resp_set_status(req, "400 Bad Request");
@@ -1295,7 +1295,7 @@ static esp_err_t api_plugin_pause_handler(httpd_req_t *req)
 
     content[ret] = '\0';
 
-    /* Parse JSON: {"name": "effects"} or {"name": "sequence"} */
+    /* Parse JSON: {"name": "effect_strobe"} or {"name": "effect_fade"} or {"name": "sequence"} */
     char plugin_name[64] = {0};
     if (sscanf(content, "{\"name\":\"%63[^\"]\"}", plugin_name) != 1) {
         httpd_resp_set_status(req, "400 Bad Request");
@@ -1359,7 +1359,7 @@ static esp_err_t api_plugin_reset_handler(httpd_req_t *req)
 
     content[ret] = '\0';
 
-    /* Parse JSON: {"name": "effects"} or {"name": "sequence"} */
+    /* Parse JSON: {"name": "effect_strobe"} or {"name": "effect_fade"} or {"name": "sequence"} */
     char plugin_name[64] = {0};
     if (sscanf(content, "{\"name\":\"%63[^\"]\"}", plugin_name) != 1) {
         httpd_resp_set_status(req, "400 Bad Request");

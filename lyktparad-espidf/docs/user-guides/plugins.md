@@ -32,19 +32,35 @@ Plugins register with the system during firmware initialization and receive a un
 
 ## Available Plugins
 
-### Effects Plugin
+### Effect Strobe Plugin
 
-The Effects plugin provides synchronized visual effects across all mesh nodes.
+The Effect Strobe plugin provides synchronized strobe (on/off flashing) effects across all mesh nodes.
 
 **Features:**
-- Strobe effects (on/off flashing)
-- Fade effects (smooth color transitions)
-- Configurable timing and colors
-- Repeat count support
+- Automatic effect start when plugin is activated
+- White strobe effect (100ms on, 100ms off)
+- Continuous operation until plugin deactivation
+- Hardcoded default parameters (no configuration needed)
 
-**Commands:**
-- Effect commands are sent via mesh with effect parameters
-- Supports strobe and fade effect types
+**Usage:**
+- Activate the plugin to start the strobe effect automatically
+- Deactivate the plugin to stop the effect
+- Effect runs continuously with default parameters
+
+### Effect Fade Plugin
+
+The Effect Fade plugin provides synchronized fade (smooth color transitions) effects across all mesh nodes.
+
+**Features:**
+- Automatic effect start when plugin is activated
+- Smooth fade transitions (500ms fade in, 200ms hold, 500ms fade out)
+- Continuous operation until plugin deactivation
+- Hardcoded default parameters (no configuration needed)
+
+**Usage:**
+- Activate the plugin to start the fade effect automatically
+- Deactivate the plugin to stop the effect
+- Effect runs continuously with default parameters
 
 ### Sequence Plugin
 
@@ -100,28 +116,28 @@ Plugins receive commands via the mesh network using a self-contained protocol fo
 
 **Mutual Exclusivity**: When a START command is received for a plugin, the system automatically stops any other running plugin before activating the target plugin.
 
-### Effects Plugin Usage
+### Effect Strobe Plugin Usage
 
-#### Strobe Effect
+The Effect Strobe plugin automatically starts its effect when activated. No commands are needed - simply activate the plugin to start the strobe effect.
 
-Send a strobe effect command with:
-- Effect ID: `EFFECT_STROBE` (1)
-- On color: RGB values for "on" state
-- Off color: RGB values for "off" state
-- Duration on: Time in milliseconds for "on" state
-- Duration off: Time in milliseconds for "off" state
-- Repeat count: Number of cycles (0 = infinite)
+**Default Parameters:**
+- On color: RGB(255, 255, 255) - white
+- Off color: RGB(0, 0, 0) - black
+- Duration on: 100ms
+- Duration off: 100ms
+- Repeat: Infinite (runs until plugin deactivated)
 
-#### Fade Effect
+### Effect Fade Plugin Usage
 
-Send a fade effect command with:
-- Effect ID: `EFFECT_FADE` (2)
-- Start color: RGB values for fade start
-- End color: RGB values for fade end
-- Fade in time: Time in milliseconds for fade in
-- Fade out time: Time in milliseconds for fade out
-- Hold time: Time in milliseconds to hold at end color
-- Repeat count: Number of cycles (0 = infinite)
+The Effect Fade plugin automatically starts its effect when activated. No commands are needed - simply activate the plugin to start the fade effect.
+
+**Default Parameters:**
+- On color: RGB(255, 255, 255) - white
+- Off color: RGB(0, 0, 0) - black
+- Fade in: 500ms (smooth fade from on to off)
+- Fade out: 500ms (smooth fade from off to on)
+- Hold duration: 200ms (hold at off color before fading back)
+- Repeat: Infinite (runs until plugin deactivated)
 
 ### Sequence Plugin Usage
 
@@ -196,8 +212,8 @@ The Sequence plugin provides a full web interface accessible via the external we
 - **Playback Controls**: Start, stop, and reset
 - **Export/Import**: CSV file support
 
-**Effects Plugin:**
-The Effects plugin does not currently provide a web interface. Effects are controlled via mesh commands or API calls.
+**Effect Strobe and Effect Fade Plugins:**
+The Effect Strobe and Effect Fade plugins do not currently provide web interfaces. Effects are automatically started when the plugins are activated via the plugin control API or web interface.
 
 ## API Integration
 
@@ -271,9 +287,29 @@ GET /api/sequence/status
 GET /api/sequence/pointer
 ```
 
-#### Effects Plugin API
+#### Effect Strobe and Effect Fade Plugin API
 
-Effects are typically controlled via mesh commands rather than HTTP API, but API endpoints may be available depending on implementation.
+Effect plugins are controlled via the general plugin activation/deactivation API:
+
+**Activate Effect Strobe:**
+```
+POST /api/plugin/activate
+{"name": "effect_strobe"}
+```
+
+**Activate Effect Fade:**
+```
+POST /api/plugin/activate
+{"name": "effect_fade"}
+```
+
+**Deactivate Effect:**
+```
+POST /api/plugin/deactivate
+{"name": "effect_strobe"}  /* or "effect_fade" */
+```
+
+Effects automatically start when activated and stop when deactivated. No additional commands are needed.
 
 ### UDP Bridge API
 
@@ -322,14 +358,15 @@ The UDP bridge can forward API commands to the mesh network, allowing remote con
 ### Effects Not Playing
 
 **Symptoms:**
-- Effect commands sent but no visual output
+- Effect doesn't start when plugin is activated
 - Effect stops unexpectedly
 
 **Solutions:**
-- Check effect parameters are valid
+- Verify plugin is activated (check active plugin status)
+- Check that only one plugin is active at a time (plugin exclusivity)
 - Verify LED hardware is connected
-- Check effect timer is running
-- Review firmware logs for errors
+- Check effect timer is running (review firmware logs)
+- Verify plugin registered successfully during initialization
 
 ### Command ID Conflicts
 

@@ -47,15 +47,15 @@ def main():
     # Default CSV path relative to script location
     script_dir = os.path.dirname(os.path.abspath(__file__))
     csv_path = os.path.join(script_dir, '..', 'docs', 'example-patterns', 'RGB-rainbow.csv')
-    
+
     # Allow command-line override
     if len(sys.argv) > 1:
         csv_path = sys.argv[1]
-    
+
     if not os.path.exists(csv_path):
         print(f"Error: CSV file not found: {csv_path}", file=sys.stderr)
         sys.exit(1)
-    
+
     # Read and parse CSV
     colors = [None] * 256  # Pre-allocate for 256 squares
     with open(csv_path, 'r') as f:
@@ -68,13 +68,13 @@ def main():
                 print(f"Warning: Index out of range in line {line_num}: {line}", file=sys.stderr)
                 continue
             colors[index] = (r, g, b)
-    
+
     # Verify all squares are filled
     missing = [i for i, c in enumerate(colors) if c is None]
     if missing:
         print(f"Error: Missing color data for squares: {missing[:10]}{'...' if len(missing) > 10 else ''}", file=sys.stderr)
         sys.exit(1)
-    
+
     # Pack data: for each pair (i, i+1), pack into 3 bytes
     packed = []
     for i in range(0, 256, 2):
@@ -82,12 +82,12 @@ def main():
         r1, g1, b1 = colors[i + 1]
         byte0, byte1, byte2 = pack_pair(r0, g0, b0, r1, g1, b1)
         packed.extend([byte0, byte1, byte2])
-    
+
     # Verify packed size
     if len(packed) != 384:
         print(f"Error: Packed data size is {len(packed)}, expected 384", file=sys.stderr)
         sys.exit(1)
-    
+
     # Generate C array
     print("/* Hardcoded RGB-rainbow default sequence data")
     print(" * Source: RGB-rainbow.csv")
@@ -97,14 +97,14 @@ def main():
     print(" * Usage: Default sequence data loaded if no user data exists")
     print(" */")
     print("static const uint8_t sequence_default_rgb_rainbow[384] = {")
-    
+
     # Format: 12 bytes per line (4 square pairs)
     for i in range(0, len(packed), 12):
         line_bytes = packed[i:i+12]
         hex_bytes = [f"0x{b:02X}" for b in line_bytes]
         comma = "," if i + 12 < len(packed) else ""
         print(f"    {', '.join(hex_bytes)}{comma}")
-    
+
     print("};")
 
 if __name__ == '__main__':

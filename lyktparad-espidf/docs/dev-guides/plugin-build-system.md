@@ -130,12 +130,18 @@ src/plugins/
 ```
 src/plugins/
 ├── plugins.h
-├── effects/
-│   ├── effects_plugin.h
-│   ├── effects_plugin.c
-│   ├── effects.html
+├── effect_strobe/
+│   ├── effect_strobe_plugin.h
+│   └── effect_strobe_plugin.c
+├── effect_fade/
+│   ├── effect_fade_plugin.h
+│   └── effect_fade_plugin.c
+├── sequence/
+│   ├── sequence_plugin.h
+│   ├── sequence_plugin.c
+│   ├── sequence.html
 │   ├── js/
-│   │   └── effects.js
+│   │   └── sequence.js
 │   └── css/
 │       └── effects.css
 └── sequence/

@@ -381,7 +381,7 @@ static esp_err_t sequence_init(void)
      * - sequence_colors is all zeros
      */
     bool data_exists = true;
-    
+
     if (sequence_length == 0 || sequence_rhythm == 0) {
         data_exists = false;
     } else {
@@ -397,7 +397,7 @@ static esp_err_t sequence_init(void)
             data_exists = false;
         }
     }
-    
+
     if (!data_exists) {
         /* No data exists, load default RGB-rainbow sequence */
         esp_err_t err = sequence_load_default_data();
@@ -407,7 +407,7 @@ static esp_err_t sequence_init(void)
         }
         ESP_LOGI(TAG, "Loading default RGB-rainbow sequence data");
     }
-    
+
     return ESP_OK;
 }
 

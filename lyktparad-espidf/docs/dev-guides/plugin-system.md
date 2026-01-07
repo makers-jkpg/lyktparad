@@ -523,7 +523,8 @@ After creating your plugin, add it to `src/plugins/plugins.h`:
 
 static inline void plugins_init(void)
 {
-    effects_plugin_register();
+    effect_strobe_plugin_register();
+    effect_fade_plugin_register();
     sequence_plugin_register();
     my_plugin_plugin_register();  /* Add your plugin */
 }
