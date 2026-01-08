@@ -1,12 +1,12 @@
 /**
  * Unit tests for plugin-web-ui.js module
- * 
+ *
  * Tests core functionality of PluginWebUI module including:
  * - Bundle loading
  * - Data sending
  * - Encoding helpers
  * - Error handling
- * 
+ *
  * Copyright (c) 2025 the_louie
  */
 
@@ -275,10 +275,10 @@ describe('PluginWebUI Module', () => {
 
         test('should log errors to console', () => {
             const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-            
+
             // Simulate error logging
             console.error('[Plugin Web UI]', 'Test error');
-            
+
             expect(consoleSpy).toHaveBeenCalled();
             consoleSpy.mockRestore();
         });

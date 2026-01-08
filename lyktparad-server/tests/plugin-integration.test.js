@@ -1,13 +1,13 @@
 /**
  * Integration tests for plugin web UI functions in app.js
- * 
+ *
  * Tests integration between app.js functions and PluginWebUI module:
  * - loadPluginWebUI()
  * - sendPluginWebUIData()
  * - fetchPluginList()
  * - populatePluginDropdown()
  * - initializePluginSelector()
- * 
+ *
  * Copyright (c) 2025 the_louie
  */
 
@@ -56,7 +56,7 @@ describe('Plugin Web UI Integration', () => {
     describe('loadPluginWebUI', () => {
         test('should check if PluginWebUI module is loaded', () => {
             global.window.PluginWebUI = null;
-            
+
             // Simulate check
             const isLoaded = global.window.PluginWebUI !== null && typeof global.window.PluginWebUI === 'object';
             expect(isLoaded).toBe(false);
