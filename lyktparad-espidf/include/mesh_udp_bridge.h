@@ -522,4 +522,47 @@ esp_err_t mesh_udp_bridge_clear_manual_server_ip(void);
  */
 bool mesh_udp_bridge_use_cached_ip(void);
 
+/*******************************************************
+ *                Runtime Option Management
+ *******************************************************/
+
+/**
+ * @brief Check if ONLY_ONBOARD_HTTP runtime option is enabled.
+ *
+ * Reads the runtime option from NVS. If the option is not found,
+ * returns false (default: external server enabled).
+ *
+ * @return true if ONLY_ONBOARD_HTTP is enabled, false otherwise
+ */
+bool mesh_udp_bridge_is_onboard_only(void);
+
+/**
+ * @brief Set ONLY_ONBOARD_HTTP runtime option.
+ *
+ * Stores the runtime option in NVS. This option completely disables
+ * external server functionality when enabled.
+ *
+ * @param enabled True to enable ONLY_ONBOARD_HTTP, false to disable
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_set_onboard_only(bool enabled);
+
+/**
+ * @brief Check if manual server IP is configured.
+ *
+ * Checks if a manual server IP configuration exists in NVS.
+ *
+ * @return true if manual IP is configured, false otherwise
+ */
+bool mesh_udp_bridge_has_manual_config(void);
+
+/**
+ * @brief Cleanup all external server sockets.
+ *
+ * Stops all external server services and closes all sockets.
+ * This function is called when falling back to HTTP-only mode.
+ * This function is idempotent - safe to call multiple times.
+ */
+void mesh_udp_bridge_cleanup_all_sockets(void);
+
 #endif /* __MESH_UDP_BRIDGE_H__ */

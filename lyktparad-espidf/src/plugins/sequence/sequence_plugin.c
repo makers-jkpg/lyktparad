@@ -158,8 +158,10 @@ static void sequence_timer_stop(void)
         esp_timer_stop(sequence_timer);
         esp_timer_delete(sequence_timer);
         sequence_timer = NULL;
-        sequence_active = false;
     }
+    /* Always set sequence_active to false to ensure state consistency,
+     * even if timer is already NULL (handles inconsistent state) */
+    sequence_active = false;
 }
 
 static esp_err_t sequence_timer_start(uint8_t rhythm)
@@ -427,17 +429,37 @@ static esp_err_t sequence_on_activate(void)
 
 static esp_err_t sequence_on_deactivate(void)
 {
-    /* Stop sequence timer */
+    /* Stop sequence timer (also sets sequence_active = false) */
     sequence_timer_stop();
 
-    /* Clear playback state (but preserve sequence data) */
-    sequence_active = false;
     /* Note: sequence_pointer, sequence_rhythm, sequence_colors, sequence_length are preserved */
 
     ESP_LOGD(TAG, "Sequence plugin deactivated");
     return ESP_OK;
 }
 
+/**
+ * @brief Sequence plugin START command callback
+ *
+ * Handles PLUGIN_CMD_START command for the sequence plugin.
+ * Starts sequence playback by creating and starting the sequence timer.
+ *
+ * Root Node Behavior:
+ * - If timer is already running (duplicate START), returns ESP_OK gracefully
+ * - Calls sequence_plugin_root_start() to start playback
+ * - Root nodes typically start via plugin_activate(), not via mesh commands
+ *
+ * Child Node Behavior:
+ * - Validates sequence data exists (rhythm and length must be non-zero)
+ * - Stops existing timer before starting (cleanup)
+ * - Preserves sequence pointer if resuming from pause (if within bounds)
+ * - Resets pointer to 0 if out of bounds
+ * - Starts timer with existing rhythm value
+ *
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_STATE if sequence data is missing (rhythm=0 or length=0)
+ * @return Error code from sequence_timer_start() if timer start fails
+ */
 static esp_err_t sequence_on_start(void)
 {
     if (esp_mesh_is_root()) {
@@ -477,6 +499,23 @@ static esp_err_t sequence_on_start(void)
     }
 }
 
+/**
+ * @brief Sequence plugin PAUSE command callback
+ *
+ * Handles PLUGIN_CMD_PAUSE command for the sequence plugin.
+ * Pauses sequence playback by stopping the sequence timer.
+ * The sequence pointer is preserved to allow resume functionality.
+ *
+ * Root Node Behavior:
+ * - Calls sequence_plugin_root_pause() to stop playback
+ *
+ * Child Node Behavior:
+ * - Stops the sequence timer
+ * - Preserves sequence pointer (not modified) for resume
+ * - Safe to call even if timer is not running (idempotent)
+ *
+ * @return ESP_OK on success (always succeeds)
+ */
 static esp_err_t sequence_on_pause(void)
 {
     if (esp_mesh_is_root()) {
@@ -489,6 +528,25 @@ static esp_err_t sequence_on_pause(void)
     }
 }
 
+/**
+ * @brief Sequence plugin RESET command callback
+ *
+ * Handles PLUGIN_CMD_RESET command for the sequence plugin.
+ * Resets the sequence pointer to 0 and restarts playback if the sequence was active.
+ *
+ * Root Node Behavior:
+ * - Calls sequence_plugin_root_reset() to reset playback
+ *
+ * Child Node Behavior:
+ * - Always resets sequence pointer to 0
+ * - If sequence was active, stops and restarts timer from beginning
+ * - Validates sequence data before restarting timer
+ * - If sequence was not active, only resets pointer (timer not restarted)
+ *
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_STATE if sequence data is invalid when restarting timer (rhythm=0 or length=0)
+ * @return Error code from sequence_timer_start() if timer restart fails
+ */
 static esp_err_t sequence_on_reset(void)
 {
     if (esp_mesh_is_root()) {
@@ -518,14 +576,11 @@ static esp_err_t sequence_on_reset(void)
 
 static esp_err_t sequence_on_stop(void)
 {
-    /* Stop sequence timer */
+    /* Stop sequence timer (also sets sequence_active = false) */
     sequence_timer_stop();
 
     /* Reset sequence pointer to 0 */
     sequence_pointer = 0;
-
-    /* Clear sequence active state */
-    sequence_active = false;
 
     ESP_LOGI(TAG, "Sequence plugin stopped - pointer reset to 0");
     return ESP_OK;

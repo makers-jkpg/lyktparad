@@ -331,6 +331,13 @@ static const char simple_html_page[] =
 "                           aria-label=\"External server UDP port\">\n"
 "                    <span id=\"external-server-port-validation\" class=\"validation-message\" aria-live=\"polite\"></span>\n"
 "                </div>\n"
+"                <div class=\"form-group\">\n"
+"                    <label for=\"external-server-onboard-only\" style=\"display: flex; align-items: center; gap: 8px;\">\n"
+"                        <input type=\"checkbox\" id=\"external-server-onboard-only\" name=\"onboard_only\"\n"
+"                               aria-label=\"Onboard HTTP Only - Disable external server functionality\">\n"
+"                        <span>Onboard HTTP Only (Disable external server functionality)</span>\n"
+"                    </label>\n"
+"                </div>\n"
 "                <div class=\"button-group\">\n"
 "                    <button id=\"external-server-save\" type=\"button\" class=\"btn btn-primary\" aria-label=\"Save external server configuration\">Save</button>\n"
 "                    <button id=\"external-server-clear\" type=\"button\" class=\"btn btn-secondary\" aria-label=\"Clear external server configuration\">Clear</button>\n"
@@ -677,20 +684,50 @@ static const char simple_html_page[] =
 "                const currentDiv = document.getElementById('external-server-current');\n"
 "                const currentValue = document.getElementById('external-server-current-value');\n"
 "\n"
-"                if (data.ip && data.port) {\n"
-"                    if (ipInput) ipInput.value = data.ip;\n"
-"                    if (portInput) portInput.value = data.port;\n"
+"                const onboardOnlyCheckbox = document.getElementById('external-server-onboard-only');\n"
+"                if (onboardOnlyCheckbox) {\n"
+"                    onboardOnlyCheckbox.checked = data.onboard_only || false;\n"
+"                }\n"
+"\n"
+"                if (data.onboard_only) {\n"
+"                    if (ipInput) ipInput.disabled = true;\n"
+"                    if (portInput) portInput.disabled = true;\n"
 "                    if (statusDiv) statusDiv.style.display = 'flex';\n"
 "                    if (statusText) {\n"
-"                        statusText.textContent = data.limited_mode ? 'Active (Limited Mode)' : 'Configured (Not Active)';\n"
+"                        statusText.textContent = 'Onboard HTTP Only (External server disabled)';\n"
+"                        statusText.className = 'stage-text';\n"
+"                    }\n"
+"                    if (currentDiv) currentDiv.style.display = 'none';\n"
+"                } else if (data.ip && data.port) {\n"
+"                    if (ipInput) {\n"
+"                        ipInput.value = data.ip;\n"
+"                        ipInput.disabled = false;\n"
+"                    }\n"
+"                    if (portInput) {\n"
+"                        portInput.value = data.port;\n"
+"                        portInput.disabled = false;\n"
+"                    }\n"
+"                    if (statusDiv) statusDiv.style.display = 'flex';\n"
+"                    if (statusText) {\n"
+"                        if (data.server_discovered) {\n"
+"                            statusText.textContent = data.limited_mode ? 'Active (Limited Mode)' : 'Configured (Discovered)';\n"
+"                        } else {\n"
+"                            statusText.textContent = 'Configured (Not Discovered)';\n"
+"                        }\n"
 "                        statusText.className = data.limited_mode ? 'stage-text stage-active' : 'stage-text';\n"
 "                    }\n"
 "                    if (currentDiv) currentDiv.style.display = 'block';\n"
 "                    if (currentValue) currentValue.textContent = data.ip + ':' + data.port;\n"
 "                } else {\n"
+"                    if (ipInput) ipInput.disabled = false;\n"
+"                    if (portInput) portInput.disabled = false;\n"
 "                    if (statusDiv) statusDiv.style.display = 'flex';\n"
 "                    if (statusText) {\n"
-"                        statusText.textContent = 'Not configured';\n"
+"                        if (data.server_discovered) {\n"
+"                            statusText.textContent = 'Auto-discovered (No manual config)';\n"
+"                        } else {\n"
+"                            statusText.textContent = 'Not configured';\n"
+"                        }\n"
 "                        statusText.className = 'stage-text';\n"
 "                    }\n"
 "                    if (currentDiv) currentDiv.style.display = 'none';\n"
@@ -728,11 +765,12 @@ static const char simple_html_page[] =
 "        async function handleExternalServerSave() {\n"
 "            const ipInput = document.getElementById('external-server-ip');\n"
 "            const portInput = document.getElementById('external-server-port');\n"
+"            const onboardOnlyCheckbox = document.getElementById('external-server-onboard-only');\n"
 "            const saveButton = document.getElementById('external-server-save');\n"
 "            const ipValidation = document.getElementById('external-server-ip-validation');\n"
 "            const portValidation = document.getElementById('external-server-port-validation');\n"
 "\n"
-"            if (!ipInput || !portInput || !saveButton) {\n"
+"            if (!saveButton) {\n"
 "                console.error('External server form elements not found');\n"
 "                return;\n"
 "            }\n"
@@ -746,39 +784,51 @@ static const char simple_html_page[] =
 "                portValidation.className = 'validation-message';\n"
 "            }\n"
 "\n"
-"            const ipValidationResult = validateIpOrHostname(ipInput.value);\n"
-"            if (!ipValidationResult.valid) {\n"
-"                if (ipValidation) {\n"
-"                    ipValidation.textContent = ipValidationResult.message;\n"
-"                    ipValidation.className = 'validation-message error';\n"
-"                }\n"
-"                ipInput.classList.add('invalid');\n"
-"                return;\n"
-"            }\n"
-"            ipInput.classList.remove('invalid');\n"
+"            const onboardOnly = onboardOnlyCheckbox ? onboardOnlyCheckbox.checked : false;\n"
 "\n"
-"            const portValidationResult = validatePort(portInput.value);\n"
-"            if (!portValidationResult.valid) {\n"
-"                if (portValidation) {\n"
-"                    portValidation.textContent = portValidationResult.message;\n"
-"                    portValidation.className = 'validation-message error';\n"
+"            if (!onboardOnly) {\n"
+"                if (!ipInput || !portInput) {\n"
+"                    console.error('External server form elements not found');\n"
+"                    return;\n"
 "                }\n"
-"                portInput.classList.add('invalid');\n"
-"                return;\n"
+"\n"
+"                const ipValidationResult = validateIpOrHostname(ipInput.value);\n"
+"                if (!ipValidationResult.valid) {\n"
+"                    if (ipValidation) {\n"
+"                        ipValidation.textContent = ipValidationResult.message;\n"
+"                        ipValidation.className = 'validation-message error';\n"
+"                    }\n"
+"                    if (ipInput) ipInput.classList.add('invalid');\n"
+"                    return;\n"
+"                }\n"
+"                if (ipInput) ipInput.classList.remove('invalid');\n"
+"\n"
+"                const portValidationResult = validatePort(portInput.value);\n"
+"                if (!portValidationResult.valid) {\n"
+"                    if (portValidation) {\n"
+"                        portValidation.textContent = portValidationResult.message;\n"
+"                        portValidation.className = 'validation-message error';\n"
+"                    }\n"
+"                    if (portInput) portInput.classList.add('invalid');\n"
+"                    return;\n"
+"                }\n"
+"                if (portInput) portInput.classList.remove('invalid');\n"
 "            }\n"
-"            portInput.classList.remove('invalid');\n"
 "\n"
 "            saveButton.disabled = true;\n"
 "            saveButton.textContent = 'Saving...';\n"
 "\n"
 "            try {\n"
+"                const requestBody = { onboard_only: onboardOnly };\n"
+"                if (!onboardOnly && ipInput && portInput) {\n"
+"                    requestBody.ip = ipInput.value.trim();\n"
+"                    requestBody.port = parseInt(portInput.value, 10);\n"
+"                }\n"
+"\n"
 "                const response = await fetch('/api/settings/external-server', {\n"
 "                    method: 'POST',\n"
 "                    headers: { 'Content-Type': 'application/json' },\n"
-"                    body: JSON.stringify({\n"
-"                        ip: ipInput.value.trim(),\n"
-"                        port: parseInt(portInput.value, 10)\n"
-"                    })\n"
+"                    body: JSON.stringify(requestBody)\n"
 "                });\n"
 "\n"
 "                if (!response.ok) {\n"
@@ -2166,19 +2216,25 @@ bool mesh_web_is_limited_mode(void)
 static esp_err_t api_settings_external_server_get_handler(httpd_req_t *req)
 {
     ESP_LOGD(WEB_TAG, "GET /api/settings/external-server requested");
-    char response[256];
+    char response[512];
     char manual_ip[64] = {0};
     uint16_t manual_port = 0;
     esp_err_t err = mesh_udp_bridge_get_manual_config(manual_ip, sizeof(manual_ip), &manual_port, NULL, 0);
 
+    bool onboard_only = mesh_udp_bridge_is_onboard_only();
+    bool manual_ip_set = (err == ESP_OK);
+    bool server_discovered = mesh_udp_bridge_is_server_discovered();
     bool limited_mode = mesh_web_is_limited_mode();
-    ESP_LOGD(WEB_TAG, "LIMITED_MODE state: %s", limited_mode ? "active" : "inactive");
+    ESP_LOGD(WEB_TAG, "Configuration state: onboard_only=%s, manual_ip_set=%s, server_discovered=%s, limited_mode=%s",
+             onboard_only ? "true" : "false", manual_ip_set ? "true" : "false",
+             server_discovered ? "true" : "false", limited_mode ? "true" : "false");
 
-    if (err == ESP_OK) {
+    if (manual_ip_set) {
         /* Manual configuration exists */
         int len = snprintf(response, sizeof(response),
-                          "{\"ip\":\"%s\",\"port\":%d,\"limited_mode\":%s}",
-                          manual_ip, manual_port, limited_mode ? "true" : "false");
+                          "{\"ip\":\"%s\",\"port\":%d,\"onboard_only\":%s,\"manual_ip_set\":true,\"server_discovered\":%s,\"limited_mode\":%s}",
+                          manual_ip, manual_port, onboard_only ? "true" : "false",
+                          server_discovered ? "true" : "false", limited_mode ? "true" : "false");
         if (len < 0 || len >= (int)sizeof(response)) {
             httpd_resp_set_status(req, "500 Internal Server Error");
             httpd_resp_set_type(req, "application/json");
@@ -2188,7 +2244,9 @@ static esp_err_t api_settings_external_server_get_handler(httpd_req_t *req)
         }
     } else if (err == ESP_ERR_NOT_FOUND) {
         /* No manual configuration */
-        int len = snprintf(response, sizeof(response), "{\"limited_mode\":false}");
+        int len = snprintf(response, sizeof(response),
+                          "{\"ip\":null,\"port\":null,\"onboard_only\":%s,\"manual_ip_set\":false,\"server_discovered\":%s,\"limited_mode\":%s}",
+                          onboard_only ? "true" : "false", server_discovered ? "true" : "false", limited_mode ? "true" : "false");
         if (len < 0 || len >= (int)sizeof(response)) {
             httpd_resp_set_status(req, "500 Internal Server Error");
             httpd_resp_set_type(req, "application/json");
@@ -2241,16 +2299,73 @@ static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req)
 
     content[ret] = '\0';
 
-    /* Simple JSON parsing for {"ip":"...","port":...} */
+    /* Simple JSON parsing for {"ip":"...","port":...,"onboard_only":...} */
     char *ip_str = strstr(content, "\"ip\":");
     char *port_str = strstr(content, "\"port\":");
+    char *onboard_only_str = strstr(content, "\"onboard_only\":");
 
-    if (!ip_str || !port_str) {
-        httpd_resp_set_status(req, "400 Bad Request");
+    /* Extract onboard_only flag (optional, defaults to false) */
+    bool onboard_only = false;
+    if (onboard_only_str != NULL) {
+        onboard_only_str += 15; /* Skip past "onboard_only": */
+        while (*onboard_only_str != '\0' && onboard_only_str < content + ret && *onboard_only_str == ' ') onboard_only_str++;
+        if (onboard_only_str < content + ret && *onboard_only_str != '\0') {
+            if (strncmp(onboard_only_str, "true", 4) == 0) {
+                onboard_only = true;
+            } else if (strncmp(onboard_only_str, "false", 5) == 0) {
+                onboard_only = false;
+            } else {
+                /* Invalid boolean value */
+                httpd_resp_set_status(req, "400 Bad Request");
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+                httpd_resp_send(req, "{\"success\":false,\"error\":\"onboard_only must be true or false\"}", -1);
+                return ESP_FAIL;
+            }
+        }
+    }
+
+    /* Handle onboard_only option */
+    if (onboard_only) {
+        /* Clear manual IP configuration */
+        esp_err_t clear_err = mesh_udp_bridge_clear_manual_server_ip();
+        if (clear_err != ESP_OK && clear_err != ESP_ERR_NOT_FOUND) {
+            ESP_LOGW(WEB_TAG, "Failed to clear manual IP when setting onboard_only: %s", esp_err_to_name(clear_err));
+        }
+        /* Set runtime option */
+        esp_err_t set_err = mesh_udp_bridge_set_onboard_only(true);
+        if (set_err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to set onboard_only option: %s", esp_err_to_name(set_err));
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_send(req, "{\"success\":false,\"error\":\"Failed to set onboard_only option\"}", -1);
+            return ESP_FAIL;
+        }
+        ESP_LOGI(WEB_TAG, "ONLY_ONBOARD_HTTP runtime option enabled via web UI");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid JSON format\"}", -1);
-        return ESP_FAIL;
+        return httpd_resp_send(req, "{\"success\":true,\"onboard_only\":true}", -1);
+    }
+
+    /* onboard_only is false - handle IP/port configuration */
+    /* Clear runtime option */
+    esp_err_t clear_opt_err = mesh_udp_bridge_set_onboard_only(false);
+    if (clear_opt_err != ESP_OK) {
+        ESP_LOGW(WEB_TAG, "Failed to clear onboard_only option: %s", esp_err_to_name(clear_opt_err));
+    }
+
+    /* If IP not provided, clear manual IP and return success */
+    if (!ip_str || !port_str) {
+        /* Clear manual IP configuration */
+        esp_err_t clear_err = mesh_udp_bridge_clear_manual_server_ip();
+        if (clear_err != ESP_OK && clear_err != ESP_ERR_NOT_FOUND) {
+            ESP_LOGW(WEB_TAG, "Failed to clear manual IP: %s", esp_err_to_name(clear_err));
+        }
+        ESP_LOGI(WEB_TAG, "Manual IP configuration cleared via web UI");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        return httpd_resp_send(req, "{\"success\":true,\"onboard_only\":false}", -1);
     }
 
     /* Extract IP/hostname */
@@ -2297,7 +2412,7 @@ static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req)
         httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid JSON format\"}", -1);
         return ESP_FAIL;
     }
-    
+
     /* Validate port string is numeric */
     char *port_end = port_str;
     while (port_end < content + ret && *port_end != '\0' && *port_end >= '0' && *port_end <= '9') port_end++;
@@ -2309,7 +2424,7 @@ static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req)
         httpd_resp_send(req, "{\"success\":false,\"error\":\"Port must be a number\"}", -1);
         return ESP_FAIL;
     }
-    
+
     int port_val = atoi(port_str);
 
     /* Validate port range */
@@ -2402,8 +2517,8 @@ static esp_err_t api_settings_external_server_post_handler(httpd_req_t *req)
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    char response[128];
-    int len = snprintf(response, sizeof(response), "{\"success\":true,\"limited_mode\":%s}", limited_mode ? "true" : "false");
+    char response[256];
+    int len = snprintf(response, sizeof(response), "{\"success\":true,\"onboard_only\":false,\"limited_mode\":%s}", limited_mode ? "true" : "false");
     if (len < 0 || len >= (int)sizeof(response)) {
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
@@ -2420,19 +2535,21 @@ static esp_err_t api_settings_external_server_delete_handler(httpd_req_t *req)
     ESP_LOGI(WEB_TAG, "DELETE /api/settings/external-server requested");
     /* Clear manual configuration */
     esp_err_t err = mesh_udp_bridge_clear_manual_server_ip();
-    if (err != ESP_OK) {
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_send(req, "{\"success\":false,\"error\":\"Failed to clear configuration\"}", -1);
-        return ESP_FAIL;
+    if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(WEB_TAG, "Failed to clear manual IP (may not be set): %s", esp_err_to_name(err));
     }
 
-    ESP_LOGI(WEB_TAG, "LIMITED_MODE exited: external server configuration cleared");
+    /* Clear runtime onboard_only option */
+    esp_err_t clear_opt_err = mesh_udp_bridge_set_onboard_only(false);
+    if (clear_opt_err != ESP_OK) {
+        ESP_LOGW(WEB_TAG, "Failed to clear onboard_only option: %s", esp_err_to_name(clear_opt_err));
+    }
+
+    ESP_LOGI(WEB_TAG, "External server configuration cleared (manual IP and onboard_only option)");
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    return httpd_resp_send(req, "{\"success\":true,\"limited_mode\":false}", -1);
+    return httpd_resp_send(req, "{\"success\":true,\"onboard_only\":false,\"limited_mode\":false}", -1);
 }
 
 /* GET / - Serves simple HTML page with plugin selection and control */

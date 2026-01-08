@@ -104,6 +104,10 @@ static bool s_registration_complete = false;
 #define NVS_KEY_MANUAL_SERVER_PORT "manual_server_port"
 #define NVS_KEY_MANUAL_SERVER_RESOLVED_IP "manual_server_resolved_ip"
 
+/* NVS namespace and key for runtime options */
+#define NVS_NAMESPACE_MESH_SETTINGS "mesh_settings"
+#define NVS_KEY_ONLY_ONBOARD_HTTP "onboard_only"
+
 /* mDNS initialization state */
 #if MDNS_AVAILABLE
 static bool s_mdns_initialized = false;
@@ -463,6 +467,12 @@ esp_err_t mesh_udp_bridge_register(void)
     return ESP_ERR_NOT_SUPPORTED;
 #endif
 
+    /* Check runtime ONLY_ONBOARD_HTTP option */
+    if (mesh_udp_bridge_is_onboard_only()) {
+        ESP_LOGI(TAG, "[REGISTRATION] ONLY_ONBOARD_HTTP runtime option enabled - registration disabled");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
     /* Check for manual server IP first (takes precedence over discovery) */
     char manual_ip[64] = {0};
     char manual_resolved_ip[16] = {0};
@@ -682,6 +692,12 @@ esp_err_t mesh_udp_bridge_mdns_init(void)
     return ESP_ERR_NOT_SUPPORTED;
 #endif
 
+    /* Check runtime ONLY_ONBOARD_HTTP option */
+    if (mesh_udp_bridge_is_onboard_only()) {
+        ESP_LOGI(TAG, "[mDNS] ONLY_ONBOARD_HTTP runtime option enabled - mDNS initialization disabled");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
 #if MDNS_AVAILABLE
     if (s_mdns_initialized) {
         return ESP_OK;  /* Already initialized */
@@ -722,7 +738,7 @@ esp_err_t mesh_udp_bridge_mdns_init(void)
  * mDNS is the primary discovery method. UDP broadcast is only used as a runtime fallback
  * when mDNS discovery fails (server not found), not when the mDNS component is unavailable.
  *
- * @param timeout_ms Query timeout in milliseconds (10000-30000)
+ * @param timeout_ms Query timeout in milliseconds (should be 30000 for sequential discovery)
  * @param server_ip Output buffer for server IP (must be at least 16 bytes)
  * @param server_port Output pointer for UDP port
  * @return ESP_OK on success, error code on failure (ESP_ERR_NOT_FOUND if server not found)
@@ -733,6 +749,12 @@ esp_err_t mesh_udp_bridge_discover_server(uint32_t timeout_ms, char *server_ip, 
     ESP_LOGD(TAG, "ONLY_ONBOARD_HTTP enabled - server discovery disabled");
     return ESP_ERR_NOT_SUPPORTED;
 #endif
+
+    /* Check runtime ONLY_ONBOARD_HTTP option */
+    if (mesh_udp_bridge_is_onboard_only()) {
+        ESP_LOGI(TAG, "[DISCOVERY] ONLY_ONBOARD_HTTP runtime option enabled - server discovery disabled");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
 
     if (server_ip == NULL || server_port == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -1265,6 +1287,102 @@ esp_err_t mesh_udp_bridge_clear_manual_server_ip(void)
 }
 
 /*******************************************************
+ *                Runtime Option Management
+ *******************************************************/
+
+/**
+ * @brief Check if ONLY_ONBOARD_HTTP runtime option is enabled.
+ *
+ * Reads the runtime option from NVS. If the option is not found,
+ * returns false (default: external server enabled).
+ *
+ * @return true if ONLY_ONBOARD_HTTP is enabled, false otherwise
+ */
+bool mesh_udp_bridge_is_onboard_only(void)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_MESH_SETTINGS, NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "[RUNTIME OPTION] Failed to open NVS namespace '%s': %s (default: external server enabled)",
+                 NVS_NAMESPACE_MESH_SETTINGS, esp_err_to_name(err));
+        return false;  /* Default: external server enabled */
+    }
+
+    uint8_t onboard_only = 0;
+    err = nvs_get_u8(nvs_handle, NVS_KEY_ONLY_ONBOARD_HTTP, &onboard_only);
+    nvs_close(nvs_handle);
+
+    if (err != ESP_OK) {
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGD(TAG, "[RUNTIME OPTION] No runtime option found in NVS (default: external server enabled)");
+        } else {
+            ESP_LOGW(TAG, "[RUNTIME OPTION] Failed to read runtime option from NVS: %s (default: external server enabled)",
+                     esp_err_to_name(err));
+        }
+        return false;  /* Default: external server enabled */
+    }
+
+    bool result = (onboard_only != 0);
+    ESP_LOGI(TAG, "[RUNTIME OPTION] ONLY_ONBOARD_HTTP: %s", result ? "enabled" : "disabled");
+    return result;
+}
+
+/**
+ * @brief Set ONLY_ONBOARD_HTTP runtime option.
+ *
+ * Stores the runtime option in NVS. This option completely disables
+ * external server functionality when enabled.
+ *
+ * @param enabled True to enable ONLY_ONBOARD_HTTP, false to disable
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t mesh_udp_bridge_set_onboard_only(bool enabled)
+{
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_MESH_SETTINGS, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "[RUNTIME OPTION] Failed to open NVS namespace '%s': %s",
+                 NVS_NAMESPACE_MESH_SETTINGS, esp_err_to_name(err));
+        return err;
+    }
+
+    uint8_t onboard_only = enabled ? 1 : 0;
+    err = nvs_set_u8(nvs_handle, NVS_KEY_ONLY_ONBOARD_HTTP, onboard_only);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "[RUNTIME OPTION] Failed to store runtime option in NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    /* Commit changes */
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "[RUNTIME OPTION] Failed to commit NVS changes: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return err;
+    }
+
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "[RUNTIME OPTION] ONLY_ONBOARD_HTTP set to: %s", enabled ? "enabled" : "disabled");
+    return ESP_OK;
+}
+
+/**
+ * @brief Check if manual server IP is configured.
+ *
+ * Checks if a manual server IP configuration exists in NVS.
+ *
+ * @return true if manual IP is configured, false otherwise
+ */
+bool mesh_udp_bridge_has_manual_config(void)
+{
+    char manual_ip[64] = {0};
+    uint16_t manual_port = 0;
+    esp_err_t err = mesh_udp_bridge_get_manual_config(manual_ip, sizeof(manual_ip), &manual_port, NULL, 0);
+    return (err == ESP_OK);
+}
+
+/*******************************************************
  *                Heartbeat Implementation
  *******************************************************/
 
@@ -1312,6 +1430,11 @@ static esp_err_t mesh_udp_bridge_build_heartbeat_payload(mesh_heartbeat_payload_
  */
 esp_err_t mesh_udp_bridge_send_heartbeat(void)
 {
+    /* Check runtime ONLY_ONBOARD_HTTP option */
+    if (mesh_udp_bridge_is_onboard_only()) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
     /* Check if registered */
     if (!mesh_udp_bridge_is_registered()) {
         return ESP_ERR_INVALID_STATE;
@@ -1411,6 +1534,12 @@ static void mesh_udp_bridge_heartbeat_task(void *pvParameters)
  */
 void mesh_udp_bridge_start_heartbeat(void)
 {
+    /* Check runtime ONLY_ONBOARD_HTTP option */
+    if (mesh_udp_bridge_is_onboard_only()) {
+        ESP_LOGI(TAG, "[HEARTBEAT] ONLY_ONBOARD_HTTP runtime option enabled - heartbeat disabled");
+        return;
+    }
+
     /* Check if task already running */
     if (s_heartbeat_running && s_heartbeat_task_handle != NULL) {
         ESP_LOGD(TAG, "Heartbeat task already running");
@@ -1484,6 +1613,12 @@ void mesh_udp_bridge_forward_mesh_command_async(uint8_t mesh_cmd,
                                                    const void *mesh_payload,
                                                    size_t mesh_payload_len)
 {
+    /* Check runtime ONLY_ONBOARD_HTTP option */
+    if (mesh_udp_bridge_is_onboard_only()) {
+        /* Runtime option enabled - don't forward (normal case, no logging) */
+        return;
+    }
+
     /* Check if external server is registered */
     if (!mesh_udp_bridge_is_registered()) {
         /* Not registered - don't forward (normal case, no logging) */
@@ -2218,7 +2353,7 @@ static void handle_broadcast_packet(const uint8_t *buffer, size_t len,
 
     /* Cache discovered address in NVS */
     nvs_handle_t nvs_handle;
- nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READWRITE, &nvs_handle);
+    err = nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READWRITE, &nvs_handle);
     if (err == ESP_OK) {
         char ip_str[16];
         snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d",
@@ -2303,12 +2438,27 @@ static void mesh_udp_bridge_broadcast_listener_task(void *pvParameters)
 
     ESP_LOGI(TAG, "UDP broadcast listener bound to port %d", BROADCAST_LISTENER_PORT);
 
+    /* Store start time for timeout check (30 seconds) */
+    int64_t listener_start_time = esp_timer_get_time() / 1000;  /* Convert to milliseconds */
+    const int listener_timeout_ms = 30000;  /* 30 seconds timeout */
+
     /* Receive loop */
     uint8_t recv_buffer[MAX_BROADCAST_PAYLOAD_SIZE];
     while (1) {
         /* Check if task should exit */
         if (!s_broadcast_listener_running) {
             break;
+        }
+
+        /* Check timeout - stop if no server discovered within 30 seconds */
+        int64_t elapsed_ms = (esp_timer_get_time() / 1000) - listener_start_time;
+        if (elapsed_ms >= listener_timeout_ms) {
+            /* Check if server was discovered */
+            if (!mesh_udp_bridge_is_server_discovered()) {
+                ESP_LOGI(TAG, "[BROADCAST LISTENER] Timeout after 30s - no server discovered, stopping listener");
+                break;
+            }
+            /* Server was discovered, continue listening (discovery_task will stop us when needed) */
         }
 
         /* Receive broadcast packet */
@@ -2320,6 +2470,10 @@ static void mesh_udp_bridge_broadcast_listener_task(void *pvParameters)
         if (received > 0) {
             /* Handle received broadcast */
             handle_broadcast_packet(recv_buffer, received, &from_addr);
+            /* If server was discovered, reset timeout (keep listening) */
+            if (mesh_udp_bridge_is_server_discovered()) {
+                listener_start_time = esp_timer_get_time() / 1000;  /* Reset timeout */
+            }
         } else if (received < 0) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
                 ESP_LOGD(TAG, "Broadcast receive error: %d (non-critical)", errno);
@@ -2347,6 +2501,7 @@ static void mesh_udp_bridge_broadcast_listener_task(void *pvParameters)
  *
  * Starts a FreeRTOS task that listens for UDP broadcast packets on port 5353.
  * The listener is completely optional and does not affect embedded web server operation.
+ * The listener will be stopped by the discovery task if no server is discovered within 30 seconds.
  */
 void mesh_udp_bridge_broadcast_listener_start(void)
 {
@@ -2354,6 +2509,18 @@ void mesh_udp_bridge_broadcast_listener_start(void)
     ESP_LOGD(TAG, "ONLY_ONBOARD_HTTP enabled - broadcast listener disabled");
     return;
 #endif
+
+    /* Check runtime ONLY_ONBOARD_HTTP option */
+    if (mesh_udp_bridge_is_onboard_only()) {
+        ESP_LOGI(TAG, "[BROADCAST LISTENER] ONLY_ONBOARD_HTTP runtime option enabled - broadcast listener disabled");
+        return;
+    }
+
+    /* Check for manually configured IP - if set, skip broadcast listener (use configured IP instead) */
+    if (mesh_udp_bridge_has_manual_config()) {
+        ESP_LOGI(TAG, "[BROADCAST LISTENER] Manual server IP configured - skipping broadcast listener");
+        return;
+    }
 
     /* Check if task already running */
     if (s_broadcast_listener_running && s_broadcast_listener_task_handle != NULL) {
@@ -2424,6 +2591,12 @@ void mesh_udp_bridge_broadcast_listener_stop(void)
  */
 void mesh_udp_bridge_start_state_updates(void)
 {
+    /* Check runtime ONLY_ONBOARD_HTTP option */
+    if (mesh_udp_bridge_is_onboard_only()) {
+        ESP_LOGI(TAG, "[STATE UPDATES] ONLY_ONBOARD_HTTP runtime option enabled - state updates disabled");
+        return;
+    }
+
     /* Check if task already running */
     if (s_state_update_running && s_state_update_task_handle != NULL) {
         ESP_LOGD(TAG, "State update task already running");
@@ -4164,6 +4337,18 @@ void mesh_udp_bridge_api_listener_start(void)
     return;
 #endif
 
+    /* Check runtime ONLY_ONBOARD_HTTP option */
+    if (mesh_udp_bridge_is_onboard_only()) {
+        ESP_LOGI(TAG, "[API LISTENER] ONLY_ONBOARD_HTTP runtime option enabled - API listener disabled");
+        return;
+    }
+
+    /* Only start if external server discovery succeeded (not in HTTP-only mode) */
+    if (!mesh_udp_bridge_is_server_discovered()) {
+        ESP_LOGI(TAG, "[API LISTENER] External server not discovered - API listener disabled (HTTP-only mode)");
+        return;
+    }
+
     /* Check if task already running */
     if (s_api_listener_running && s_api_listener_task_handle != NULL) {
         ESP_LOGD(TAG, "API listener task already running");
@@ -4202,10 +4387,53 @@ void mesh_udp_bridge_api_listener_stop(void)
         return;
     }
 
-    /* Stop task */
+    /* Signal task to exit */
     s_api_listener_running = false;
-    /* Task will clean itself up */
-    ESP_LOGI(TAG, "Stopping API listener task");
+
+    /* Wait a bit for task to exit */
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    /* Delete task if still running */
+    if (s_api_listener_task_handle != NULL) {
+        vTaskDelete(s_api_listener_task_handle);
+        s_api_listener_task_handle = NULL;
+    }
+
+    /* Close socket if still open */
+    if (s_api_listener_socket >= 0) {
+        close(s_api_listener_socket);
+        s_api_listener_socket = -1;
+    }
+
+    s_api_listener_running = false;
+    ESP_LOGI(TAG, "API listener task stopped");
+}
+
+/**
+ * @brief Cleanup all external server sockets.
+ *
+ * Stops all external server services and closes all sockets.
+ * This function is called when falling back to HTTP-only mode.
+ * This function is idempotent - safe to call multiple times.
+ */
+void mesh_udp_bridge_cleanup_all_sockets(void)
+{
+    ESP_LOGI(TAG, "[CLEANUP] Cleaning up all external server sockets");
+
+    /* Stop broadcast listener */
+    mesh_udp_bridge_broadcast_listener_stop();
+
+    /* Stop API listener */
+    mesh_udp_bridge_api_listener_stop();
+
+    /* Close registration socket if open */
+    if (s_udp_socket >= 0) {
+        close(s_udp_socket);
+        s_udp_socket = -1;
+        ESP_LOGD(TAG, "[CLEANUP] Closed registration UDP socket");
+    }
+
+    ESP_LOGI(TAG, "[CLEANUP] All external server sockets cleaned up");
 }
 
 /*******************************************************
@@ -4243,6 +4471,12 @@ static void mesh_udp_bridge_retry_task(void *pvParameters)
             break;
         }
 
+        /* Check runtime ONLY_ONBOARD_HTTP option - if enabled, stop retrying */
+        if (mesh_udp_bridge_is_onboard_only()) {
+            ESP_LOGI(TAG, "[RETRY TASK] ONLY_ONBOARD_HTTP runtime option enabled - stopping retry task");
+            break;
+        }
+
 #if MDNS_AVAILABLE
         /* Ensure mDNS is initialized */
         if (!s_mdns_initialized) {
@@ -4255,9 +4489,9 @@ static void mesh_udp_bridge_retry_task(void *pvParameters)
             }
         }
 
-        /* Perform discovery with 20 second timeout */
+        /* Perform discovery with 30 second timeout (consistent with sequential discovery) */
         ESP_LOGI(TAG, "Retrying discovery (delay was %lu ms)", (unsigned long)delay_ms);
-        esp_err_t err = mesh_udp_bridge_discover_server(20000, server_ip, &server_port);
+        esp_err_t err = mesh_udp_bridge_discover_server(30000, server_ip, &server_port);
         if (err == ESP_OK) {
             /* Discovery succeeded - cache the address and stop retrying */
             ESP_LOGI(TAG, "Discovery succeeded in retry task: %s:%d", server_ip, server_port);
@@ -4645,10 +4879,10 @@ bool mesh_udp_bridge_use_cached_ip(void)
 
     /* Optional: Check cache expiration (24 hours) */
     nvs_handle_t nvs_handle;
- nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READONLY, &nvs_handle);
+    err = nvs_open(NVS_NAMESPACE_UDP_BRIDGE, NVS_READONLY, &nvs_handle);
     if (err == ESP_OK) {
         uint32_t cached_timestamp = 0;
- nvs_get_u32(nvs_handle, "server_ip_timestamp", &cached_timestamp);
+        err = nvs_get_u32(nvs_handle, "server_ip_timestamp", &cached_timestamp);
         if (err == ESP_OK) {
             /* Timestamp is already in host byte order (converted when stored) */
             time_t current_time = time(NULL);
