@@ -230,6 +230,157 @@ async function getActivePlugin() {
   }
 }
 
+// Plugin Web UI Integration Functions
+/**
+ * Load plugin web UI bundle and inject into DOM
+ * @param {string} pluginName - Plugin name to load
+ * @param {HTMLElement} [feedbackElement] - Optional element to display loading/error feedback
+ * @returns {Promise<Object>} Promise resolving to bundle object
+ */
+async function loadPluginWebUI(pluginName, feedbackElement) {
+  if (!window.PluginWebUI) {
+    const error = new Error('Plugin Web UI module not loaded');
+    console.error('Plugin Web UI not available', error);
+    if (feedbackElement) {
+      feedbackElement.textContent = 'Plugin Web UI module not available';
+      feedbackElement.className = 'plugin-ui-feedback-error';
+    }
+    throw error;
+  }
+
+  if (!pluginName || typeof pluginName !== 'string') {
+    const error = new Error('Invalid plugin name');
+    console.error('Invalid plugin name', error);
+    if (feedbackElement) {
+      feedbackElement.textContent = 'Invalid plugin name';
+      feedbackElement.className = 'plugin-ui-feedback-error';
+    }
+    throw error;
+  }
+
+  // Show loading state
+  if (feedbackElement) {
+    feedbackElement.textContent = 'Loading plugin UI...';
+    feedbackElement.className = 'plugin-ui-feedback-loading';
+  }
+
+  try {
+    // Disable UI during load (prevent multiple simultaneous loads)
+    const container = document.getElementById('plugin-ui-container');
+    if (container) {
+      container.style.pointerEvents = 'none';
+      container.style.opacity = '0.6';
+    }
+
+    // Load bundle using PluginWebUI module
+    const bundle = await window.PluginWebUI.loadPluginBundle(pluginName);
+
+    // Success
+    if (feedbackElement) {
+      feedbackElement.textContent = 'Plugin UI loaded successfully';
+      feedbackElement.className = 'plugin-ui-feedback-success';
+      // Auto-hide success message after 2 seconds
+      setTimeout(() => {
+        if (feedbackElement.className.includes('success')) {
+          feedbackElement.textContent = '';
+          feedbackElement.className = '';
+        }
+      }, 2000);
+    }
+
+    // Re-enable UI
+    if (container) {
+      container.style.pointerEvents = '';
+      container.style.opacity = '';
+    }
+
+    return bundle;
+  } catch (error) {
+    // Error handling
+    console.error('Failed to load plugin web UI', error);
+    if (feedbackElement) {
+      handleApiError(error, feedbackElement, () => {
+        loadPluginWebUI(pluginName, feedbackElement);
+      });
+    }
+
+    // Re-enable UI even on error
+    const container = document.getElementById('plugin-ui-container');
+    if (container) {
+      container.style.pointerEvents = '';
+      container.style.opacity = '';
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * Send plugin data using PluginWebUI module
+ * Wrapper function that provides feedback handling
+ * @param {string} pluginName - Plugin name
+ * @param {ArrayBuffer|Uint8Array|number[]} data - Data to send
+ * @param {HTMLElement} [feedbackElement] - Optional element to display feedback
+ * @returns {Promise<Object>} Promise resolving to response
+ */
+async function sendPluginWebUIData(pluginName, data, feedbackElement) {
+  if (!window.PluginWebUI) {
+    const error = new Error('Plugin Web UI module not loaded');
+    console.error('Plugin Web UI not available', error);
+    if (feedbackElement) {
+      feedbackElement.textContent = 'Plugin Web UI module not available';
+      feedbackElement.className = 'plugin-ui-feedback-error';
+    }
+    throw error;
+  }
+
+  if (!pluginName || typeof pluginName !== 'string') {
+    const error = new Error('Invalid plugin name');
+    console.error('Invalid plugin name', error);
+    if (feedbackElement) {
+      feedbackElement.textContent = 'Invalid plugin name';
+      feedbackElement.className = 'plugin-ui-feedback-error';
+    }
+    throw error;
+  }
+
+  // Show sending state
+  if (feedbackElement) {
+    feedbackElement.textContent = 'Sending data...';
+    feedbackElement.className = 'plugin-ui-feedback-loading';
+  }
+
+  try {
+    // Send data using PluginWebUI module
+    const response = await window.PluginWebUI.sendPluginData(pluginName, data);
+
+    // Success
+    if (feedbackElement) {
+      feedbackElement.textContent = 'Data sent successfully';
+      feedbackElement.className = 'plugin-ui-feedback-success';
+      // Auto-hide success message after 2 seconds
+      setTimeout(() => {
+        if (feedbackElement.className.includes('success')) {
+          feedbackElement.textContent = '';
+          feedbackElement.className = '';
+        }
+      }, 2000);
+    }
+
+    return response;
+  } catch (error) {
+    // Error handling
+    console.error('Failed to send plugin data', error);
+    if (feedbackElement) {
+      handleApiError(error, feedbackElement, () => {
+        sendPluginWebUIData(pluginName, data, feedbackElement);
+      });
+    }
+
+    throw error;
+  }
+}
+
 // Utility functions
 function rgbToHex(r, g, b) {
   return '#' + [r, g, b].map(x => {
