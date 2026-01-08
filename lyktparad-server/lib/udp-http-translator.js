@@ -20,7 +20,7 @@ const { getEndpointInfo } = require('./udp-commands');
  * @returns {Object} JSON response object
  */
 function binaryToJson(commandId, payload) {
-    const { UDP_CMD_API_NODES, UDP_CMD_API_COLOR_GET, UDP_CMD_API_SEQUENCE_POINTER, UDP_CMD_API_SEQUENCE_STATUS, UDP_CMD_API_OTA_STATUS, UDP_CMD_API_OTA_VERSION, UDP_CMD_API_OTA_DISTRIBUTION_STATUS, UDP_CMD_API_OTA_DISTRIBUTION_PROGRESS, UDP_CMD_API_PLUGIN_ACTIVATE, UDP_CMD_API_PLUGIN_DEACTIVATE, UDP_CMD_API_PLUGIN_ACTIVE, UDP_CMD_API_PLUGINS_LIST } = require('./udp-commands');
+    const { UDP_CMD_API_NODES, UDP_CMD_API_COLOR_GET, UDP_CMD_API_SEQUENCE_POINTER, UDP_CMD_API_SEQUENCE_STATUS, UDP_CMD_API_OTA_STATUS, UDP_CMD_API_OTA_VERSION, UDP_CMD_API_OTA_DISTRIBUTION_STATUS, UDP_CMD_API_OTA_DISTRIBUTION_PROGRESS, UDP_CMD_API_PLUGIN_ACTIVATE, UDP_CMD_API_PLUGIN_DEACTIVATE, UDP_CMD_API_PLUGIN_ACTIVE, UDP_CMD_API_PLUGINS_LIST, UDP_CMD_API_PLUGIN_BUNDLE_GET, UDP_CMD_API_PLUGIN_DATA_POST } = require('./udp-commands');
 
     switch (commandId) {
         case UDP_CMD_API_NODES:
@@ -169,6 +169,47 @@ function binaryToJson(commandId, payload) {
             }
             return { plugins: plugins };
 
+        case UDP_CMD_API_PLUGIN_BUNDLE_GET:
+            // GET /api/plugin/:pluginName/bundle
+            // Response: JSON string {"html": "...", "js": "...", "css": "..."}
+            // Parse UDP payload as UTF-8 JSON string
+            try {
+                if (payload.length === 0) {
+                    return { error: 'Empty response' };
+                }
+                const jsonStr = payload.toString('utf8').replace(/\0/g, '');
+                const jsonObj = JSON.parse(jsonStr);
+                // Validate response format (should have html, js, css fields)
+                if (typeof jsonObj !== 'object' || jsonObj === null) {
+                    return { error: 'Invalid bundle response format' };
+                }
+                return jsonObj;
+            } catch (e) {
+                // JSON parse error
+                return { error: 'Failed to parse bundle response', details: e.message };
+            }
+
+        case UDP_CMD_API_PLUGIN_DATA_POST:
+            // POST /api/plugin/:pluginName/data
+            // Response: Success/failure status (may be empty or contain status)
+            if (payload.length === 0) {
+                // Empty payload indicates success
+                return { success: true };
+            }
+            // Try to parse as JSON status response
+            try {
+                const jsonStr = payload.toString('utf8').replace(/\0/g, '');
+                const jsonObj = JSON.parse(jsonStr);
+                if (jsonObj.success !== undefined) {
+                    return jsonObj;
+                }
+                // If no success field, assume success
+                return { success: true };
+            } catch (e) {
+                // Not JSON, assume success
+                return { success: true };
+            }
+
         default:
             // For POST requests or unknown commands, try to parse as JSON string
             // or return success/failure based on payload
@@ -198,7 +239,50 @@ function binaryToJson(commandId, payload) {
  * @returns {number} HTTP status code
  */
 function mapToHttpStatus(commandId, jsonData) {
-    // Check for error indicators in JSON
+    const { UDP_CMD_API_PLUGIN_BUNDLE_GET, UDP_CMD_API_PLUGIN_DATA_POST } = require('./udp-commands');
+
+    // Plugin web UI endpoint status mapping
+    if (commandId === UDP_CMD_API_PLUGIN_BUNDLE_GET) {
+        // Bundle endpoint: 200 (success), 400 (bad request), 404 (not found), 413 (payload too large), 500 (server error)
+        if (jsonData.error) {
+            if (jsonData.error.includes('Bad Request') || jsonData.error.includes('Invalid')) {
+                return 400;
+            }
+            if (jsonData.error.includes('Not Found') || jsonData.error.includes('not found')) {
+                return 404;
+            }
+            if (jsonData.error.includes('too large') || jsonData.error.includes('exceeds')) {
+                return 413;
+            }
+            return 500;
+        }
+        // Success: return bundle JSON
+        return 200;
+    }
+
+    if (commandId === UDP_CMD_API_PLUGIN_DATA_POST) {
+        // Data endpoint: 200 (success), 400 (bad request), 404 (not found), 413 (payload too large), 500 (server error)
+        if (jsonData.error) {
+            if (jsonData.error.includes('Bad Request') || jsonData.error.includes('Invalid')) {
+                return 400;
+            }
+            if (jsonData.error.includes('Not Found') || jsonData.error.includes('not found')) {
+                return 404;
+            }
+            if (jsonData.error.includes('too large') || jsonData.error.includes('exceeds')) {
+                return 413;
+            }
+            return 500;
+        }
+        // Check for success indicator
+        if (jsonData.success === false) {
+            return 500;
+        }
+        // Success
+        return 200;
+    }
+
+    // Check for error indicators in JSON (for other endpoints)
     if (jsonData.error) {
         if (jsonData.error.includes('Forbidden') || jsonData.error.includes('Only root')) {
             return 403;

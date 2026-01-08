@@ -10,6 +10,10 @@
  *                UDP Command ID Constants
  *******************************************************/
 
+/* Plugin Web UI Command IDs (0xE5-0xE6) */
+const UDP_CMD_API_PLUGIN_BUNDLE_GET = 0xE5;
+const UDP_CMD_API_PLUGIN_DATA_POST = 0xE6;
+
 /* API Command IDs (0xE7-0xEF) */
 const UDP_CMD_API_NODES = 0xE7;
 const UDP_CMD_API_COLOR_GET = 0xE8;
@@ -52,6 +56,17 @@ const UDP_CMD_API_PLUGIN_RESET = 0xFF;
  * @returns {number|null} UDP command ID, or null if not found
  */
 function getCommandId(method, path) {
+    // Handle plugin web UI routes with parameters
+    // Pattern: GET /api/plugin/:pluginName/bundle or POST /api/plugin/:pluginName/data
+    const pluginBundleMatch = path.match(/^\/api\/plugin\/([^/]+)\/bundle$/);
+    if (pluginBundleMatch && method === 'GET') {
+        return UDP_CMD_API_PLUGIN_BUNDLE_GET;
+    }
+    const pluginDataMatch = path.match(/^\/api\/plugin\/([^/]+)\/data$/);
+    if (pluginDataMatch && method === 'POST') {
+        return UDP_CMD_API_PLUGIN_DATA_POST;
+    }
+
     const key = `${method} ${path}`;
     const mapping = {
         'GET /api/nodes': UDP_CMD_API_NODES,
@@ -95,6 +110,8 @@ function getCommandId(method, path) {
  */
 function getEndpointInfo(commandId) {
     const mapping = {
+        [UDP_CMD_API_PLUGIN_BUNDLE_GET]: { method: 'GET', path: '/api/plugin/:pluginName/bundle' },
+        [UDP_CMD_API_PLUGIN_DATA_POST]: { method: 'POST', path: '/api/plugin/:pluginName/data' },
         [UDP_CMD_API_NODES]: { method: 'GET', path: '/api/nodes' },
         [UDP_CMD_API_COLOR_GET]: { method: 'GET', path: '/api/color' },
         [UDP_CMD_API_COLOR_POST]: { method: 'POST', path: '/api/color' },
@@ -125,6 +142,8 @@ function getEndpointInfo(commandId) {
 }
 
 module.exports = {
+    UDP_CMD_API_PLUGIN_BUNDLE_GET,
+    UDP_CMD_API_PLUGIN_DATA_POST,
     UDP_CMD_API_NODES,
     UDP_CMD_API_COLOR_GET,
     UDP_CMD_API_COLOR_POST,

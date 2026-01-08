@@ -1381,42 +1381,116 @@ void esp_mesh_p2p_tx_main(void *arg)
  *******************************************************/
 
 /**
- * @brief Forward plugin data to mesh network (placeholder)
+ * @brief Forward plugin data to mesh network
  *
  * This function forwards plugin data from web UI to all mesh nodes as PLUGIN_CMD_DATA commands.
- * The function is a placeholder - actual implementation will be done in a separate task.
+ * The root node acts as a transparent proxy, forwarding raw bytes from HTTP requests to mesh
+ * commands with minimal CPU processing (only header insertion and memcpy).
+ *
+ * Command Format: [PLUGIN_ID:1] [PLUGIN_CMD_DATA:1] [RAW_DATA:N]
  *
  * @param plugin_name Plugin name (non-NULL, must be registered)
  * @param data Raw bytes data to forward (non-NULL)
- * @param len Data length in bytes (must be <= 512)
- * @return ESP_OK on success, error code on failure
+ * @param len Data length in bytes (must be > 0, <= 512 recommended)
+ * @return ESP_OK on success, error code on failure:
+ *         - ESP_ERR_INVALID_STATE: Not root node
+ *         - ESP_ERR_INVALID_ARG: Invalid parameters (NULL, zero length)
+ *         - ESP_ERR_NOT_FOUND: Plugin not found
+ *         - ESP_ERR_INVALID_SIZE: Data size exceeds limits
+ *         - ESP_FAIL: Mesh send failure (partial or complete)
  */
 esp_err_t plugin_forward_data_to_mesh(const char *plugin_name, uint8_t *data, uint16_t len)
 {
-    /* Placeholder implementation - actual forwarding will be implemented in separate task */
-    /* TODO: Implement mesh forwarding:
-     * 1. Get plugin ID from plugin name using plugin_get_id_by_name()
-     * 2. Get mesh transmit buffer using mesh_common_get_tx_buf()
-     * 3. Construct command: [PLUGIN_ID:1] [PLUGIN_CMD_DATA:1] [RAW_DATA:N]
-     * 4. Broadcast to all child nodes using mesh_send_with_bridge()
-     * 5. Return success/failure status
-     */
-
+    /* Parameter validation */
     if (plugin_name == NULL || data == NULL) {
+        ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: invalid parameters (NULL)");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (len == 0) {
+        ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: invalid length (zero)");
         return ESP_ERR_INVALID_ARG;
     }
 
     if (len > 512) {
+        ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: data size exceeds recommended limit (%d > 512)", len);
         return ESP_ERR_INVALID_SIZE;
     }
 
+    /* Root node check */
     if (!esp_mesh_is_root()) {
-        return ESP_ERR_INVALID_STATE;  /* Only root node can forward */
+        ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: not root node, cannot forward");
+        return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(MESH_TAG, "plugin_forward_data_to_mesh: %s, %d bytes (placeholder - not yet implemented)", plugin_name, len);
+    /* Get plugin ID from plugin name */
+    uint8_t plugin_id;
+    esp_err_t err = plugin_get_id_by_name(plugin_name, &plugin_id);
+    if (err != ESP_OK) {
+        ESP_LOGE(MESH_TAG, "plugin_forward_data_to_mesh: plugin '%s' not found", plugin_name);
+        return ESP_ERR_NOT_FOUND;
+    }
 
-    return ESP_ERR_NOT_IMPLEMENTED;
+    /* Get routing table */
+    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+    int route_table_size = 0;
+    esp_mesh_get_routing_table((mesh_addr_t *)route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+
+    /* Check for empty routing table (no child nodes) */
+    int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
+    if (child_node_count == 0) {
+        ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: no child nodes to forward to");
+        return ESP_OK;  /* Not an error, just no nodes to send to */
+    }
+
+    /* Get transmit buffer */
+    uint8_t *tx_buf = mesh_common_get_tx_buf();
+
+    /* Construct command using header-insertion approach: [PLUGIN_ID:1] [PLUGIN_CMD_DATA:1] [RAW_DATA:N] */
+    tx_buf[0] = plugin_id;           /* PLUGIN_ID */
+    tx_buf[1] = PLUGIN_CMD_DATA;    /* PLUGIN_CMD_DATA (0x04) */
+    memcpy(&tx_buf[2], data, len);   /* Raw bytes, zero processing */
+
+    /* Calculate total size: PLUGIN_ID (1) + PLUGIN_CMD_DATA (1) + data (N) */
+    size_t total_size = 2 + len;
+
+    /* Safety check: validate total size <= 1024 bytes (mesh protocol limit) */
+    if (total_size > 1024) {
+        ESP_LOGE(MESH_TAG, "plugin_forward_data_to_mesh: total size exceeds mesh limit (%zu > 1024)", total_size);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    /* Prepare mesh data structure */
+    mesh_data_t mesh_data;
+    mesh_data.data = tx_buf;
+    mesh_data.size = total_size;
+    mesh_data.proto = MESH_PROTO_BIN;
+    mesh_data.tos = MESH_TOS_P2P;
+
+    /* Broadcast to all child nodes (skip root, index 0) */
+    int success_count = 0;
+    int fail_count = 0;
+    for (int i = 1; i < route_table_size; i++) {
+        esp_err_t send_err = mesh_send_with_bridge(&route_table[i], &mesh_data, MESH_DATA_P2P, NULL, 0);
+        if (send_err == ESP_OK) {
+            success_count++;
+        } else {
+            fail_count++;
+            ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: send err:0x%x to "MACSTR, send_err, MAC2STR(route_table[i].addr));
+        }
+    }
+
+    /* Log summary */
+    if (success_count > 0) {
+        ESP_LOGI(MESH_TAG, "plugin_forward_data_to_mesh: '%s' (%d bytes) forwarded to %d/%d child nodes (success:%d, failed:%d)",
+                 plugin_name, len, success_count, child_node_count, success_count, fail_count);
+    } else {
+        ESP_LOGW(MESH_TAG, "plugin_forward_data_to_mesh: '%s' (%d bytes) failed to forward to any child nodes (%d failed)",
+                 plugin_name, len, fail_count);
+    }
+
+    /* Return ESP_OK if at least one node received command, or ESP_FAIL if all failed */
+    return (success_count > 0) ? ESP_OK : ESP_FAIL;
 }
 
 /*******************************************************
