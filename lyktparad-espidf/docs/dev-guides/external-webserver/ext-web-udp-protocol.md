@@ -76,7 +76,7 @@ All UDP packets follow this structure:
 
 ### Field Descriptions
 
-- **Command ID (1 byte)**: Identifies the command type (0xE0-0xF8 reserved for web-to-root protocol)
+- **Command ID (1 byte)**: Identifies the command type (0xE0-0xFF reserved for web-to-root protocol)
 - **Payload Length (2 bytes)**: Length of payload in network byte order (big-endian)
 - **Payload (N bytes)**: Command-specific binary data (variable length, up to MTU limit)
 - **Checksum (2 bytes)**: 16-bit sum of all bytes (command ID + payload length + payload), network byte order
@@ -138,6 +138,25 @@ Maximum packet size is limited by UDP MTU:
 | 0xF6 | `/api/ota/distribution/progress` | GET | Server → Root | Yes (response) | Get distribution progress |
 | 0xF7 | `/api/ota/distribution/cancel` | POST | Server → Root | Yes (response) | Cancel distribution |
 | 0xF8 | `/api/ota/reboot` | POST | Server → Root | Yes (response) | Reboot root node |
+
+### Plugin Web UI Commands (0xF9-0xFA)
+
+| Command ID | HTTP Endpoint | Method | Direction | ACK Required | Description |
+|------------|---------------|--------|-----------|--------------|-------------|
+| 0xF9 | `/api/plugin/:pluginName/bundle` | GET | Server → Root | Yes (response) | Get plugin web UI bundle (HTML/CSS/JS) |
+| 0xFA | `/api/plugin/:pluginName/data` | POST | Server → Root | Yes (response) | Send plugin data to mesh |
+
+### Plugin Control Commands (0xFB-0xFF)
+
+| Command ID | HTTP Endpoint | Method | Direction | ACK Required | Description |
+|------------|---------------|--------|-----------|--------------|-------------|
+| 0xFB | `/api/plugin/activate` | POST | Server → Root | Yes (response) | Activate plugin |
+| 0xFC | `/api/plugin/deactivate` | POST | Server → Root | Yes (response) | Deactivate plugin |
+| 0xFD | `/api/plugin/active` | GET | Server → Root | Yes (response) | Get active plugin name |
+| 0xFE | `/api/plugins` | GET | Server → Root | Yes (response) | Get list of all plugins |
+| 0xFF | `/api/plugin/stop` | POST | Server → Root | Yes (response) | Stop plugin |
+
+**Note**: `/api/plugin/pause` and `/api/plugin/reset` are only available via embedded webserver, not via external webserver UDP bridge.
 
 ### Command Direction
 
@@ -362,7 +381,7 @@ uint8_t payload[] = {
 
 ## API Command Payloads
 
-API commands (0xE7-0xF8) use sequence numbers in the packet format. See [Sequence Numbers](#sequence-numbers) for details.
+API commands (0xE7-0xFF) use sequence numbers in the packet format. See [Sequence Numbers](#sequence-numbers) for details.
 
 ### Packet Format for API Commands
 
@@ -600,7 +619,7 @@ See [Sequence Mode Developer Guide](mode-sequence.md) for detailed sequence form
 - **Heartbeat (0xE1)**: Fire-and-forget. No ACK required. Packet loss is acceptable.
 - **State Update (0xE2)**: Fire-and-forget. No ACK required. Packet loss is acceptable.
 - **Mesh Command Forward (0xE6)**: Fire-and-forget. No ACK required. Packet loss is acceptable.
-- **API Commands (0xE7-0xF8)**: Require response (request-response pattern). Server waits for response with 8-second timeout.
+- **API Commands (0xE7-0xFF)**: Require response (request-response pattern). Server waits for response with 8-second timeout.
 
 ### Retry Logic
 
@@ -626,7 +645,7 @@ See [Sequence Mode Developer Guide](mode-sequence.md) for detailed sequence form
 
 ### Sequence Numbers
 
-Sequence numbers are used for API commands (0xE7-0xF8) to match requests with responses. See [Sequence Numbers](#sequence-numbers) for details.
+Sequence numbers are used for API commands (0xE7-0xFF) to match requests with responses. See [Sequence Numbers](#sequence-numbers) for details.
 
 ## Checksum Algorithm
 
@@ -664,7 +683,7 @@ uint16_t calculate_checksum(const uint8_t *data, size_t len) {
 
 ### Purpose
 
-Sequence numbers are used for API commands (0xE7-0xF8) to match requests with responses. They enable the server to track multiple concurrent API requests.
+Sequence numbers are used for API commands (0xE7-0xFF) to match requests with responses. They enable the server to track multiple concurrent API requests.
 
 ### Sequence Number Format
 
