@@ -23,6 +23,10 @@
 #include <stddef.h>
 #include "esp_err.h"
 
+/* Forward declaration for HTTP request handle */
+struct httpd_req;
+typedef struct httpd_req httpd_req_t;
+
 /**
  * @brief Bit-mask flags for distinguishing Flash (Static) vs Heap (Dynamic) content.
  *
@@ -32,6 +36,10 @@
 #define PLUGIN_WEB_HTML_DYNAMIC  (1 << 0)  /**< HTML content is dynamic (Heap) */
 #define PLUGIN_WEB_JS_DYNAMIC    (1 << 1)  /**< JavaScript content is dynamic (Heap) */
 #define PLUGIN_WEB_CSS_DYNAMIC   (1 << 2)  /**< CSS content is dynamic (Heap) */
+
+/* Streaming configuration constants */
+#define PLUGIN_WEB_STREAMING_THRESHOLD_BYTES  (1024U)  /**< Use streaming for bundles > 1KB */
+#define PLUGIN_WEB_MAX_BUNDLE_SIZE_BYTES      (10240U) /**< Maximum bundle size (10KB) to prevent OOM */
 
 /**
  * @brief Callback function type for providing web content.
@@ -147,5 +155,32 @@ esp_err_t plugin_register_web_ui(const char *name, const plugin_web_ui_callbacks
  * @note Flash content is never freed (memory guard prevents accidental free).
  */
 esp_err_t plugin_get_web_bundle(const char *name, char *json_buffer, size_t buffer_size, size_t *required_size);
+
+/**
+ * @brief Builds and streams a JSON bundle for a plugin using chunked transfer encoding.
+ *
+ * This function builds a JSON object containing HTML, JavaScript, and CSS content
+ * for a plugin's web UI and streams it directly to the HTTP response using
+ * httpd_resp_send_chunk(). This enables serving large bundles with minimal RAM usage
+ * (only small buffers are used for chunking, not the entire JSON string).
+ *
+ * JSON Format: {"html": "...", "js": "...", "css": "..."}
+ * - NULL callbacks are omitted from the JSON object
+ * - Content is JSON-escaped and streamed chunk by chunk
+ * - Carriage returns are stripped
+ *
+ * @param req HTTP request handle for sending chunks (non-NULL)
+ * @param name The unique name of the plugin (must be registered, non-NULL)
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_ARG if req or name is NULL
+ * @return ESP_ERR_NOT_FOUND if plugin is not registered or has no web UI callbacks
+ * @return ESP_FAIL if streaming fails
+ *
+ * @note Content-Type and CORS headers must be set before calling this function
+ * @note Dynamic content (Heap) is freed after streaming
+ * @note Flash content is never freed (memory guard prevents accidental free)
+ * @note Final chunk (NULL) is sent to signal end of response
+ */
+esp_err_t plugin_get_web_bundle_streaming(httpd_req_t *req, const char *name);
 
 #endif // PLUGIN_WEB_UI_H

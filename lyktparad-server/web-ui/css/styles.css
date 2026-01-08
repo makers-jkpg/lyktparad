@@ -1013,3 +1013,49 @@ header h1 {
 .tab-content[data-tab="info"].limited-mode-hidden {
     display: none !important;
 }
+
+/* Plugin Web UI Feedback Styles */
+.plugin-ui-feedback {
+    margin-top: 10px;
+    font-size: 14px;
+    min-height: 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.plugin-ui-feedback-loading {
+    color: #667eea;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.plugin-ui-feedback-success {
+    color: #27ae60;
+}
+
+.plugin-ui-feedback-error {
+    color: #e74c3c;
+}
+
+/* Loading Spinner */
+.plugin-ui-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(102, 126, 234, 0.2);
+    border-top-color: #667eea;
+    border-radius: 50%;
+    animation: plugin-ui-spin 0.8s linear infinite;
+}
+
+@keyframes plugin-ui-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.plugin-ui-feedback-loading .plugin-ui-spinner {
+    flex-shrink: 0;
+}

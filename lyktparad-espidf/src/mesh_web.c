@@ -2828,43 +2828,66 @@ static esp_err_t api_plugin_bundle_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* Allocate buffer for JSON bundle */
-    char *json_buffer = (char *)malloc(required_size);
-    if (json_buffer == NULL) {
-        ESP_LOGE(WEB_TAG, "Failed to allocate buffer for bundle (size: %zu)", required_size);
+    /* Check buffer size limit to prevent OOM */
+    if (required_size > PLUGIN_WEB_MAX_BUNDLE_SIZE_BYTES) {
+        ESP_LOGE(WEB_TAG, "Bundle size (%zu bytes) exceeds maximum limit (%u bytes)", required_size, PLUGIN_WEB_MAX_BUNDLE_SIZE_BYTES);
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_send(req, "{\"success\":false,\"error\":\"Internal server error\"}", -1);
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Bundle too large\"}", -1);
         return ESP_FAIL;
     }
 
-    /* Build JSON bundle */
-    err = plugin_get_web_bundle(plugin_name, json_buffer, required_size, &required_size);
-    if (err != ESP_OK) {
-        free(json_buffer);
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_send(req, "{\"success\":false,\"error\":\"Internal server error\"}", -1);
-        return ESP_FAIL;
-    }
-
-    /* Send JSON response */
+    /* Set headers before streaming starts (required for chunked transfer) */
     httpd_resp_set_status(req, "200 OK");
     httpd_resp_set_type(req, "application/json; charset=utf-8");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    err = httpd_resp_send(req, json_buffer, -1);
 
-    /* Free buffer */
-    free(json_buffer);
+    /* Conditional streaming: use streaming for bundles > threshold, buffer for smaller bundles */
+    if (required_size > PLUGIN_WEB_STREAMING_THRESHOLD_BYTES) {
+        /* Use streaming mode for large bundles (minimizes RAM usage) */
+        err = plugin_get_web_bundle_streaming(req, plugin_name);
+        if (err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to stream bundle: 0x%x", err);
+            return ESP_FAIL;
+        }
+        return ESP_OK;
+    } else {
+        /* Use buffer mode for small bundles (simpler, acceptable for small content) */
+        char *json_buffer = (char *)malloc(required_size);
+        if (json_buffer == NULL) {
+            ESP_LOGE(WEB_TAG, "Failed to allocate buffer for bundle (size: %zu)", required_size);
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_send(req, "{\"success\":false,\"error\":\"Internal server error\"}", -1);
+            return ESP_FAIL;
+        }
 
-    if (err != ESP_OK) {
-        ESP_LOGE(WEB_TAG, "Failed to send bundle response: 0x%x", err);
-        return ESP_FAIL;
+        /* Build JSON bundle */
+        err = plugin_get_web_bundle(plugin_name, json_buffer, required_size, &required_size);
+        if (err != ESP_OK) {
+            free(json_buffer);
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_send(req, "{\"success\":false,\"error\":\"Internal server error\"}", -1);
+            return ESP_FAIL;
+        }
+
+        /* Send JSON response */
+        err = httpd_resp_send(req, json_buffer, -1);
+
+        /* Free buffer */
+        free(json_buffer);
+
+        if (err != ESP_OK) {
+            ESP_LOGE(WEB_TAG, "Failed to send bundle response: 0x%x", err);
+            return ESP_FAIL;
+        }
+
+        return ESP_OK;
     }
-
-    return ESP_OK;
 }
 
 /* API: POST /api/plugin/<plugin-name>/data - Accepts raw bytes data and forwards to mesh */
@@ -2964,10 +2987,26 @@ static esp_err_t api_plugin_data_handler(httpd_req_t *req)
     /* Forward to mesh (broadcast to child nodes) */
     err = plugin_forward_data_to_mesh(plugin_name, data, (uint16_t)bytes_read);
     if (err != ESP_OK) {
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-        httpd_resp_send(req, "{\"success\":false,\"error\":\"Internal server error\"}", -1);
+        /* Map specific error codes to appropriate HTTP status codes */
+        if (err == ESP_ERR_NOT_FOUND) {
+            /* Plugin not found (edge case: plugin unregistered between checks) */
+            httpd_resp_set_status(req, "404 Not Found");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_send(req, "{\"success\":false,\"error\":\"Plugin not found\"}", -1);
+        } else if (err == ESP_ERR_INVALID_STATE && mesh_root_is_setup_in_progress()) {
+            /* Root setup in progress (temporary unavailability) */
+            httpd_resp_set_status(req, "503 Service Unavailable");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_send(req, "{\"success\":false,\"error\":\"Service temporarily unavailable\"}", -1);
+        } else {
+            /* Other errors (ESP_FAIL, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_SIZE, etc.) */
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            httpd_resp_send(req, "{\"success\":false,\"error\":\"Internal server error\"}", -1);
+        }
         return ESP_FAIL;
     }
 

@@ -1388,13 +1388,14 @@ void esp_mesh_p2p_tx_main(void *arg)
  * commands with minimal CPU processing (only header insertion and memcpy).
  *
  * Command Format: [PLUGIN_ID:1] [PLUGIN_CMD_DATA:1] [RAW_DATA:N]
+ * Minimum size: 2 bytes (PLUGIN_ID + PLUGIN_CMD_DATA) when len is 0
  *
  * @param plugin_name Plugin name (non-NULL, must be registered)
- * @param data Raw bytes data to forward (non-NULL)
- * @param len Data length in bytes (must be > 0, <= 512 recommended)
+ * @param data Raw bytes data to forward (must be non-NULL if len > 0, ignored if len is 0)
+ * @param len Data length in bytes (0 is valid for zero-length data, <= 512 recommended)
  * @return ESP_OK on success, error code on failure:
- *         - ESP_ERR_INVALID_STATE: Not root node
- *         - ESP_ERR_INVALID_ARG: Invalid parameters (NULL, zero length)
+ *         - ESP_ERR_INVALID_STATE: Not root node or root setup in progress
+ *         - ESP_ERR_INVALID_ARG: Invalid parameters (NULL plugin_name, or NULL data when len > 0)
  *         - ESP_ERR_NOT_FOUND: Plugin not found
  *         - ESP_ERR_INVALID_SIZE: Data size exceeds limits
  *         - ESP_FAIL: Mesh send failure (partial or complete)
@@ -1402,13 +1403,14 @@ void esp_mesh_p2p_tx_main(void *arg)
 esp_err_t plugin_forward_data_to_mesh(const char *plugin_name, uint8_t *data, uint16_t len)
 {
     /* Parameter validation */
-    if (plugin_name == NULL || data == NULL) {
-        ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: invalid parameters (NULL)");
+    if (plugin_name == NULL) {
+        ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: invalid parameters (NULL plugin_name)");
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (len == 0) {
-        ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: invalid length (zero)");
+    /* Note: Zero-length data (len == 0) is valid and will result in a 2-byte command: [PLUGIN_ID:1] [PLUGIN_CMD_DATA:1] */
+    if (len > 0 && data == NULL) {
+        ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: invalid parameters (NULL data when len > 0)");
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -1420,6 +1422,12 @@ esp_err_t plugin_forward_data_to_mesh(const char *plugin_name, uint8_t *data, ui
     /* Root node check */
     if (!esp_mesh_is_root()) {
         ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: not root node, cannot forward");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Block commands during root setup */
+    if (mesh_root_is_setup_in_progress()) {
+        ESP_LOGW(MESH_TAG, "Plugin data forwarding blocked during root setup: plugin '%s'", plugin_name);
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -1449,9 +1457,11 @@ esp_err_t plugin_forward_data_to_mesh(const char *plugin_name, uint8_t *data, ui
     /* Construct command using header-insertion approach: [PLUGIN_ID:1] [PLUGIN_CMD_DATA:1] [RAW_DATA:N] */
     tx_buf[0] = plugin_id;           /* PLUGIN_ID */
     tx_buf[1] = PLUGIN_CMD_DATA;    /* PLUGIN_CMD_DATA (0x04) */
-    memcpy(&tx_buf[2], data, len);   /* Raw bytes, zero processing */
+    if (len > 0) {
+        memcpy(&tx_buf[2], data, len);   /* Raw bytes, zero processing */
+    }
 
-    /* Calculate total size: PLUGIN_ID (1) + PLUGIN_CMD_DATA (1) + data (N) */
+    /* Calculate total size: PLUGIN_ID (1) + PLUGIN_CMD_DATA (1) + data (N, can be 0) */
     size_t total_size = 2 + len;
 
     /* Safety check: validate total size <= 1024 bytes (mesh protocol limit) */

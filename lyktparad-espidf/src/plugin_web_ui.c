@@ -19,11 +19,17 @@
 #include "plugin_system.h"
 #include "esp_log.h"
 #include "esp_memory_utils.h"
+#include "esp_http_server.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 static const char *TAG = "PLUGIN_WEB_UI";
+
+/* Streaming configuration constants */
+#define STREAMING_THRESHOLD_BYTES  PLUGIN_WEB_STREAMING_THRESHOLD_BYTES  /* Use streaming for bundles > 1KB */
+#define STREAMING_CHUNK_SIZE       (512U)   /* Chunk buffer size for streaming (minimizes RAM) */
+#define MAX_BUNDLE_SIZE_BYTES      PLUGIN_WEB_MAX_BUNDLE_SIZE_BYTES      /* Maximum bundle size (10KB) to prevent OOM */
 
 /**
  * @brief Internal helper to determine if a pointer resides in Flash (DROM).
@@ -31,8 +37,15 @@ static const char *TAG = "PLUGIN_WEB_UI";
  * This acts as a safety check for the dynamic_mask flags. Before attempting
  * to free() a pointer, we verify it's not in Flash to prevent crashes.
  *
- * @param ptr Pointer to check
- * @return true if pointer is in Flash, false if in Heap
+ * The function uses esp_ptr_in_drom() macro from ESP-IDF, which provides
+ * portable Flash detection across all ESP32 variants. This macro correctly
+ * identifies pointers in Flash memory regardless of whether the code is running
+ * on ESP32, ESP32-C3, ESP32-S3, ESP32-P4, or other variants.
+ *
+ * @param ptr Pointer to check (may be NULL)
+ * @return true if pointer is in Flash (DROM), false if in Heap or NULL
+ * @note Uses esp_ptr_in_drom() from esp_memory_utils.h for cross-variant portability
+ * @note This approach works correctly on all ESP32 variants without variant-specific code
  */
 static bool is_ptr_in_flash(const void *ptr)
 {
@@ -160,6 +173,287 @@ static size_t json_escape_size(const char *src)
     }
 
     return size;
+}
+
+/**
+ * @brief Stream JSON-escaped content directly to HTTP response.
+ *
+ * This function reads source content, escapes special characters (quotes, backslashes,
+ * newlines), strips carriage returns, and sends the escaped content in chunks via
+ * httpd_resp_send_chunk(). This enables serving large content with minimal RAM usage
+ * (only a small chunk buffer is allocated, not the entire escaped content).
+ *
+ * @param req HTTP request handle for sending chunks
+ * @param src Source string to escape and stream
+ * @return ESP_OK on success
+ * @return ESP_FAIL if httpd_resp_send_chunk() fails
+ *
+ * @note Uses a small internal buffer (STREAMING_CHUNK_SIZE bytes) for chunking
+ * @note Handles all escape cases: quotes, backslashes, newlines, carriage returns
+ * @note Escape sequences are never split across chunk boundaries (single char lookahead)
+ */
+static esp_err_t json_escape_and_send_chunk(httpd_req_t *req, const char *src)
+{
+    if (req == NULL || src == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Small buffer for chunking (minimizes RAM usage) */
+    char chunk_buf[STREAMING_CHUNK_SIZE];
+    size_t chunk_offset = 0;
+    const char *p = src;
+
+    while (*p != '\0') {
+        /* Escape special characters */
+        switch (*p) {
+            case '"':
+                /* Escape quote: " -> \" */
+                if (chunk_offset >= STREAMING_CHUNK_SIZE - 2) {
+                    /* Send current chunk first to make room for 2-byte escape sequence */
+                    esp_err_t err = httpd_resp_send_chunk(req, chunk_buf, chunk_offset);
+                    if (err != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to send chunk: 0x%x", err);
+                        return ESP_FAIL;
+                    }
+                    chunk_offset = 0;
+                }
+                chunk_buf[chunk_offset++] = '\\';
+                chunk_buf[chunk_offset++] = '"';
+                break;
+
+            case '\\':
+                /* Escape backslash: \ -> \\ */
+                if (chunk_offset >= STREAMING_CHUNK_SIZE - 2) {
+                    /* Send current chunk first to make room for 2-byte escape sequence */
+                    esp_err_t err = httpd_resp_send_chunk(req, chunk_buf, chunk_offset);
+                    if (err != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to send chunk: 0x%x", err);
+                        return ESP_FAIL;
+                    }
+                    chunk_offset = 0;
+                }
+                chunk_buf[chunk_offset++] = '\\';
+                chunk_buf[chunk_offset++] = '\\';
+                break;
+
+            case '\n':
+                /* Escape newline: \n -> \n (represented as two characters in JSON) */
+                if (chunk_offset >= STREAMING_CHUNK_SIZE - 2) {
+                    /* Send current chunk first to make room for 2-byte escape sequence */
+                    esp_err_t err = httpd_resp_send_chunk(req, chunk_buf, chunk_offset);
+                    if (err != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to send chunk: 0x%x", err);
+                        return ESP_FAIL;
+                    }
+                    chunk_offset = 0;
+                }
+                chunk_buf[chunk_offset++] = '\\';
+                chunk_buf[chunk_offset++] = 'n';
+                break;
+
+            case '\r':
+                /* Strip carriage returns (skip character) */
+                p++;
+                continue;
+
+            default:
+                /* Copy character as-is - check if buffer is full */
+                if (chunk_offset >= STREAMING_CHUNK_SIZE) {
+                    /* Buffer is full, send chunk first */
+                    esp_err_t err = httpd_resp_send_chunk(req, chunk_buf, chunk_offset);
+                    if (err != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to send chunk: 0x%x", err);
+                        return ESP_FAIL;
+                    }
+                    chunk_offset = 0;
+                }
+                chunk_buf[chunk_offset++] = *p;
+                break;
+        }
+        p++;
+    }
+
+    /* Send remaining chunk if any */
+    if (chunk_offset > 0) {
+        esp_err_t err = httpd_resp_send_chunk(req, chunk_buf, chunk_offset);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to send final chunk: 0x%x", err);
+            return ESP_FAIL;
+        }
+    }
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Builds and streams a JSON bundle for a plugin using chunked transfer encoding.
+ *
+ * This function builds a JSON object containing HTML, JavaScript, and CSS content
+ * for a plugin's web UI and streams it directly to the HTTP response using
+ * httpd_resp_send_chunk(). This enables serving large bundles with minimal RAM usage
+ * (only small buffers are used for chunking, not the entire JSON string).
+ *
+ * JSON Format: {"html": "...", "js": "...", "css": "..."}
+ * - NULL callbacks are omitted from the JSON object
+ * - Content is JSON-escaped and streamed chunk by chunk
+ * - Carriage returns are stripped
+ *
+ * @param req HTTP request handle for sending chunks
+ * @param name The unique name of the plugin (must be registered)
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_ARG if req or name is NULL
+ * @return ESP_ERR_NOT_FOUND if plugin is not registered or has no web UI callbacks
+ * @return ESP_FAIL if streaming fails
+ *
+ * @note Content-Type and CORS headers must be set before calling this function
+ * @note Dynamic content (Heap) is freed after streaming
+ * @note Flash content is never freed (memory guard prevents accidental free)
+ * @note Final chunk (NULL) is sent to signal end of response
+ */
+esp_err_t plugin_get_web_bundle_streaming(httpd_req_t *req, const char *name)
+{
+    if (req == NULL || name == NULL) {
+        ESP_LOGE(TAG, "Bundle streaming failed: req or name is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Look up plugin by name */
+    const plugin_info_t *plugin = plugin_get_by_name(name);
+    if (plugin == NULL) {
+        ESP_LOGE(TAG, "Bundle streaming failed: Plugin '%s' not found", name);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Check if plugin has web UI callbacks */
+    if (plugin->web_ui == NULL) {
+        ESP_LOGE(TAG, "Bundle streaming failed: Plugin '%s' has no web UI callbacks", name);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    plugin_web_ui_callbacks_t *cb = (plugin_web_ui_callbacks_t *)plugin->web_ui;
+    esp_err_t err;
+
+    /* Send opening brace */
+    err = httpd_resp_send_chunk(req, "{", 1);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to send opening brace: 0x%x", err);
+        return ESP_FAIL;
+    }
+
+    bool first = true;
+    const struct {
+        const char *key;
+        plugin_web_content_callback_t func;
+        uint8_t flag;
+    } components[] = {
+        {"html", cb->html_callback, PLUGIN_WEB_HTML_DYNAMIC},
+        {"js",   cb->js_callback,   PLUGIN_WEB_JS_DYNAMIC},
+        {"css",  cb->css_callback,  PLUGIN_WEB_CSS_DYNAMIC}
+    };
+
+    /* Process each component (html, js, css) */
+    for (int i = 0; i < 3; i++) {
+        if (components[i].func != NULL) {
+            const char *content = components[i].func();
+            if (content == NULL) {
+                /* Callback returned NULL, skip this component */
+                continue;
+            }
+
+            /* Add comma separator if not first field */
+            if (!first) {
+                err = httpd_resp_send_chunk(req, ",", 1);
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to send comma: 0x%x", err);
+                    /* Free dynamic content before returning error */
+                    if (cb->dynamic_mask & components[i].flag) {
+                        if (!is_ptr_in_flash(content)) {
+                            free((void *)content);
+                        }
+                    }
+                    return ESP_FAIL;
+                }
+            }
+
+            /* Send field key and opening quote: "html":" */
+            char key_buf[32];
+            int key_len = snprintf(key_buf, sizeof(key_buf), "\"%s\":\"", components[i].key);
+            if (key_len < 0 || key_len >= (int)sizeof(key_buf)) {
+                ESP_LOGE(TAG, "Failed to format key for %s", components[i].key);
+                /* Free dynamic content before returning error */
+                if (cb->dynamic_mask & components[i].flag) {
+                    if (!is_ptr_in_flash(content)) {
+                        free((void *)content);
+                    }
+                }
+                return ESP_FAIL;
+            }
+            err = httpd_resp_send_chunk(req, key_buf, key_len);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to send key: 0x%x", err);
+                /* Free dynamic content before returning error */
+                if (cb->dynamic_mask & components[i].flag) {
+                    if (!is_ptr_in_flash(content)) {
+                        free((void *)content);
+                    }
+                }
+                return ESP_FAIL;
+            }
+
+            /* Stream escaped content */
+            err = json_escape_and_send_chunk(req, content);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to stream escaped content for %s: 0x%x", components[i].key, err);
+                /* Free dynamic content before returning error */
+                if (cb->dynamic_mask & components[i].flag) {
+                    if (!is_ptr_in_flash(content)) {
+                        free((void *)content);
+                    }
+                }
+                return ESP_FAIL;
+            }
+
+            /* Send closing quote */
+            err = httpd_resp_send_chunk(req, "\"", 1);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to send closing quote: 0x%x", err);
+                /* Free dynamic content before returning error */
+                if (cb->dynamic_mask & components[i].flag) {
+                    if (!is_ptr_in_flash(content)) {
+                        free((void *)content);
+                    }
+                }
+                return ESP_FAIL;
+            }
+
+            /* Free dynamic content after successful streaming */
+            if (cb->dynamic_mask & components[i].flag) {
+                if (!is_ptr_in_flash(content)) {
+                    free((void *)content);
+                } else {
+                    ESP_LOGW(TAG, "Warning: %s marked dynamic but pointer in Flash. Skipping free.", components[i].key);
+                }
+            }
+
+            first = false;
+        }
+    }
+
+    /* Send closing brace */
+    err = httpd_resp_send_chunk(req, "}", 1);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to send closing brace: 0x%x", err);
+        return ESP_FAIL;
+    }
+
+    /* Send final chunk (NULL) to signal end of response */
+    err = httpd_resp_send_chunk(req, NULL, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to finalize chunked response: 0x%x", err);
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
 }
 
 esp_err_t plugin_register_web_ui(const char *name, const plugin_web_ui_callbacks_t *callbacks)

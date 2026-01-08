@@ -117,9 +117,8 @@ function binaryToJson(commandId, payload) {
         case UDP_CMD_API_PLUGIN_ACTIVATE:
         case UDP_CMD_API_PLUGIN_DEACTIVATE:
         case UDP_CMD_API_PLUGIN_STOP:
-        case UDP_CMD_API_PLUGIN_PAUSE:
-        case UDP_CMD_API_PLUGIN_RESET:
-            // POST /api/plugin/activate, /api/plugin/deactivate, /api/plugin/stop, /api/plugin/pause, /api/plugin/reset
+            // POST /api/plugin/activate, /api/plugin/deactivate, /api/plugin/stop
+            // Note: /api/plugin/pause and /api/plugin/reset are only available via embedded webserver
             // Response: [success:1][name_len:1][name:N bytes]
             if (payload.length < 1) {
                 return { success: false, error: 'Invalid response' };

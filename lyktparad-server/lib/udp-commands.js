@@ -1,7 +1,7 @@
 /* UDP Command ID Mapping Module
  *
  * This module defines the mapping between HTTP API endpoints and UDP command IDs.
- * Command IDs 0xE7-0xEF are reserved for API commands (Web UI → Root node via external server).
+ * Command IDs 0xE7-0xFF are reserved for API commands (Web UI → Root node via external server).
  *
  * Copyright (c) 2025 the_louie
  */
@@ -10,11 +10,7 @@
  *                UDP Command ID Constants
  *******************************************************/
 
-/* Plugin Web UI Command IDs (0xE5-0xE6) */
-const UDP_CMD_API_PLUGIN_BUNDLE_GET = 0xE5;
-const UDP_CMD_API_PLUGIN_DATA_POST = 0xE6;
-
-/* API Command IDs (0xE7-0xEF) */
+/* API Command IDs (0xE7-0xFF) */
 const UDP_CMD_API_NODES = 0xE7;
 const UDP_CMD_API_COLOR_GET = 0xE8;
 const UDP_CMD_API_COLOR_POST = 0xE9;
@@ -25,8 +21,7 @@ const UDP_CMD_API_SEQUENCE_STOP = 0xED;
 const UDP_CMD_API_SEQUENCE_RESET = 0xEE;
 const UDP_CMD_API_SEQUENCE_STATUS = 0xEF;
 
-/* OTA Command IDs (extend range if needed, or use 0xF0-0xFF) */
-/* For now, we'll use sequential IDs starting from 0xF0 */
+/* OTA Command IDs (0xF0-0xF8) */
 const UDP_CMD_API_OTA_DOWNLOAD = 0xF0;
 const UDP_CMD_API_OTA_STATUS = 0xF1;
 const UDP_CMD_API_OTA_VERSION = 0xF2;
@@ -36,13 +31,21 @@ const UDP_CMD_API_OTA_DISTRIBUTION_STATUS = 0xF5;
 const UDP_CMD_API_OTA_DISTRIBUTION_PROGRESS = 0xF6;
 const UDP_CMD_API_OTA_DISTRIBUTION_CANCEL = 0xF7;
 const UDP_CMD_API_OTA_REBOOT = 0xF8;
-const UDP_CMD_API_PLUGIN_ACTIVATE = 0xFA;
-const UDP_CMD_API_PLUGIN_DEACTIVATE = 0xFB;
-const UDP_CMD_API_PLUGIN_ACTIVE = 0xFC;
-const UDP_CMD_API_PLUGINS_LIST = 0xFD;
-const UDP_CMD_API_PLUGIN_STOP = 0xF9;
-const UDP_CMD_API_PLUGIN_PAUSE = 0xFE;
-const UDP_CMD_API_PLUGIN_RESET = 0xFF;
+
+/* Plugin Web UI Command IDs (0xF9-0xFA) - placed before plugin control commands */
+const UDP_CMD_API_PLUGIN_BUNDLE_GET = 0xF9;
+const UDP_CMD_API_PLUGIN_DATA_POST = 0xFA;
+
+/* Plugin Control Command IDs (0xFB-0xFF) - shifted down by 2 slots to make room for plugin web UI */
+/* Original allocation: PLUGIN_STOP=0xF9, ACTIVATE=0xFA, DEACTIVATE=0xFB, ACTIVE=0xFC, LIST=0xFD, PAUSE=0xFE, RESET=0xFF */
+/* New allocation: ACTIVATE=0xFB, DEACTIVATE=0xFC, ACTIVE=0xFD, LIST=0xFE, STOP=0xFF */
+/* Note: PAUSE and RESET removed from UDP bridge API - use embedded webserver for these commands */
+const UDP_CMD_API_PLUGIN_ACTIVATE = 0xFB;
+const UDP_CMD_API_PLUGIN_DEACTIVATE = 0xFC;
+const UDP_CMD_API_PLUGIN_ACTIVE = 0xFD;
+const UDP_CMD_API_PLUGINS_LIST = 0xFE;
+const UDP_CMD_API_PLUGIN_STOP = 0xFF;
+/* PAUSE and RESET are only available via embedded webserver, not via external webserver UDP bridge */
 
 /*******************************************************
  *                Endpoint to Command ID Mapping
@@ -91,9 +94,8 @@ function getCommandId(method, path) {
         'POST /api/plugin/deactivate': UDP_CMD_API_PLUGIN_DEACTIVATE,
         'GET /api/plugin/active': UDP_CMD_API_PLUGIN_ACTIVE,
         'GET /api/plugins': UDP_CMD_API_PLUGINS_LIST,
-        'POST /api/plugin/stop': UDP_CMD_API_PLUGIN_STOP,
-        'POST /api/plugin/pause': UDP_CMD_API_PLUGIN_PAUSE,
-        'POST /api/plugin/reset': UDP_CMD_API_PLUGIN_RESET
+        'POST /api/plugin/stop': UDP_CMD_API_PLUGIN_STOP
+        /* Note: /api/plugin/pause and /api/plugin/reset are only available via embedded webserver, not external webserver */
     };
     return mapping[key] || null;
 }
@@ -134,9 +136,8 @@ function getEndpointInfo(commandId) {
         [UDP_CMD_API_PLUGIN_DEACTIVATE]: { method: 'POST', path: '/api/plugin/deactivate' },
         [UDP_CMD_API_PLUGIN_ACTIVE]: { method: 'GET', path: '/api/plugin/active' },
         [UDP_CMD_API_PLUGINS_LIST]: { method: 'GET', path: '/api/plugins' },
-        [UDP_CMD_API_PLUGIN_STOP]: { method: 'POST', path: '/api/plugin/stop' },
-        [UDP_CMD_API_PLUGIN_PAUSE]: { method: 'POST', path: '/api/plugin/pause' },
-        [UDP_CMD_API_PLUGIN_RESET]: { method: 'POST', path: '/api/plugin/reset' }
+        [UDP_CMD_API_PLUGIN_STOP]: { method: 'POST', path: '/api/plugin/stop' }
+        /* Note: PLUGIN_PAUSE and PLUGIN_RESET are only available via embedded webserver, not external webserver */
     };
     return mapping[commandId] || null;
 }
@@ -167,8 +168,6 @@ module.exports = {
     UDP_CMD_API_PLUGIN_ACTIVE,
     UDP_CMD_API_PLUGINS_LIST,
     UDP_CMD_API_PLUGIN_STOP,
-    UDP_CMD_API_PLUGIN_PAUSE,
-    UDP_CMD_API_PLUGIN_RESET,
     getCommandId,
     getEndpointInfo
 };

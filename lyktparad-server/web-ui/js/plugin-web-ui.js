@@ -219,6 +219,14 @@
      * @param {string} pluginName - Plugin name
      * @returns {Promise<Object>} Promise resolving to bundle object
      * @throws {Error} If loading fails
+     * @example
+     * // Load a plugin bundle
+     * try {
+     *   const bundle = await window.PluginWebUI.loadPluginBundle('rgb_effect');
+     *   console.log('Bundle loaded:', bundle);
+     * } catch (error) {
+     *   console.error('Failed to load bundle:', error.message);
+     * }
      */
     async function loadPluginBundle(pluginName) {
         // Validate plugin name
@@ -334,6 +342,15 @@
      * @param {ArrayBuffer|Uint8Array|number[]} data - Raw bytes to send
      * @returns {Promise<Object>} Promise resolving to success response
      * @throws {Error} If sending fails
+     * @example
+     * // Send RGB color data
+     * const rgbData = window.PluginWebUI.encodeRGB(255, 0, 128);
+     * try {
+     *   const response = await window.PluginWebUI.sendPluginData('rgb_effect', rgbData);
+     *   console.log('Data sent:', response);
+     * } catch (error) {
+     *   console.error('Failed to send data:', error.message);
+     * }
      */
     async function sendPluginData(pluginName, data) {
         // Validate plugin name
@@ -425,6 +442,10 @@
      * @param {number} g - Green value (0-255)
      * @param {number} b - Blue value (0-255)
      * @returns {Uint8Array} Uint8Array[3] with R, G, B values
+     * @example
+     * // Encode RGB color (red)
+     * const redColor = window.PluginWebUI.encodeRGB(255, 0, 0);
+     * // redColor is Uint8Array[3] with values [255, 0, 0]
      */
     function encodeRGB(r, g, b) {
         // Validate values
@@ -446,6 +467,10 @@
      * Encode Uint8 value to Uint8Array[1]
      * @param {number} value - Value (0-255)
      * @returns {Uint8Array} Uint8Array[1] with value
+     * @example
+     * // Encode single byte value
+     * const byteValue = window.PluginWebUI.encodeUint8(128);
+     * // byteValue is Uint8Array[1] with value [128]
      */
     function encodeUint8(value) {
         // Validate value
@@ -460,6 +485,10 @@
      * Encode Uint16 value to Uint8Array[2] (little-endian)
      * @param {number} value - Value (0-65535)
      * @returns {Uint8Array} Uint8Array[2] with value in little-endian format
+     * @example
+     * // Encode 16-bit value (little-endian)
+     * const uint16Value = window.PluginWebUI.encodeUint16(0x1234);
+     * // uint16Value is Uint8Array[2] with values [0x34, 0x12] (LSB first)
      */
     function encodeUint16(value) {
         // Validate value

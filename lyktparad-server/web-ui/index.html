@@ -14,7 +14,9 @@
     <div class="page-header">
         <h1 class="page-title">{{PAGE_TITLE}}</h1>
         <div class="plugin-dropdown-container">
-            {{PLUGIN_DROPDOWN}}
+            <select id="plugin-selector" class="plugin-selector" aria-label="Select plugin">
+                <option value="">Select a plugin...</option>
+            </select>
         </div>
         <div id="connection-status-indicator" class="connection-status">
             <span class="connection-status-icon" id="connection-status-icon">●</span>
@@ -525,7 +527,64 @@
     <script src="js/ota-api.js"></script>
     <script src="js/ota-ui.js"></script>
     <script>
-        {{PLUGIN_SELECTION_JS}}
+        // Initialize plugin selector when DOM is ready
+        (function() {
+            'use strict';
+
+            function initializePluginSelectorSystem() {
+                // Check if required modules are loaded
+                if (typeof fetchPluginList !== 'function') {
+                    console.error('fetchPluginList function not available');
+                    const dropdown = document.getElementById('plugin-selector');
+                    if (dropdown) {
+                        dropdown.disabled = true;
+                        const errorOption = document.createElement('option');
+                        errorOption.value = '';
+                        errorOption.textContent = 'Initialization error';
+                        errorOption.disabled = true;
+                        dropdown.appendChild(errorOption);
+                    }
+                    return;
+                }
+
+                if (typeof populatePluginDropdown !== 'function') {
+                    console.error('populatePluginDropdown function not available');
+                    return;
+                }
+
+                if (typeof initializePluginSelector !== 'function') {
+                    console.error('initializePluginSelector function not available');
+                    return;
+                }
+
+                // Fetch plugin list and populate dropdown
+                fetchPluginList()
+                    .then(function(plugins) {
+                        populatePluginDropdown(plugins);
+                        initializePluginSelector();
+                    })
+                    .catch(function(error) {
+                        console.error('Failed to initialize plugin selector:', error);
+                        const dropdown = document.getElementById('plugin-selector');
+                        if (dropdown) {
+                            dropdown.disabled = true;
+                            const errorOption = document.createElement('option');
+                            errorOption.value = '';
+                            errorOption.textContent = 'Failed to load plugins';
+                            errorOption.disabled = true;
+                            dropdown.appendChild(errorOption);
+                        }
+                    });
+            }
+
+            // Wait for DOM ready
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initializePluginSelectorSystem);
+            } else {
+                // DOM is already ready
+                initializePluginSelectorSystem();
+            }
+        })();
     </script>
     {{PLUGIN_JS}}
 </body>

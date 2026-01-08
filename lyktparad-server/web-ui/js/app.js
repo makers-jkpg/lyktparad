@@ -236,6 +236,15 @@ async function getActivePlugin() {
  * @param {string} pluginName - Plugin name to load
  * @param {HTMLElement} [feedbackElement] - Optional element to display loading/error feedback
  * @returns {Promise<Object>} Promise resolving to bundle object
+ * @example
+ * // Load plugin UI with feedback element
+ * const feedbackEl = document.getElementById('plugin-feedback');
+ * try {
+ *   const bundle = await loadPluginWebUI('rgb_effect', feedbackEl);
+ *   console.log('Plugin UI loaded:', bundle);
+ * } catch (error) {
+ *   console.error('Failed to load plugin UI:', error);
+ * }
  */
 async function loadPluginWebUI(pluginName, feedbackElement) {
   if (!window.PluginWebUI) {
@@ -260,8 +269,9 @@ async function loadPluginWebUI(pluginName, feedbackElement) {
 
   // Show loading state
   if (feedbackElement) {
-    feedbackElement.textContent = 'Loading plugin UI...';
+    feedbackElement.innerHTML = '<span class="plugin-ui-spinner" aria-hidden="true"></span><span>Loading plugin UI...</span>';
     feedbackElement.className = 'plugin-ui-feedback-loading';
+    feedbackElement.setAttribute('aria-busy', 'true');
   }
 
   try {
@@ -279,11 +289,12 @@ async function loadPluginWebUI(pluginName, feedbackElement) {
     if (feedbackElement) {
       feedbackElement.textContent = 'Plugin UI loaded successfully';
       feedbackElement.className = 'plugin-ui-feedback-success';
+      feedbackElement.setAttribute('aria-busy', 'false');
       // Auto-hide success message after 2 seconds
       setTimeout(() => {
         if (feedbackElement.className.includes('success')) {
           feedbackElement.textContent = '';
-          feedbackElement.className = '';
+          feedbackElement.className = 'plugin-ui-feedback';
         }
       }, 2000);
     }
@@ -299,6 +310,7 @@ async function loadPluginWebUI(pluginName, feedbackElement) {
     // Error handling
     console.error('Failed to load plugin web UI', error);
     if (feedbackElement) {
+      feedbackElement.setAttribute('aria-busy', 'false');
       handleApiError(error, feedbackElement, () => {
         loadPluginWebUI(pluginName, feedbackElement);
       });
@@ -322,6 +334,16 @@ async function loadPluginWebUI(pluginName, feedbackElement) {
  * @param {ArrayBuffer|Uint8Array|number[]} data - Data to send
  * @param {HTMLElement} [feedbackElement] - Optional element to display feedback
  * @returns {Promise<Object>} Promise resolving to response
+ * @example
+ * // Send RGB data with feedback
+ * const rgbData = window.PluginWebUI.encodeRGB(255, 128, 0);
+ * const feedbackEl = document.getElementById('plugin-feedback');
+ * try {
+ *   const response = await sendPluginWebUIData('rgb_effect', rgbData, feedbackEl);
+ *   console.log('Data sent:', response);
+ * } catch (error) {
+ *   console.error('Failed to send data:', error);
+ * }
  */
 async function sendPluginWebUIData(pluginName, data, feedbackElement) {
   if (!window.PluginWebUI) {
@@ -346,8 +368,9 @@ async function sendPluginWebUIData(pluginName, data, feedbackElement) {
 
   // Show sending state
   if (feedbackElement) {
-    feedbackElement.textContent = 'Sending data...';
+    feedbackElement.innerHTML = '<span class="plugin-ui-spinner" aria-hidden="true"></span><span>Sending data...</span>';
     feedbackElement.className = 'plugin-ui-feedback-loading';
+    feedbackElement.setAttribute('aria-busy', 'true');
   }
 
   try {
@@ -358,11 +381,12 @@ async function sendPluginWebUIData(pluginName, data, feedbackElement) {
     if (feedbackElement) {
       feedbackElement.textContent = 'Data sent successfully';
       feedbackElement.className = 'plugin-ui-feedback-success';
+      feedbackElement.setAttribute('aria-busy', 'false');
       // Auto-hide success message after 2 seconds
       setTimeout(() => {
         if (feedbackElement.className.includes('success')) {
           feedbackElement.textContent = '';
-          feedbackElement.className = '';
+          feedbackElement.className = 'plugin-ui-feedback';
         }
       }, 2000);
     }
@@ -372,6 +396,7 @@ async function sendPluginWebUIData(pluginName, data, feedbackElement) {
     // Error handling
     console.error('Failed to send plugin data', error);
     if (feedbackElement) {
+      feedbackElement.setAttribute('aria-busy', 'false');
       handleApiError(error, feedbackElement, () => {
         sendPluginWebUIData(pluginName, data, feedbackElement);
       });
@@ -379,6 +404,205 @@ async function sendPluginWebUIData(pluginName, data, feedbackElement) {
 
     throw error;
   }
+}
+
+/**
+ * Fetch list of available plugins from the API
+ * @returns {Promise<string[]>} Promise resolving to array of plugin names
+ * @throws {Error} If fetch fails or response is invalid
+ * @example
+ * // Fetch and display plugin list
+ * try {
+ *   const plugins = await fetchPluginList();
+ *   console.log('Available plugins:', plugins);
+ *   // plugins is array like ['rgb_effect', 'sequence', 'beat']
+ * } catch (error) {
+ *   console.error('Failed to fetch plugins:', error);
+ * }
+ */
+async function fetchPluginList() {
+  try {
+    const response = await fetch('/api/plugins', {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      let errorMessage;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.error || errorData.message || 'Failed to fetch plugin list';
+      } catch {
+        errorMessage = `Failed to fetch plugin list: HTTP ${response.status}`;
+      }
+      console.error('Plugin list fetch failed:', errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+
+    // Validate response format
+    if (!data || !Array.isArray(data.plugins)) {
+      const error = new Error('Invalid response format: expected { plugins: string[] }');
+      console.error('Invalid plugin list response:', error.message);
+      throw error;
+    }
+
+    return data.plugins;
+  } catch (error) {
+    // Re-throw if it's already our error type
+    if (error.message && (
+      error.message.includes('Failed to fetch plugin list') ||
+      error.message.includes('Invalid response format')
+    )) {
+      throw error;
+    }
+
+    // Handle network errors
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      const networkError = new Error('Network error: Unable to fetch plugin list');
+      console.error('Network error fetching plugin list:', networkError.message);
+      throw networkError;
+    }
+
+    // Re-throw other errors
+    console.error('Unexpected error fetching plugin list:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Populate plugin dropdown with list of available plugins
+ * @param {string[]} plugins - Array of plugin names
+ * @example
+ * // Populate dropdown with plugin list
+ * const plugins = ['rgb_effect', 'sequence', 'beat'];
+ * populatePluginDropdown(plugins);
+ * // Dropdown will be populated with formatted plugin names
+ */
+function populatePluginDropdown(plugins) {
+  const dropdown = document.getElementById('plugin-selector');
+  if (!dropdown) {
+    console.error('Plugin dropdown element not found');
+    return;
+  }
+
+  // Clear existing options (keep placeholder if it exists)
+  const placeholder = dropdown.querySelector('option[value=""]');
+  dropdown.innerHTML = '';
+  if (placeholder) {
+    dropdown.appendChild(placeholder);
+  } else {
+    // Add placeholder if it doesn't exist
+    const placeholderOption = document.createElement('option');
+    placeholderOption.value = '';
+    placeholderOption.textContent = 'Select a plugin...';
+    dropdown.appendChild(placeholderOption);
+  }
+
+  // Handle empty plugin list
+  if (!plugins || plugins.length === 0) {
+    const noPluginsOption = document.createElement('option');
+    noPluginsOption.value = '';
+    noPluginsOption.textContent = 'No plugins available';
+    noPluginsOption.disabled = true;
+    dropdown.appendChild(noPluginsOption);
+    return;
+  }
+
+  // Add plugin options
+  plugins.forEach(pluginName => {
+    const option = document.createElement('option');
+    option.value = pluginName;
+    // Format display name: replace underscores with spaces, handle camelCase
+    const displayName = pluginName
+      .replace(/_/g, ' ')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
+    option.textContent = displayName;
+    dropdown.appendChild(option);
+  });
+}
+
+/**
+ * Initialize plugin selector dropdown with event handlers
+ * Sets up change event listener to load plugin UI when plugin is selected
+ * @example
+ * // Initialize plugin selector (usually called after populating dropdown)
+ * initializePluginSelector();
+ * // Dropdown change events will now trigger plugin UI loading
+ */
+function initializePluginSelector() {
+  const dropdown = document.getElementById('plugin-selector');
+  if (!dropdown) {
+    console.error('Plugin dropdown element not found');
+    return;
+  }
+
+  // Create or get feedback element for loading/error messages
+  let feedbackElement = document.getElementById('plugin-selector-feedback');
+  if (!feedbackElement) {
+    feedbackElement = document.createElement('div');
+    feedbackElement.id = 'plugin-selector-feedback';
+    feedbackElement.className = 'plugin-ui-feedback';
+    feedbackElement.setAttribute('aria-live', 'polite');
+    feedbackElement.setAttribute('aria-atomic', 'true');
+    // Insert feedback element after dropdown
+    dropdown.parentElement.insertBefore(feedbackElement, dropdown.nextSibling);
+  }
+
+  // Add change event listener
+  dropdown.addEventListener('change', async function(e) {
+    const pluginName = e.target.value;
+
+    // Handle empty selection (placeholder option)
+    if (!pluginName || pluginName === '') {
+      // Clear any loaded plugin UI
+      const container = document.getElementById('plugin-ui-container');
+      if (container) {
+        container.innerHTML = '';
+      }
+      feedbackElement.textContent = '';
+      feedbackElement.className = 'plugin-ui-feedback';
+      return;
+    }
+
+    // Validate plugin name format
+    if (!/^[a-zA-Z0-9_-]+$/.test(pluginName)) {
+      const error = new Error('Invalid plugin name format');
+      console.error('Invalid plugin name:', error);
+      feedbackElement.textContent = 'Invalid plugin name format';
+      feedbackElement.className = 'plugin-ui-feedback-error';
+      // Reset dropdown to previous selection or placeholder
+      dropdown.value = '';
+      return;
+    }
+
+    // Check if PluginWebUI module is loaded
+    if (!window.PluginWebUI) {
+      const error = new Error('Plugin Web UI module not loaded');
+      console.error('Plugin Web UI not available', error);
+      feedbackElement.textContent = 'Plugin Web UI module not available';
+      feedbackElement.className = 'plugin-ui-feedback-error';
+      // Reset dropdown to previous selection or placeholder
+      dropdown.value = '';
+      return;
+    }
+
+    try {
+      // Load plugin UI
+      await loadPluginWebUI(pluginName, feedbackElement);
+    } catch (error) {
+      // Error handling is done in loadPluginWebUI, but we should reset dropdown on error
+      console.error('Failed to load plugin:', error);
+      // Don't reset dropdown here - let user see the error and try again
+      // The error message is already displayed via feedbackElement in loadPluginWebUI
+    }
+  });
 }
 
 // Utility functions
