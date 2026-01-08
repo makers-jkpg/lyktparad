@@ -58,7 +58,7 @@ typedef const char *(*plugin_web_content_callback_t)(void);
  * The dynamic_mask field indicates which callbacks return Heap (dynamic) content
  * that must be freed after use.
  */
-typedef struct {
+typedef struct plugin_web_ui_callbacks_s {
     /**
      * @brief HTML content callback (optional, may be NULL)
      *

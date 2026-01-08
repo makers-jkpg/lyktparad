@@ -226,6 +226,43 @@ The Sequence plugin provides a full web interface accessible via the external we
 **Effect Strobe and Effect Fade Plugins:**
 The Effect Strobe and Effect Fade plugins do not currently provide web interfaces. Effects are automatically started when the plugins are activated via the plugin control API or web interface.
 
+### Plugin Web UI
+
+Plugins can provide dynamic web interfaces that are loaded on-demand from the ESP32 root node. These interfaces are served via the plugin web UI system, which enables plugins to provide HTML, CSS, and JavaScript content at runtime.
+
+**Accessing Plugin Web UI:**
+- Plugin web UIs are loaded automatically when a plugin is selected in the web interface
+- The system fetches HTML/CSS/JS bundles from the root node via `GET /api/plugin/<plugin-name>/bundle`
+- Content is injected into the DOM dynamically
+
+**Bundle Endpoint:**
+- **Endpoint**: `GET /api/plugin/<plugin-name>/bundle`
+- **Response**: JSON object `{"html": "...", "js": "...", "css": "..."}`
+- **Content-Type**: `application/json; charset=utf-8`
+- NULL callbacks are omitted from the JSON response
+
+**Data Endpoint:**
+- **Endpoint**: `POST /api/plugin/<plugin-name>/data`
+- **Content-Type**: `application/octet-stream`
+- **Body**: Raw bytes (e.g., `[0xFF, 0x00, 0x00]` for RGB values)
+- **Max Payload**: 512 bytes recommended
+- **Response**: `200 OK` on success
+
+**Usage Examples:**
+- **RGB Effect Plugin**: Provides RGB sliders for direct color control
+  - Load bundle: `PluginWebUI.loadPluginBundle('rgb_effect')`
+  - Send RGB values: `PluginWebUI.sendPluginData('rgb_effect', PluginWebUI.encodeRGB(255, 0, 0))`
+
+**JavaScript API:**
+- `PluginWebUI.loadPluginBundle(pluginName)`: Loads and injects plugin UI bundle
+- `PluginWebUI.sendPluginData(pluginName, data)`: Sends raw bytes to plugin
+- `PluginWebUI.encodeRGB(r, g, b)`: Encodes RGB values as 3 bytes
+- `PluginWebUI.encodeUint8(value)`: Encodes single byte value
+- `PluginWebUI.encodeUint16(value)`: Encodes 16-bit value (little-endian)
+
+**For Developers:**
+See the [Plugin Web UI Integration Guide](../dev-guides/plugin-web-ui-integration.md) for detailed information on implementing web UI support in plugins.
+
 ## API Integration
 
 ### HTTP API

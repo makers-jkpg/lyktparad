@@ -22,7 +22,7 @@
 #include <stdbool.h>
 
 /* Forward declaration for plugin web UI callbacks */
-typedef struct plugin_web_ui_callbacks_t plugin_web_ui_callbacks_t;
+typedef struct plugin_web_ui_callbacks_s plugin_web_ui_callbacks_t;
 
 /*******************************************************
  *                Plugin Command ID Range

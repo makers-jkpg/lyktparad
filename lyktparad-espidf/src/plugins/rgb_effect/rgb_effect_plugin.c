@@ -15,7 +15,9 @@
 
 #include "rgb_effect_plugin.h"
 #include "plugin_system.h"
+#include "plugin_web_ui.h"
 #include "plugin_light.h"
+#include "mesh_commands.h"
 #include "mesh_common.h"
 #include "config/mesh_config.h"
 #include "config/mesh_device_config.h"
@@ -40,6 +42,9 @@ static const uint32_t rgb_effect_colors[6] = {
 
 /* State variables */
 static bool rgb_effect_running = false;  /* Running state flag */
+
+/* Forward declarations */
+static void rgb_effect_register_web_ui(void);
 
 /*******************************************************
  *                Helper Functions
@@ -106,9 +111,33 @@ esp_err_t rgb_effect_plugin_handle_heartbeat(uint8_t pointer, uint8_t counter)
 
 static esp_err_t rgb_effect_command_handler(uint8_t *data, uint16_t len)
 {
-    /* RGB effect auto-starts on activation, command handler is minimal */
-    (void)data;
-    (void)len;
+    if (data == NULL || len < 1) {
+        ESP_LOGE(TAG, "Invalid command data");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t cmd = data[0];
+
+    /* Handle PLUGIN_CMD_DATA (0x04) - raw bytes RGB values */
+    if (cmd == PLUGIN_CMD_DATA) {
+        /* Data format: [R:1][G:1][B:1] (3 bytes) */
+        if (len < 4) {  /* cmd byte (1) + R (1) + G (1) + B (1) = 4 bytes */
+            ESP_LOGE(TAG, "PLUGIN_CMD_DATA: Invalid length (%d, expected 4)", len);
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        uint8_t r = data[1];
+        uint8_t g = data[2];
+        uint8_t b = data[3];
+
+        /* Set RGB LED directly */
+        plugin_set_rgb(r, g, b);
+
+        ESP_LOGI(TAG, "RGB set via web UI: R=%d G=%d B=%d", r, g, b);
+        return ESP_OK;
+    }
+
+    /* Other commands handled by dedicated callbacks */
     return ESP_OK;
 }
 
@@ -120,6 +149,10 @@ static bool rgb_effect_is_active(void)
 static esp_err_t rgb_effect_init(void)
 {
     /* No initialization needed - core heartbeat counter handles timing */
+
+    /* Register web UI callbacks */
+    rgb_effect_register_web_ui();
+
     return ESP_OK;
 }
 
@@ -199,6 +232,180 @@ static esp_err_t rgb_effect_on_start(void)
 
     ESP_LOGI(TAG, "RGB effect plugin START command received");
     return ESP_OK;
+}
+
+/*******************************************************
+ *                Web UI Callbacks
+ *******************************************************/
+
+/* HTML content - Flash memory (zero RAM) */
+static const char rgb_effect_html_content[] =
+    "<div class=\"plugin-rgb-effect-container\">\n"
+    "  <h3>RGB Effect Control</h3>\n"
+    "  <div class=\"plugin-rgb-effect-controls\">\n"
+    "    <label for=\"plugin-rgb-effect-red\">Red: <span id=\"plugin-rgb-effect-red-value\">0</span></label>\n"
+    "    <input type=\"range\" id=\"plugin-rgb-effect-red\" min=\"0\" max=\"255\" value=\"0\" class=\"plugin-rgb-effect-slider\">\n"
+    "    <label for=\"plugin-rgb-effect-green\">Green: <span id=\"plugin-rgb-effect-green-value\">0</span></label>\n"
+    "    <input type=\"range\" id=\"plugin-rgb-effect-green\" min=\"0\" max=\"255\" value=\"0\" class=\"plugin-rgb-effect-slider\">\n"
+    "    <label for=\"plugin-rgb-effect-blue\">Blue: <span id=\"plugin-rgb-effect-blue-value\">0</span></label>\n"
+    "    <input type=\"range\" id=\"plugin-rgb-effect-blue\" min=\"0\" max=\"255\" value=\"0\" class=\"plugin-rgb-effect-slider\">\n"
+    "  </div>\n"
+    "</div>\n";
+
+static const char *rgb_effect_html(void)
+{
+    return rgb_effect_html_content;
+}
+
+/* CSS content - Flash memory (zero RAM) */
+static const char rgb_effect_css_content[] =
+    ".plugin-rgb-effect-container {\n"
+    "  padding: 20px;\n"
+    "  background: #f5f5f5;\n"
+    "  border-radius: 8px;\n"
+    "  margin: 20px 0;\n"
+    "}\n"
+    ".plugin-rgb-effect-controls {\n"
+    "  display: flex;\n"
+    "  flex-direction: column;\n"
+    "  gap: 15px;\n"
+    "}\n"
+    ".plugin-rgb-effect-controls label {\n"
+    "  display: flex;\n"
+    "  justify-content: space-between;\n"
+    "  align-items: center;\n"
+    "  font-weight: 500;\n"
+    "}\n"
+    ".plugin-rgb-effect-slider {\n"
+    "  width: 100%;\n"
+    "  height: 8px;\n"
+    "  border-radius: 4px;\n"
+    "  background: #ddd;\n"
+    "  outline: none;\n"
+    "  -webkit-appearance: none;\n"
+    "}\n"
+    ".plugin-rgb-effect-slider::-webkit-slider-thumb {\n"
+    "  -webkit-appearance: none;\n"
+    "  appearance: none;\n"
+    "  width: 20px;\n"
+    "  height: 20px;\n"
+    "  border-radius: 50%;\n"
+    "  background: #667eea;\n"
+    "  cursor: pointer;\n"
+    "}\n"
+    ".plugin-rgb-effect-slider::-moz-range-thumb {\n"
+    "  width: 20px;\n"
+    "  height: 20px;\n"
+    "  border-radius: 50%;\n"
+    "  background: #667eea;\n"
+    "  cursor: pointer;\n"
+    "  border: none;\n"
+    "}\n";
+
+static const char *rgb_effect_css(void)
+{
+    return rgb_effect_css_content;
+}
+
+/* JavaScript content - Flash memory (zero RAM) */
+static const char rgb_effect_js_content[] =
+    "(function() {\n"
+    "  'use strict';\n"
+    "\n"
+    "  // Wait for PluginWebUI to be available\n"
+    "  if (typeof PluginWebUI === 'undefined') {\n"
+    "    console.error('[RGB Effect] PluginWebUI not available');\n"
+    "    return;\n"
+    "  }\n"
+    "\n"
+    "  // Get slider elements\n"
+    "  const redSlider = document.getElementById('plugin-rgb-effect-red');\n"
+    "  const greenSlider = document.getElementById('plugin-rgb-effect-green');\n"
+    "  const blueSlider = document.getElementById('plugin-rgb-effect-blue');\n"
+    "  const redValue = document.getElementById('plugin-rgb-effect-red-value');\n"
+    "  const greenValue = document.getElementById('plugin-rgb-effect-green-value');\n"
+    "  const blueValue = document.getElementById('plugin-rgb-effect-blue-value');\n"
+    "\n"
+    "  if (!redSlider || !greenSlider || !blueSlider) {\n"
+    "    console.error('[RGB Effect] Slider elements not found');\n"
+    "    return;\n"
+    "  }\n"
+    "\n"
+    "  // Update value display\n"
+    "  function updateValueDisplay() {\n"
+    "    if (redValue) redValue.textContent = redSlider.value;\n"
+    "    if (greenValue) greenValue.textContent = greenSlider.value;\n"
+    "    if (blueValue) blueValue.textContent = blueSlider.value;\n"
+    "  }\n"
+    "\n"
+    "  // Send RGB values to plugin\n"
+    "  function sendRGB() {\n"
+    "    const r = parseInt(redSlider.value, 10);\n"
+    "    const g = parseInt(greenSlider.value, 10);\n"
+    "    const b = parseInt(blueSlider.value, 10);\n"
+    "\n"
+    "    // Encode as 3 bytes: [R, G, B]\n"
+    "    const rgbBytes = PluginWebUI.encodeRGB(r, g, b);\n"
+    "\n"
+    "    // Send to plugin via API\n"
+    "    PluginWebUI.sendPluginData('rgb_effect', rgbBytes)\n"
+    "      .then(() => {\n"
+    "        console.log('[RGB Effect] RGB sent:', r, g, b);\n"
+    "      })\n"
+    "      .catch((error) => {\n"
+    "        console.error('[RGB Effect] Failed to send RGB:', error);\n"
+    "      });\n"
+    "  }\n"
+    "\n"
+    "  // Add event listeners\n"
+    "  redSlider.addEventListener('input', function() {\n"
+    "    updateValueDisplay();\n"
+    "    sendRGB();\n"
+    "  });\n"
+    "\n"
+    "  greenSlider.addEventListener('input', function() {\n"
+    "    updateValueDisplay();\n"
+    "    sendRGB();\n"
+    "  });\n"
+    "\n"
+    "  blueSlider.addEventListener('input', function() {\n"
+    "    updateValueDisplay();\n"
+    "    sendRGB();\n"
+    "  });\n"
+    "\n"
+    "  // Initialize value displays\n"
+    "  updateValueDisplay();\n"
+    "\n"
+    "  console.log('[RGB Effect] Web UI initialized');\n"
+    "})();\n";
+
+static const char *rgb_effect_js(void)
+{
+    return rgb_effect_js_content;
+}
+
+/**
+ * @brief Register web UI callbacks for RGB effect plugin
+ *
+ * This function registers web UI callbacks that provide HTML, CSS, and JavaScript
+ * content for the RGB effect plugin's web interface. All content is stored in
+ * Flash memory (static const char*) for zero-RAM optimization.
+ */
+static void rgb_effect_register_web_ui(void)
+{
+    plugin_web_ui_callbacks_t callbacks = {
+        .html_callback = rgb_effect_html,
+        .js_callback = rgb_effect_js,
+        .css_callback = rgb_effect_css,
+        .dynamic_mask = 0x00  /* All Flash (static) - no bits set */
+    };
+
+    esp_err_t err = plugin_register_web_ui("rgb_effect", &callbacks);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register web UI: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "Web UI registered for RGB effect plugin");
+    }
 }
 
 /*******************************************************

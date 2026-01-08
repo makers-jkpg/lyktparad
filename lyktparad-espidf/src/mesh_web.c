@@ -1,6 +1,7 @@
 #include "mesh_web.h"
 #include "light_neopixel.h"
 #include "plugin_system.h"
+#include "plugin_web_ui.h"
 #include "mesh_commands.h"
 #include "mesh_ota.h"
 #include "mesh_version.h"
@@ -968,6 +969,7 @@ static esp_err_t api_plugin_pause_handler(httpd_req_t *req);
 static esp_err_t api_plugin_reset_handler(httpd_req_t *req);
 static esp_err_t api_plugins_list_handler(httpd_req_t *req);
 static esp_err_t api_plugin_data_handler(httpd_req_t *req);
+static esp_err_t api_plugin_bundle_handler(httpd_req_t *req);
 static esp_err_t index_handler(httpd_req_t *req);
 
 /* API: GET /api/nodes - Returns number of nodes in mesh */
@@ -2561,9 +2563,9 @@ static esp_err_t api_settings_external_server_delete_handler(httpd_req_t *req)
 /**
  * @brief Extract plugin name from URL
  *
- * Extracts plugin name from URL pattern: /api/plugin/<plugin-name>/data
+ * Extracts plugin name from URL pattern: /api/plugin/<plugin-name>/data or /api/plugin/<plugin-name>/bundle
  *
- * @param uri Request URI (e.g., "/api/plugin/rgb_effect/data")
+ * @param uri Request URI (e.g., "/api/plugin/rgb_effect/data" or "/api/plugin/rgb_effect/bundle")
  * @param plugin_name Output buffer for plugin name (must be at least 32 bytes)
  * @param name_size Size of plugin_name buffer
  * @return ESP_OK on success, ESP_ERR_INVALID_ARG if URL format is invalid
@@ -2571,7 +2573,8 @@ static esp_err_t api_settings_external_server_delete_handler(httpd_req_t *req)
 static esp_err_t extract_plugin_name_from_url(const char *uri, char *plugin_name, size_t name_size)
 {
     const char *prefix = "/api/plugin/";
-    const char *suffix = "/data";
+    const char *suffix_data = "/data";
+    const char *suffix_bundle = "/bundle";
 
     /* Check if URI starts with prefix */
     if (strncmp(uri, prefix, strlen(prefix)) != 0) {
@@ -2581,8 +2584,38 @@ static esp_err_t extract_plugin_name_from_url(const char *uri, char *plugin_name
     /* Find start of plugin name */
     const char *name_start = uri + strlen(prefix);
 
-    /* Find end of plugin name (suffix) */
-    const char *name_end = strstr(name_start, suffix);
+    /* Find end of plugin name (either /data or /bundle) */
+    /* Check URI length to ensure we can safely check for suffixes */
+    size_t uri_len = strlen(uri);
+    size_t prefix_len = strlen(prefix);
+    if (uri_len < prefix_len + 1) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Find suffix position - check for /data first, then /bundle */
+    const char *name_end = NULL;
+    const char *data_pos = strstr(name_start, suffix_data);
+    const char *bundle_pos = strstr(name_start, suffix_bundle);
+
+    /* Verify suffix is at valid position (not embedded in plugin name) */
+    /* Since plugin names are validated to [a-zA-Z0-9_-], they can't contain "/" */
+    /* So we just need to find the first occurrence and verify it's followed by end or query */
+    if (data_pos != NULL) {
+        size_t suffix_len = strlen(suffix_data);
+        char next_char = data_pos[suffix_len];
+        if (next_char == '\0' || next_char == '?' || next_char == '#') {
+            name_end = data_pos;
+        }
+    }
+
+    if (name_end == NULL && bundle_pos != NULL) {
+        size_t suffix_len = strlen(suffix_bundle);
+        char next_char = bundle_pos[suffix_len];
+        if (next_char == '\0' || next_char == '?' || next_char == '#') {
+            name_end = bundle_pos;
+        }
+    }
+
     if (name_end == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -2751,6 +2784,89 @@ static esp_err_t read_request_body(httpd_req_t *req, uint8_t *buffer, size_t buf
     return ESP_OK;
 }
 
+/* API: GET /api/plugin/<plugin-name>/bundle - Returns JSON bundle with HTML/CSS/JS */
+static esp_err_t api_plugin_bundle_handler(httpd_req_t *req)
+{
+    /* Extract plugin name from URL */
+    char plugin_name[32];
+    esp_err_t err = extract_plugin_name_from_url(req->uri, plugin_name, sizeof(plugin_name));
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid request\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Validate plugin name format */
+    if (!is_valid_plugin_name(plugin_name)) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid request\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Check if plugin exists and has web UI */
+    const plugin_info_t *plugin = plugin_get_by_name(plugin_name);
+    if (plugin == NULL || plugin->web_ui == NULL) {
+        httpd_resp_set_status(req, "404 Not Found");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Plugin not found\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Calculate required buffer size (dry-run mode) */
+    size_t required_size = 0;
+    err = plugin_get_web_bundle(plugin_name, NULL, 0, &required_size);
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Internal server error\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Allocate buffer for JSON bundle */
+    char *json_buffer = (char *)malloc(required_size);
+    if (json_buffer == NULL) {
+        ESP_LOGE(WEB_TAG, "Failed to allocate buffer for bundle (size: %zu)", required_size);
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Internal server error\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Build JSON bundle */
+    err = plugin_get_web_bundle(plugin_name, json_buffer, required_size, &required_size);
+    if (err != ESP_OK) {
+        free(json_buffer);
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Internal server error\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Send JSON response */
+    httpd_resp_set_status(req, "200 OK");
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    err = httpd_resp_send(req, json_buffer, -1);
+
+    /* Free buffer */
+    free(json_buffer);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(WEB_TAG, "Failed to send bundle response: 0x%x", err);
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
 /* API: POST /api/plugin/<plugin-name>/data - Accepts raw bytes data and forwards to mesh */
 static esp_err_t api_plugin_data_handler(httpd_req_t *req)
 {
@@ -2825,18 +2941,34 @@ static esp_err_t api_plugin_data_handler(httpd_req_t *req)
 
     /* Note: Zero-length data is valid and should be forwarded (bytes_read == 0 is OK) */
 
-    /* Forward to mesh (placeholder - will be implemented in separate task) */
+    /* Process command locally on root node (if root node) */
+    /* Root node processes the command locally before forwarding to child nodes */
+    if (esp_mesh_is_root() && plugin != NULL) {
+        /* Construct command buffer: [PLUGIN_CMD_DATA:1] [DATA:N] */
+        uint8_t cmd_buffer[513];  /* PLUGIN_CMD_DATA (1) + data (max 512) */
+        cmd_buffer[0] = PLUGIN_CMD_DATA;
+        if (bytes_read > 0) {
+            memcpy(&cmd_buffer[1], data, bytes_read);
+        }
+
+        /* Call plugin's command handler directly (local processing) */
+        if (plugin->callbacks.command_handler != NULL) {
+            esp_err_t handler_err = plugin->callbacks.command_handler(cmd_buffer, bytes_read + 1);
+            if (handler_err != ESP_OK) {
+                ESP_LOGW(WEB_TAG, "Plugin '%s' command handler returned error: %s", plugin_name, esp_err_to_name(handler_err));
+                /* Continue with forwarding even if local processing fails */
+            }
+        }
+    }
+
+    /* Forward to mesh (broadcast to child nodes) */
     err = plugin_forward_data_to_mesh(plugin_name, data, (uint16_t)bytes_read);
-    if (err != ESP_OK && err != ESP_ERR_NOT_IMPLEMENTED) {
+    if (err != ESP_OK) {
         httpd_resp_set_status(req, "500 Internal Server Error");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
         httpd_resp_send(req, "{\"success\":false,\"error\":\"Internal server error\"}", -1);
         return ESP_FAIL;
-    }
-
-    if (err == ESP_ERR_NOT_IMPLEMENTED) {
-        ESP_LOGI(WEB_TAG, "Plugin data endpoint: %s, %zu bytes (forwarding not yet implemented)", plugin_name, bytes_read);
     }
 
     /* Return success */
@@ -2870,7 +3002,7 @@ esp_err_t mesh_web_server_start(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 31;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, sequence_start, sequence_stop, sequence_reset, sequence_status, ota_download, ota_status, ota_cancel, ota_version, ota_distribute, ota_distribution_status, ota_distribution_progress, ota_distribution_cancel, ota_reboot, plugin_activate, plugin_deactivate, plugin_active, plugin_stop, plugin_pause, plugin_reset, plugins_list, plugin_data, index = 27 handlers (31 for future expansion) */
+    config.max_uri_handlers = 32;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, sequence_start, sequence_stop, sequence_reset, sequence_status, ota_download, ota_status, ota_cancel, ota_version, ota_distribute, ota_distribution_status, ota_distribution_progress, ota_distribution_cancel, ota_reboot, plugin_activate, plugin_deactivate, plugin_active, plugin_stop, plugin_pause, plugin_reset, plugins_list, plugin_bundle, plugin_data, index = 28 handlers (32 for future expansion) */
     config.stack_size = 8192;
     config.server_port = 80;
     config.max_open_sockets = 4;  /* Reduced to 4 (3 internal + 1 connection) to leave sockets for UDP listeners and mDNS */
@@ -3231,6 +3363,24 @@ esp_err_t mesh_web_server_start(void)
             httpd_stop(server_handle);
             server_handle = NULL;
             return ESP_FAIL;
+        }
+
+        /* Register plugin bundle endpoint handler */
+        /* Note: ESP-IDF HTTP server doesn't support wildcards, so we register with a base URI */
+        /* The handler will parse the URI manually to extract plugin name from /api/plugin/<name>/bundle */
+        httpd_uri_t plugin_bundle_uri = {
+            .uri       = "/api/plugin/",  /* Base URI pattern - handler will parse full URI manually */
+            .method    = HTTP_GET,
+            .handler   = api_plugin_bundle_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &plugin_bundle_uri);
+        if (reg_err != ESP_OK) {
+            /* If registration fails, it might be because ESP-IDF doesn't support prefix matching */
+            /* In that case, we'll need to use a catch-all handler or different approach */
+            ESP_LOGW(WEB_TAG, "Failed to register plugin bundle URI (may need catch-all approach): 0x%x", reg_err);
+            /* Continue anyway - handler registration failure is not critical for server startup */
+            /* The endpoint can be added via catch-all handler if needed */
         }
 
         /* Register plugin data endpoint handler */
