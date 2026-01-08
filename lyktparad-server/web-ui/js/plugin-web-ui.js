@@ -1,13 +1,13 @@
 /**
  * Plugin Web UI Module
- * 
+ *
  * Provides JavaScript utilities for plugin web UI integration, enabling
  * dynamic loading of plugin HTML/CSS/JS bundles and communication with
  * plugins via binary data.
- * 
+ *
  * Architecture: Zero CPU processing on ESP32 - all encoding/decoding
  * handled in JavaScript. ESP32 acts as transparent proxy.
- * 
+ *
  * Copyright (c) 2025 the_louie
  */
 

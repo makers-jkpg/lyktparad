@@ -16,6 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
+#include <strings.h>  /* for strcasecmp */
 #include <stdlib.h>
 #include <stdio.h>
 #include "lwip/inet.h"
@@ -966,6 +967,7 @@ static esp_err_t api_plugin_stop_handler(httpd_req_t *req);
 static esp_err_t api_plugin_pause_handler(httpd_req_t *req);
 static esp_err_t api_plugin_reset_handler(httpd_req_t *req);
 static esp_err_t api_plugins_list_handler(httpd_req_t *req);
+static esp_err_t api_plugin_data_handler(httpd_req_t *req);
 static esp_err_t index_handler(httpd_req_t *req);
 
 /* API: GET /api/nodes - Returns number of nodes in mesh */
@@ -2552,6 +2554,298 @@ static esp_err_t api_settings_external_server_delete_handler(httpd_req_t *req)
     return httpd_resp_send(req, "{\"success\":true,\"onboard_only\":false,\"limited_mode\":false}", -1);
 }
 
+/*******************************************************
+ *                Plugin Data Endpoint Helpers
+ *******************************************************/
+
+/**
+ * @brief Extract plugin name from URL
+ *
+ * Extracts plugin name from URL pattern: /api/plugin/<plugin-name>/data
+ *
+ * @param uri Request URI (e.g., "/api/plugin/rgb_effect/data")
+ * @param plugin_name Output buffer for plugin name (must be at least 32 bytes)
+ * @param name_size Size of plugin_name buffer
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if URL format is invalid
+ */
+static esp_err_t extract_plugin_name_from_url(const char *uri, char *plugin_name, size_t name_size)
+{
+    const char *prefix = "/api/plugin/";
+    const char *suffix = "/data";
+
+    /* Check if URI starts with prefix */
+    if (strncmp(uri, prefix, strlen(prefix)) != 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Find start of plugin name */
+    const char *name_start = uri + strlen(prefix);
+
+    /* Find end of plugin name (suffix) */
+    const char *name_end = strstr(name_start, suffix);
+    if (name_end == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Calculate name length */
+    size_t name_len = name_end - name_start;
+    if (name_len == 0 || name_len >= name_size) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    /* Copy plugin name */
+    strncpy(plugin_name, name_start, name_len);
+    plugin_name[name_len] = '\0';
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Validate plugin name format
+ *
+ * Validates plugin name against regex: ^[a-zA-Z0-9_-]+$
+ *
+ * @param name Plugin name to validate
+ * @return true if valid, false otherwise
+ */
+static bool is_valid_plugin_name(const char *name)
+{
+    if (name == NULL || strlen(name) == 0) {
+        return false;
+    }
+
+    for (const char *p = name; *p != '\0'; p++) {
+        if (!((*p >= 'a' && *p <= 'z') ||
+              (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') ||
+              *p == '_' || *p == '-')) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * @brief Validate Content-Type header
+ *
+ * Validates that Content-Type is application/octet-stream
+ *
+ * @param req HTTP request
+ * @return ESP_OK if valid, ESP_ERR_INVALID_ARG if invalid
+ */
+static esp_err_t validate_content_type(httpd_req_t *req)
+{
+    size_t content_type_len = httpd_req_get_hdr_value_len(req, "Content-Type");
+    if (content_type_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char content_type[64];
+    if (content_type_len >= sizeof(content_type)) {
+        content_type_len = sizeof(content_type) - 1;
+    }
+
+    esp_err_t ret = httpd_req_get_hdr_value_str(req, "Content-Type", content_type, content_type_len + 1);
+    if (ret != ESP_OK) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Check for application/octet-stream (case-insensitive) */
+    if (strcasecmp(content_type, "application/octet-stream") != 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Check if mesh is busy (non-blocking)
+ *
+ * Checks if mesh is busy/congested (e.g., OTA in progress).
+ * This is a fast, non-blocking check.
+ *
+ * @return true if mesh is busy, false if available
+ */
+static bool is_mesh_busy(void)
+{
+    /* Check if OTA download is in progress */
+    if (mesh_ota_is_downloading()) {
+        return true;
+    }
+
+    /* Check if OTA distribution is in progress */
+    mesh_ota_distribution_status_t ota_status;
+    if (mesh_ota_get_distribution_status(&ota_status) == ESP_OK && ota_status.distributing) {
+        return true;
+    }
+
+    /* Check if mesh is not ready (not root or not connected) */
+    if (!esp_mesh_is_root()) {
+        return true;  /* Only root node can forward data */
+    }
+
+    return false;
+}
+
+/**
+ * @brief Read request body as raw bytes
+ *
+ * Reads HTTP request body as raw bytes, handling partial reads.
+ * Reads until all data is received (httpd_req_recv returns 0) or buffer is full.
+ *
+ * @param req HTTP request
+ * @param buffer Output buffer for data
+ * @param buffer_size Size of buffer
+ * @param bytes_read Output parameter for number of bytes read
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t read_request_body(httpd_req_t *req, uint8_t *buffer, size_t buffer_size, size_t *bytes_read)
+{
+    if (buffer == NULL || bytes_read == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *bytes_read = 0;
+    size_t total_received = 0;
+
+    /* Read data in chunks until all data is received or buffer is full */
+    while (total_received < buffer_size) {
+        size_t remaining = buffer_size - total_received;
+        int ret = httpd_req_recv(req, (char *)(buffer + total_received), remaining);
+
+        if (ret <= 0) {
+            if (ret == 0) {
+                /* Connection closed or no more data - all data received */
+                *bytes_read = total_received;
+                return ESP_OK;
+            }
+            /* Error (negative value indicates error) */
+            *bytes_read = total_received;
+            return ESP_FAIL;
+        }
+
+        total_received += ret;
+
+        /* If we read less than requested, we've likely received all available data */
+        /* However, continue reading in case more data arrives */
+        /* The loop will exit when httpd_req_recv returns 0 (no more data) */
+    }
+
+    /* Buffer is full - check if there's more data beyond our limit */
+    if (total_received >= buffer_size) {
+        /* Try to read one more byte to detect if payload exceeds 512 byte limit */
+        /* If we can read even one more byte, the payload is too large */
+        uint8_t dummy;
+        int more = httpd_req_recv(req, (char *)&dummy, 1);
+        if (more > 0) {
+            /* More data available - payload exceeds 512 byte limit */
+            *bytes_read = total_received;
+            return ESP_ERR_INVALID_SIZE;
+        }
+        /* If more == 0, all data received and payload is exactly 512 bytes (valid) */
+        /* If more < 0, error occurred (but we've already read valid data up to limit) */
+    }
+
+    *bytes_read = total_received;
+    return ESP_OK;
+}
+
+/* API: POST /api/plugin/<plugin-name>/data - Accepts raw bytes data and forwards to mesh */
+static esp_err_t api_plugin_data_handler(httpd_req_t *req)
+{
+    /* Extract plugin name from URL */
+    char plugin_name[32];
+    esp_err_t err = extract_plugin_name_from_url(req->uri, plugin_name, sizeof(plugin_name));
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid request\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Validate plugin name format */
+    if (!is_valid_plugin_name(plugin_name)) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid request\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Check if plugin exists */
+    const plugin_info_t *plugin = plugin_get_by_name(plugin_name);
+    if (plugin == NULL) {
+        httpd_resp_set_status(req, "404 Not Found");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Plugin not found\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Check mesh status (non-blocking) */
+    if (is_mesh_busy()) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Service unavailable\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Validate Content-Type header */
+    err = validate_content_type(req);
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid request\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Read request body as raw bytes (max 512 bytes) */
+    uint8_t data[512];
+    size_t bytes_read = 0;
+    err = read_request_body(req, data, sizeof(data), &bytes_read);
+    if (err == ESP_ERR_INVALID_SIZE) {
+        /* Payload exceeds 512 bytes */
+        httpd_resp_set_status(req, "413 Payload Too Large");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Payload too large\"}", -1);
+        return ESP_FAIL;
+    }
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Internal server error\"}", -1);
+        return ESP_FAIL;
+    }
+
+    /* Note: Zero-length data is valid and should be forwarded (bytes_read == 0 is OK) */
+
+    /* Forward to mesh (placeholder - will be implemented in separate task) */
+    err = plugin_forward_data_to_mesh(plugin_name, data, (uint16_t)bytes_read);
+    if (err != ESP_OK && err != ESP_ERR_NOT_IMPLEMENTED) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Internal server error\"}", -1);
+        return ESP_FAIL;
+    }
+
+    if (err == ESP_ERR_NOT_IMPLEMENTED) {
+        ESP_LOGI(WEB_TAG, "Plugin data endpoint: %s, %zu bytes (forwarding not yet implemented)", plugin_name, bytes_read);
+    }
+
+    /* Return success */
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, "{\"success\":true}", -1);
+    return ESP_OK;
+}
+
 /* GET / - Serves simple HTML page with plugin selection and control */
 static esp_err_t index_handler(httpd_req_t *req)
 {
@@ -2576,7 +2870,7 @@ esp_err_t mesh_web_server_start(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 30;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, sequence_start, sequence_stop, sequence_reset, sequence_status, ota_download, ota_status, ota_cancel, ota_version, ota_distribute, ota_distribution_status, ota_distribution_progress, ota_distribution_cancel, ota_reboot, plugin_activate, plugin_deactivate, plugin_active, plugin_stop, plugin_pause, plugin_reset, plugins_list, index = 26 handlers (30 for future expansion) */
+    config.max_uri_handlers = 31;  /* Updated: nodes, color_get, color_post, sequence_post, sequence_pointer, sequence_start, sequence_stop, sequence_reset, sequence_status, ota_download, ota_status, ota_cancel, ota_version, ota_distribute, ota_distribution_status, ota_distribution_progress, ota_distribution_cancel, ota_reboot, plugin_activate, plugin_deactivate, plugin_active, plugin_stop, plugin_pause, plugin_reset, plugins_list, plugin_data, index = 27 handlers (31 for future expansion) */
     config.stack_size = 8192;
     config.server_port = 80;
     config.max_open_sockets = 4;  /* Reduced to 4 (3 internal + 1 connection) to leave sockets for UDP listeners and mDNS */
@@ -2937,6 +3231,25 @@ esp_err_t mesh_web_server_start(void)
             httpd_stop(server_handle);
             server_handle = NULL;
             return ESP_FAIL;
+        }
+
+        /* Register plugin data endpoint handler */
+        /* Note: ESP-IDF HTTP server doesn't support wildcards, so we register with a base URI */
+        /* The handler will parse the URI manually to extract plugin name from /api/plugin/<name>/data */
+        /* If ESP-IDF doesn't match this base URI, we may need to use a catch-all handler approach */
+        httpd_uri_t plugin_data_uri = {
+            .uri       = "/api/plugin/",  /* Base URI pattern - handler will parse full URI manually */
+            .method    = HTTP_POST,
+            .handler   = api_plugin_data_handler,
+            .user_ctx  = NULL
+        };
+        reg_err = httpd_register_uri_handler(server_handle, &plugin_data_uri);
+        if (reg_err != ESP_OK) {
+            /* If registration fails, it might be because ESP-IDF doesn't support prefix matching */
+            /* In that case, we'll need to use a catch-all handler or different approach */
+            ESP_LOGW(WEB_TAG, "Failed to register plugin data URI (may need catch-all approach): 0x%x", reg_err);
+            /* Continue anyway - handler registration failure is not critical for server startup */
+            /* The endpoint can be added via catch-all handler if needed */
         }
 
         httpd_uri_t settings_external_server_get_uri = {

@@ -1377,6 +1377,49 @@ void esp_mesh_p2p_tx_main(void *arg)
 }
 
 /*******************************************************
+ *                Plugin Data Forwarding
+ *******************************************************/
+
+/**
+ * @brief Forward plugin data to mesh network (placeholder)
+ *
+ * This function forwards plugin data from web UI to all mesh nodes as PLUGIN_CMD_DATA commands.
+ * The function is a placeholder - actual implementation will be done in a separate task.
+ *
+ * @param plugin_name Plugin name (non-NULL, must be registered)
+ * @param data Raw bytes data to forward (non-NULL)
+ * @param len Data length in bytes (must be <= 512)
+ * @return ESP_OK on success, error code on failure
+ */
+esp_err_t plugin_forward_data_to_mesh(const char *plugin_name, uint8_t *data, uint16_t len)
+{
+    /* Placeholder implementation - actual forwarding will be implemented in separate task */
+    /* TODO: Implement mesh forwarding:
+     * 1. Get plugin ID from plugin name using plugin_get_id_by_name()
+     * 2. Get mesh transmit buffer using mesh_common_get_tx_buf()
+     * 3. Construct command: [PLUGIN_ID:1] [PLUGIN_CMD_DATA:1] [RAW_DATA:N]
+     * 4. Broadcast to all child nodes using mesh_send_with_bridge()
+     * 5. Return success/failure status
+     */
+
+    if (plugin_name == NULL || data == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (len > 512) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if (!esp_mesh_is_root()) {
+        return ESP_ERR_INVALID_STATE;  /* Only root node can forward */
+    }
+
+    ESP_LOGI(MESH_TAG, "plugin_forward_data_to_mesh: %s, %d bytes (placeholder - not yet implemented)", plugin_name, len);
+
+    return ESP_ERR_NOT_IMPLEMENTED;
+}
+
+/*******************************************************
  *                Root Initialization
  *******************************************************/
 
