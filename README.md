@@ -1,6 +1,8 @@
-# lyktparad
+# Lyktparad 2026
+This repository contains the lyktparad project, which has been split into two separate subprojects.
 
-This repository contains the lyktparad project, which has been split into separate subprojects:
+## Work in progress
+This project is still under heavy development.
 
 ## Project Structure
 
