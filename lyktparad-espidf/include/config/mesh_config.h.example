@@ -52,6 +52,15 @@
  */
 #define MESH_CONFIG_MESH_AP_AUTHMODE 3
 
+/* Heartbeat Interval - Interval between heartbeat broadcasts in milliseconds
+ * The root node sends heartbeat messages at this interval to synchronize
+ * mesh nodes and coordinate plugin state (e.g., sequence position, RGB effects).
+ * Default: 1000ms (1 second)
+ * Valid range: Typically 100-10000ms (check plugin requirements)
+ * Note: Changing this affects plugin synchronization timing
+ */
+#define MESH_CONFIG_HEARTBEAT_INTERVAL 1000
+
 /*******************************************************
  *                Authentication Tokens
  *******************************************************/

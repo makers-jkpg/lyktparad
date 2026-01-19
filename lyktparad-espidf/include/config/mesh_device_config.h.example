@@ -61,7 +61,7 @@
  *                RGB LED Configuration (LEDC PWM)
  *******************************************************/
 
-/* Enable RGB LED support - Uncomment this if your device has a common-cathode RGB LED
+/* Enable RGB LED support - Uncomment this if your device has a common-anode/cathode RGB LED
  * If not defined, RGB LED functions will be stubbed out (no-op)
  * This allows the code to compile and run on devices without RGB LEDs
  * Note: This implementation is for common-cathode LEDs only (cathodes to GND, anodes to GPIO)
