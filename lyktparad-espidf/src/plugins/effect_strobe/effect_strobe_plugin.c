@@ -240,10 +240,18 @@ static void strobe_timer_callback(void *arg)
     bool strobe_is_on = (strobe_position_ms < STROBE_DURATION_ON_MS);
 
     /* Update RGB LED based on strobe state */
+    esp_err_t rgb_err;
     if (strobe_is_on) {
-        plugin_set_rgb(strobe_defaults.r_on, strobe_defaults.g_on, strobe_defaults.b_on);
+        rgb_err = plugin_set_rgb(strobe_defaults.r_on, strobe_defaults.g_on, strobe_defaults.b_on);
     } else {
-        plugin_set_rgb(strobe_defaults.r_off, strobe_defaults.g_off, strobe_defaults.b_off);
+        rgb_err = plugin_set_rgb(strobe_defaults.r_off, strobe_defaults.g_off, strobe_defaults.b_off);
+    }
+    if (rgb_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set RGB LED in timer callback: %s (r=%d g=%d b=%d)",
+                 esp_err_to_name(rgb_err),
+                 strobe_is_on ? strobe_defaults.r_on : strobe_defaults.r_off,
+                 strobe_is_on ? strobe_defaults.g_on : strobe_defaults.g_off,
+                 strobe_is_on ? strobe_defaults.b_on : strobe_defaults.b_off);
     }
 }
 
