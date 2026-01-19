@@ -18,6 +18,7 @@
 #include "mesh_version.h"
 #include "mesh_ota.h"
 #include "plugins/plugins.h"
+#include "config/mesh_device_config.h"
 
 void app_main(void)
 {

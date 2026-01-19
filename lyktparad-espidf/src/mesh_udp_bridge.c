@@ -19,6 +19,7 @@
 #include "config/mesh_config.h"
 #include "config/mesh_device_config.h"
 #include "plugin_system.h"
+#include "plugin_web_ui.h"
 #include "mesh_ota.h"
 #include "mesh_root.h"
 #include "light_neopixel.h"
@@ -3857,17 +3858,43 @@ static esp_err_t handle_api_plugin_stop(const uint8_t *payload, size_t payload_s
 }
 
 /**
- * @brief Handle API command: POST /api/plugin/pause
+ * @brief Validate plugin name format (alphanumeric, underscore, hyphen only).
  *
- * @param payload Request payload: [name_len:1][name:N bytes]
+ * Validates plugin name against regex: ^[a-zA-Z0-9_-]+$
+ *
+ * @param name Plugin name to validate
+ * @return true if valid, false otherwise
+ */
+static bool is_valid_plugin_name(const char *name)
+{
+    if (name == NULL || strlen(name) == 0) {
+        return false;
+    }
+
+    for (const char *p = name; *p != '\0'; p++) {
+        if (!((*p >= 'a' && *p <= 'z') ||
+              (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') ||
+              *p == '_' || *p == '-')) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * @brief Handle API command: GET /api/plugin/:pluginName/bundle
+ *
+ * @param payload Request payload: [plugin_name_len:1][plugin_name:N bytes]
  * @param payload_size Payload size
- * @param response_out Output buffer for response
+ * @param response_out Output buffer for response (JSON bundle as UTF-8 string)
  * @param response_size_out Output parameter for response size
  * @param max_response_size Maximum response buffer size
  * @return ESP_OK on success, error code on failure
  */
-static esp_err_t handle_api_plugin_pause(const uint8_t *payload, size_t payload_size,
-                                         uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+static esp_err_t handle_api_plugin_bundle_get(const uint8_t *payload, size_t payload_size,
+                                             uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
 {
     if (payload == NULL || payload_size == 0 || response_out == NULL || response_size_out == NULL) {
         if (response_size_out) *response_size_out = 0;
@@ -3876,151 +3903,230 @@ static esp_err_t handle_api_plugin_pause(const uint8_t *payload, size_t payload_
 
     /* Parse plugin name from payload: [name_len:1][name:N bytes] */
     if (payload_size < 1) {
-        if (max_response_size < 1) {
+        /* Return error JSON */
+        const char *error_json = "{\"error\":\"Invalid request\"}";
+        size_t error_len = strlen(error_json);
+        if (error_len > max_response_size) {
             return ESP_ERR_INVALID_SIZE;
         }
-        response_out[0] = 0; /* failure */
-        *response_size_out = 1;
-        return ESP_ERR_INVALID_ARG;
+        memcpy(response_out, error_json, error_len);
+        *response_size_out = error_len;
+        return ESP_OK; /* Return ESP_OK with error JSON in response */
     }
 
     uint8_t name_len = payload[0];
-    if (name_len == 0 || name_len >= payload_size) {
-        if (max_response_size < 1) {
+    if (name_len == 0 || name_len >= payload_size || name_len > 63) {
+        /* Return error JSON */
+        const char *error_json = "{\"error\":\"Invalid plugin name\"}";
+        size_t error_len = strlen(error_json);
+        if (error_len > max_response_size) {
             return ESP_ERR_INVALID_SIZE;
         }
-        response_out[0] = 0; /* failure */
-        *response_size_out = 1;
-        return ESP_ERR_INVALID_ARG;
+        memcpy(response_out, error_json, error_len);
+        *response_size_out = error_len;
+        return ESP_OK; /* Return ESP_OK with error JSON in response */
     }
 
     char plugin_name[64] = {0};
-    if (name_len >= sizeof(plugin_name)) {
-        name_len = sizeof(plugin_name) - 1;
-    }
     memcpy(plugin_name, &payload[1], name_len);
     plugin_name[name_len] = '\0';
 
-    /* Get plugin ID by name */
-    uint8_t plugin_id;
-    esp_err_t err = plugin_get_id_by_name(plugin_name, &plugin_id);
-    if (err != ESP_OK) {
-        if (max_response_size < 1) {
+    /* Validate plugin name format */
+    if (!is_valid_plugin_name(plugin_name)) {
+        /* Return error JSON */
+        const char *error_json = "{\"error\":\"Invalid plugin name format\"}";
+        size_t error_len = strlen(error_json);
+        if (error_len > max_response_size) {
             return ESP_ERR_INVALID_SIZE;
         }
-        response_out[0] = 0; /* failure */
-        *response_size_out = 1;
-        return err;
+        memcpy(response_out, error_json, error_len);
+        *response_size_out = error_len;
+        return ESP_OK; /* Return ESP_OK with error JSON in response */
     }
 
-    /* Construct plugin command: [PLUGIN_ID] [PLUGIN_CMD_PAUSE] */
-    uint8_t cmd_data[2];
-    cmd_data[0] = plugin_id;
-    cmd_data[1] = PLUGIN_CMD_PAUSE;
-
-    /* Send PAUSE command via plugin system */
-    err = plugin_system_handle_plugin_command(cmd_data, sizeof(cmd_data));
-    if (err != ESP_OK) {
-        if (max_response_size < 1) {
+    /* Check if plugin exists and has web UI */
+    const plugin_info_t *plugin_info = plugin_get_by_name(plugin_name);
+    if (plugin_info == NULL || plugin_info->web_ui == NULL) {
+        /* Return error JSON */
+        const char *error_json = "{\"error\":\"Plugin not found\"}";
+        size_t error_len = strlen(error_json);
+        if (error_len > max_response_size) {
             return ESP_ERR_INVALID_SIZE;
         }
-        response_out[0] = 0; /* failure */
-        *response_size_out = 1;
-        return err;
+        memcpy(response_out, error_json, error_len);
+        *response_size_out = error_len;
+        return ESP_OK; /* Return ESP_OK with error JSON in response */
     }
 
-    /* Success response: [success:1][name_len:1][name:N bytes] */
-    if (max_response_size < 2 + name_len) {
-        return ESP_ERR_INVALID_SIZE;
+    /* Calculate required buffer size (dry-run mode) */
+    size_t required_size = 0;
+    esp_err_t err = plugin_get_web_bundle(plugin_name, NULL, 0, &required_size);
+    if (err != ESP_OK) {
+        /* Return error JSON */
+        const char *error_json = "{\"error\":\"Internal server error\"}";
+        size_t error_len = strlen(error_json);
+        if (error_len > max_response_size) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        memcpy(response_out, error_json, error_len);
+        *response_size_out = error_len;
+        return ESP_OK; /* Return ESP_OK with error JSON in response */
     }
-    response_out[0] = 1; /* success */
-    response_out[1] = name_len;
-    memcpy(&response_out[2], plugin_name, name_len);
-    *response_size_out = 2 + name_len;
+
+    /* Check if response buffer is large enough */
+    if (required_size > max_response_size) {
+        /* Return error JSON */
+        const char *error_json = "{\"error\":\"Bundle too large\"}";
+        size_t error_len = strlen(error_json);
+        if (error_len > max_response_size) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        memcpy(response_out, error_json, error_len);
+        *response_size_out = error_len;
+        return ESP_OK; /* Return ESP_OK with error JSON in response */
+    }
+
+    /* Build JSON bundle */
+    err = plugin_get_web_bundle(plugin_name, (char *)response_out, max_response_size, &required_size);
+    if (err != ESP_OK) {
+        /* Return error JSON */
+        const char *error_json = "{\"error\":\"Internal server error\"}";
+        size_t error_len = strlen(error_json);
+        if (error_len > max_response_size) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        memcpy(response_out, error_json, error_len);
+        *response_size_out = error_len;
+        return ESP_OK; /* Return ESP_OK with error JSON in response */
+    }
+
+    *response_size_out = required_size;
     return ESP_OK;
 }
 
 /**
- * @brief Handle API command: POST /api/plugin/reset
+ * @brief Handle API command: POST /api/plugin/:pluginName/data
  *
- * @param payload Request payload: [name_len:1][name:N bytes]
+ * @param payload Request payload: [plugin_name_len:1][plugin_name:N bytes][data:N bytes]
  * @param payload_size Payload size
  * @param response_out Output buffer for response
  * @param response_size_out Output parameter for response size
  * @param max_response_size Maximum response buffer size
  * @return ESP_OK on success, error code on failure
  */
-static esp_err_t handle_api_plugin_reset(const uint8_t *payload, size_t payload_size,
-                                         uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
+static esp_err_t handle_api_plugin_data_post(const uint8_t *payload, size_t payload_size,
+                                            uint8_t *response_out, size_t *response_size_out, size_t max_response_size)
 {
     if (payload == NULL || payload_size == 0 || response_out == NULL || response_size_out == NULL) {
         if (response_size_out) *response_size_out = 0;
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Parse plugin name from payload: [name_len:1][name:N bytes] */
+    /* Parse plugin name and data from payload: [name_len:1][name:N bytes][data:N bytes] */
     if (payload_size < 1) {
-        if (max_response_size < 1) {
+        /* Return error JSON */
+        const char *error_json = "{\"success\":false,\"error\":\"Invalid request\"}";
+        size_t error_len = strlen(error_json);
+        if (error_len > max_response_size) {
             return ESP_ERR_INVALID_SIZE;
         }
-        response_out[0] = 0; /* failure */
-        *response_size_out = 1;
-        return ESP_ERR_INVALID_ARG;
+        memcpy(response_out, error_json, error_len);
+        *response_size_out = error_len;
+        return ESP_OK; /* Return ESP_OK with error JSON in response */
     }
 
     uint8_t name_len = payload[0];
-    if (name_len == 0 || name_len >= payload_size) {
-        if (max_response_size < 1) {
+    if (name_len == 0 || name_len >= payload_size || name_len > 63) {
+        /* Return error JSON */
+        const char *error_json = "{\"success\":false,\"error\":\"Invalid plugin name\"}";
+        size_t error_len = strlen(error_json);
+        if (error_len > max_response_size) {
             return ESP_ERR_INVALID_SIZE;
         }
-        response_out[0] = 0; /* failure */
-        *response_size_out = 1;
-        return ESP_ERR_INVALID_ARG;
+        memcpy(response_out, error_json, error_len);
+        *response_size_out = error_len;
+        return ESP_OK; /* Return ESP_OK with error JSON in response */
     }
 
+    /* Extract plugin name */
     char plugin_name[64] = {0};
-    if (name_len >= sizeof(plugin_name)) {
-        name_len = sizeof(plugin_name) - 1;
-    }
     memcpy(plugin_name, &payload[1], name_len);
     plugin_name[name_len] = '\0';
 
-    /* Get plugin ID by name */
-    uint8_t plugin_id;
-    esp_err_t err = plugin_get_id_by_name(plugin_name, &plugin_id);
-    if (err != ESP_OK) {
-        if (max_response_size < 1) {
+    /* Validate plugin name format */
+    if (!is_valid_plugin_name(plugin_name)) {
+        /* Return error JSON */
+        const char *error_json = "{\"success\":false,\"error\":\"Invalid plugin name format\"}";
+        size_t error_len = strlen(error_json);
+        if (error_len > max_response_size) {
             return ESP_ERR_INVALID_SIZE;
         }
-        response_out[0] = 0; /* failure */
-        *response_size_out = 1;
-        return err;
+        memcpy(response_out, error_json, error_len);
+        *response_size_out = error_len;
+        return ESP_OK; /* Return ESP_OK with error JSON in response */
     }
 
-    /* Construct plugin command: [PLUGIN_ID] [PLUGIN_CMD_RESET] */
-    uint8_t cmd_data[2];
-    cmd_data[0] = plugin_id;
-    cmd_data[1] = PLUGIN_CMD_RESET;
-
-    /* Send RESET command via plugin system */
-    err = plugin_system_handle_plugin_command(cmd_data, sizeof(cmd_data));
-    if (err != ESP_OK) {
-        if (max_response_size < 1) {
+    /* Check if plugin exists */
+    const plugin_info_t *plugin_info = plugin_get_by_name(plugin_name);
+    if (plugin_info == NULL) {
+        /* Return error JSON */
+        const char *error_json = "{\"success\":false,\"error\":\"Plugin not found\"}";
+        size_t error_len = strlen(error_json);
+        if (error_len > max_response_size) {
             return ESP_ERR_INVALID_SIZE;
         }
-        response_out[0] = 0; /* failure */
-        *response_size_out = 1;
-        return err;
+        memcpy(response_out, error_json, error_len);
+        *response_size_out = error_len;
+        return ESP_OK; /* Return ESP_OK with error JSON in response */
     }
 
-    /* Success response: [success:1][name_len:1][name:N bytes] */
-    if (max_response_size < 2 + name_len) {
-        return ESP_ERR_INVALID_SIZE;
+    /* Extract data (after plugin name) */
+    size_t data_offset = 1 + name_len;
+    size_t data_size = payload_size - data_offset;
+
+    /* Validate data size (max 512 bytes) */
+    if (data_size > 512) {
+        /* Return error JSON */
+        const char *error_json = "{\"success\":false,\"error\":\"Payload too large\"}";
+        size_t error_len = strlen(error_json);
+        if (error_len > max_response_size) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        memcpy(response_out, error_json, error_len);
+        *response_size_out = error_len;
+        return ESP_OK; /* Return ESP_OK with error JSON in response */
     }
-    response_out[0] = 1; /* success */
-    response_out[1] = name_len;
-    memcpy(&response_out[2], plugin_name, name_len);
-    *response_size_out = 2 + name_len;
+
+    /* Check if root node (only root nodes can forward data to mesh) */
+    if (!esp_mesh_is_root()) {
+        /* Return error JSON */
+        const char *error_json = "{\"success\":false,\"error\":\"Not root node\"}";
+        size_t error_len = strlen(error_json);
+        if (error_len > max_response_size) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        memcpy(response_out, error_json, error_len);
+        *response_size_out = error_len;
+        return ESP_OK; /* Return ESP_OK with error JSON in response */
+    }
+
+    /* Forward data to mesh (root node only) */
+    uint8_t *data = (uint8_t *)&payload[data_offset];
+    esp_err_t err = plugin_forward_data_to_mesh(plugin_name, data, (uint16_t)data_size);
+    if (err != ESP_OK) {
+        /* Return error JSON */
+        const char *error_json = "{\"success\":false,\"error\":\"Internal server error\"}";
+        size_t error_len = strlen(error_json);
+        if (error_len > max_response_size) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        memcpy(response_out, error_json, error_len);
+        *response_size_out = error_len;
+        return ESP_OK; /* Return ESP_OK with error JSON in response */
+    }
+
+    /* Success response: empty payload indicates success */
+    *response_size_out = 0;
     return ESP_OK;
 }
 
@@ -4044,8 +4150,9 @@ static esp_err_t process_api_command(uint8_t commandId, uint16_t seqNum,
 
     /* Note: payload can be NULL for GET commands (no request body) */
 
-    /* Response buffer */
-    uint8_t response_payload[512];
+    /* Response buffer - increased to 1465 bytes to support bundle responses (UDP MTU 1472 - 7 bytes headers) */
+    /* Note: This is a stack buffer in a task context, which is acceptable for ESP32 */
+    uint8_t response_payload[1465];
     size_t response_payload_size = 0;
 
     /* Route command to appropriate handler */
@@ -4122,6 +4229,16 @@ static esp_err_t process_api_command(uint8_t commandId, uint16_t seqNum,
             handle_api_ota_reboot(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
+        case UDP_CMD_API_PLUGIN_BUNDLE_GET:
+            /* Bundle responses can be up to 1400 bytes (UDP MTU - headers).
+             * Use larger buffer for bundle responses to support full bundle size. */
+            handle_api_plugin_bundle_get(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
+        case UDP_CMD_API_PLUGIN_DATA_POST:
+            handle_api_plugin_data_post(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
+            break;
+
         case UDP_CMD_API_PLUGIN_ACTIVATE:
             handle_api_plugin_activate(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
             break;
@@ -4142,13 +4259,7 @@ static esp_err_t process_api_command(uint8_t commandId, uint16_t seqNum,
             handle_api_plugin_stop(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
             break;
 
-        case UDP_CMD_API_PLUGIN_PAUSE:
-            handle_api_plugin_pause(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
-            break;
-
-        case UDP_CMD_API_PLUGIN_RESET:
-            handle_api_plugin_reset(payload, payload_size, response_payload, &response_payload_size, sizeof(response_payload));
-            break;
+        /* Note: PLUGIN_PAUSE and PLUGIN_RESET are only available via embedded webserver, not via external webserver UDP bridge */
 
         default:
             ESP_LOGW(TAG, "Unknown API command: 0x%02X", commandId);
@@ -4325,7 +4436,7 @@ static void mesh_udp_bridge_api_listener_task(void *pvParameters)
 /**
  * @brief Start the UDP API command listener task.
  *
- * Starts a FreeRTOS task that listens for UDP API commands (0xE7-0xF8) from the external server.
+ * Starts a FreeRTOS task that listens for UDP API commands (0xE7-0xFF) from the external server.
  * The listener processes API commands and sends responses back to the server.
  * Only starts if the node is root. The listener is completely optional and does not affect
  * embedded web server operation.

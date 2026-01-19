@@ -29,13 +29,27 @@ function getNextSequenceNumber() {
  *******************************************************/
 
 /**
- * Parse HTTP request to extract method, path, and body.
+ * Validate plugin name format (alphanumeric, underscore, hyphen only).
+ *
+ * @param {string} name - Plugin name to validate
+ * @returns {boolean} True if valid
+ */
+function isValidPluginName(name) {
+    if (!name || typeof name !== 'string') {
+        return false;
+    }
+    // Regex: ^[a-zA-Z0-9_-]+$
+    return /^[a-zA-Z0-9_-]+$/.test(name);
+}
+
+/**
+ * Parse HTTP request to extract method, path, body, and plugin name (if applicable).
  *
  * @param {Object} req - Express request object
- * @returns {Object} Parsed request { method, path, body }
+ * @returns {Object} Parsed request { method, path, body, pluginName? }
  */
 function parseHttpRequest(req) {
-    // Handle binary body (for sequence endpoint)
+    // Handle binary body (for sequence endpoint and plugin data endpoint)
     let body = req.body;
     if (Buffer.isBuffer(req.body)) {
         body = req.body;
@@ -43,11 +57,29 @@ function parseHttpRequest(req) {
         body = {};
     }
 
-    return {
+    const parsed = {
         method: req.method,
         path: req.path,
         body: body
     };
+
+    // Extract plugin name from route parameters for plugin web UI endpoints
+    // Pattern: /api/plugin/:pluginName/bundle or /api/plugin/:pluginName/data
+    const pluginBundleMatch = req.path.match(/^\/api\/plugin\/([^/]+)\/bundle$/);
+    const pluginDataMatch = req.path.match(/^\/api\/plugin\/([^/]+)\/data$/);
+
+    if (pluginBundleMatch || pluginDataMatch) {
+        const pluginName = pluginBundleMatch ? pluginBundleMatch[1] : pluginDataMatch[1];
+
+        // Validate plugin name format
+        if (!isValidPluginName(pluginName)) {
+            throw new Error('Invalid plugin name format. Plugin name must contain only alphanumeric characters, underscores, and hyphens.');
+        }
+
+        parsed.pluginName = pluginName;
+    }
+
+    return parsed;
 }
 
 /*******************************************************
@@ -61,8 +93,8 @@ function parseHttpRequest(req) {
  * @param {Object} jsonBody - JSON request body
  * @returns {Buffer} Binary payload buffer
  */
-function jsonToBinary(commandId, jsonBody) {
-    const { UDP_CMD_API_COLOR_POST, UDP_CMD_API_SEQUENCE_POST, UDP_CMD_API_OTA_DOWNLOAD, UDP_CMD_API_OTA_REBOOT, UDP_CMD_API_PLUGIN_ACTIVATE, UDP_CMD_API_PLUGIN_DEACTIVATE } = require('./udp-commands');
+function jsonToBinary(commandId, jsonBody, parsedRequest) {
+    const { UDP_CMD_API_COLOR_POST, UDP_CMD_API_SEQUENCE_POST, UDP_CMD_API_OTA_DOWNLOAD, UDP_CMD_API_OTA_REBOOT, UDP_CMD_API_PLUGIN_ACTIVATE, UDP_CMD_API_PLUGIN_DEACTIVATE, UDP_CMD_API_PLUGIN_BUNDLE_GET, UDP_CMD_API_PLUGIN_DATA_POST } = require('./udp-commands');
 
     switch (commandId) {
         case UDP_CMD_API_COLOR_POST:
@@ -119,9 +151,8 @@ function jsonToBinary(commandId, jsonBody) {
         case UDP_CMD_API_PLUGIN_ACTIVATE:
         case UDP_CMD_API_PLUGIN_DEACTIVATE:
         case UDP_CMD_API_PLUGIN_STOP:
-        case UDP_CMD_API_PLUGIN_PAUSE:
-        case UDP_CMD_API_PLUGIN_RESET:
-            // POST /api/plugin/activate, /api/plugin/deactivate, /api/plugin/stop, /api/plugin/pause, /api/plugin/reset: { "name": "effects" }
+            // POST /api/plugin/activate, /api/plugin/deactivate, /api/plugin/stop: { "name": "effects" }
+            // Note: /api/plugin/pause and /api/plugin/reset are only available via embedded webserver
             // Binary: [name_len:1][name:N bytes]
             const name = jsonBody.name || '';
             const nameBytes = Buffer.from(name, 'utf8');
@@ -132,6 +163,59 @@ function jsonToBinary(commandId, jsonBody) {
             buffer[0] = nameBytes.length;
             nameBytes.copy(buffer, 1);
             return buffer;
+
+        case UDP_CMD_API_PLUGIN_BUNDLE_GET:
+            // GET /api/plugin/:pluginName/bundle
+            // Binary: [plugin_name_len:1][plugin_name:N bytes, UTF-8]
+            if (!parsedRequest || !parsedRequest.pluginName) {
+                throw new Error('Plugin name not found in request');
+            }
+            const bundlePluginName = parsedRequest.pluginName;
+            const bundleNameBytes = Buffer.from(bundlePluginName, 'utf8');
+            if (bundleNameBytes.length > 63) {
+                throw new Error('Plugin name too long (max 63 bytes)');
+            }
+            const bundleBuffer = Buffer.alloc(1 + bundleNameBytes.length);
+            bundleBuffer[0] = bundleNameBytes.length;
+            bundleNameBytes.copy(bundleBuffer, 1);
+            return bundleBuffer;
+
+        case UDP_CMD_API_PLUGIN_DATA_POST:
+            // POST /api/plugin/:pluginName/data
+            // Binary: [plugin_name_len:1][plugin_name:N bytes][data:N bytes]
+            if (!parsedRequest || !parsedRequest.pluginName) {
+                throw new Error('Plugin name not found in request');
+            }
+            const dataPluginName = parsedRequest.pluginName;
+            const dataNameBytes = Buffer.from(dataPluginName, 'utf8');
+            if (dataNameBytes.length > 63) {
+                throw new Error('Plugin name too long (max 63 bytes)');
+            }
+
+            // Read request body as binary (Buffer)
+            let dataPayload;
+            if (Buffer.isBuffer(jsonBody)) {
+                dataPayload = jsonBody;
+            } else if (typeof jsonBody === 'string') {
+                dataPayload = Buffer.from(jsonBody, 'base64');
+            } else if (jsonBody && jsonBody.data && Buffer.isBuffer(jsonBody.data)) {
+                dataPayload = jsonBody.data;
+            } else {
+                dataPayload = Buffer.alloc(0);
+            }
+
+            // Validate total payload size (max 512 bytes data + name + headers < 1400 bytes)
+            // Name (max 63) + 1 byte length + data (max 512) = 576 bytes max payload
+            // Plus UDP headers (7 bytes) = 583 bytes < 1400 bytes (safe)
+            if (dataPayload.length > 512) {
+                throw new Error('Data payload too large (max 512 bytes)');
+            }
+
+            const dataBuffer = Buffer.alloc(1 + dataNameBytes.length + dataPayload.length);
+            dataBuffer[0] = dataNameBytes.length;
+            dataNameBytes.copy(dataBuffer, 1);
+            dataPayload.copy(dataBuffer, 1 + dataNameBytes.length);
+            return dataBuffer;
 
         default:
             // For GET requests or simple POST requests, return empty buffer
@@ -172,8 +256,19 @@ function calculateChecksum(data) {
  * @returns {Object} { packet, sequenceNumber } or throws error if packet too large
  */
 function buildUdpPacket(commandId, payload) {
+    const { UDP_CMD_API_PLUGIN_BUNDLE_GET } = require('./udp-commands');
     const seqNum = getNextSequenceNumber();
     const payloadLen = payload.length;
+
+    // Bundle endpoint specific size limit: ~1400 bytes payload (after headers)
+    // UDP packet headers: CMD(1) + LEN(2) + SEQ(2) + CHKSUM(2) = 7 bytes
+    // Max payload for bundle: 1472 - 7 = 1465 bytes, but use ~1400 for safety margin
+    if (commandId === UDP_CMD_API_PLUGIN_BUNDLE_GET) {
+        const MAX_BUNDLE_PAYLOAD = 1400;
+        if (payloadLen > MAX_BUNDLE_PAYLOAD) {
+            throw new Error(`Bundle size (${payloadLen} bytes) exceeds UDP MTU limit (${MAX_BUNDLE_PAYLOAD} bytes payload). Bundle too large.`);
+        }
+    }
 
     // Calculate total packet size: CMD(1) + LEN(2) + SEQ(2) + PAYLOAD(N) + CHKSUM(2)
     const packetSize = 1 + 2 + 2 + payloadLen + 2;
@@ -227,8 +322,8 @@ function httpToUdpCommand(req) {
         return null;
     }
 
-    // Convert JSON body to binary payload
-    const payload = jsonToBinary(commandId, parsed.body);
+    // Convert JSON body to binary payload (pass parsed request for plugin name extraction)
+    const payload = jsonToBinary(commandId, parsed.body, parsed);
 
     // Build UDP packet
     const { packet, sequenceNumber } = buildUdpPacket(commandId, payload);
@@ -246,5 +341,6 @@ module.exports = {
     buildUdpPacket,
     httpToUdpCommand,
     getNextSequenceNumber,
-    calculateChecksum
+    calculateChecksum,
+    isValidPluginName
 };

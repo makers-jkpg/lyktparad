@@ -46,10 +46,13 @@ app.use(cors({
     allowedHeaders: ['Content-Type']
 }));
 
-// Raw body parsing for binary data (sequence endpoint) - must be before JSON parser
+// Raw body parsing for binary data (sequence endpoint and plugin data endpoint) - must be before JSON parser
 app.use('/api/sequence', express.raw({ type: 'application/octet-stream', limit: '500kb' }));
+// Plugin data endpoint: binary data (max 512 bytes as per architecture)
+// Use regex pattern to match /api/plugin/:pluginName/data routes since Express middleware doesn't support route parameters
+app.use(/^\/api\/plugin\/[^/]+\/data$/, express.raw({ type: 'application/octet-stream', limit: '512b' }));
 
-// JSON body parsing middleware (applied after raw parser for sequence endpoint)
+// JSON body parsing middleware (applied after raw parser for sequence and plugin endpoints)
 app.use(express.json());
 
 // Health check endpoint (defined before static file serving for better performance)

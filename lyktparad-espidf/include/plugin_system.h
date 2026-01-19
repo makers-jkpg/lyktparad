@@ -21,6 +21,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* Forward declaration for plugin web UI callbacks */
+typedef struct plugin_web_ui_callbacks_s plugin_web_ui_callbacks_t;
+
 /*******************************************************
  *                Plugin Command ID Range
  *******************************************************/
@@ -248,6 +251,18 @@ typedef struct {
      * by plugins to store additional data.
      */
     void *user_data;
+
+    /**
+     * @brief Optional web UI callbacks pointer (may be NULL)
+     *
+     * This field points to web UI callbacks registered via plugin_register_web_ui().
+     * If NULL, the plugin has no web UI support. The structure is allocated
+     * via malloc() during web UI registration and remains valid for the lifetime
+     * of the plugin.
+     *
+     * @see plugin_web_ui.h for web UI API details
+     */
+    plugin_web_ui_callbacks_t *web_ui;
 } plugin_info_t;
 
 /*******************************************************

@@ -49,4 +49,7 @@ bool mesh_root_is_setup_in_progress(void);
 /* Ensure at least one plugin is active, activating rgb_effect as default if needed */
 esp_err_t mesh_root_ensure_active_plugin(void);
 
+/* Forward plugin data to mesh network (placeholder - implementation in separate task) */
+esp_err_t plugin_forward_data_to_mesh(const char *plugin_name, uint8_t *data, uint16_t len);
+
 #endif /* __MESH_ROOT_H__ */

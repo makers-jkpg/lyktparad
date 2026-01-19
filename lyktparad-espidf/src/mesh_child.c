@@ -216,11 +216,29 @@ void esp_mesh_p2p_rx_main(void *arg)
             }
             continue;
         }
-        /* detect heartbeat: command prefix (0x01) + pointer (1 byte) + counter (1 byte) */
-        if (data.proto == MESH_PROTO_BIN && data.size == 3 && data.data[0] == MESH_CMD_HEARTBEAT) {
+        /* detect heartbeat: command prefix (0x01) + pointer (1 byte) + counter (1 byte) [+ IP address (4 bytes)] */
+        if (data.proto == MESH_PROTO_BIN && data.data[0] == MESH_CMD_HEARTBEAT && (data.size == 3 || data.size >= 7)) {
             uint8_t pointer = data.data[1];
             uint8_t counter = data.data[2];
-            ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat received from "MACSTR", pointer:%u, counter:%u", MAC2STR(from.addr), pointer, counter);
+
+            /* Extract IP address from heartbeat message (bytes 3-6) if present */
+            char ip_str[16] = "0.0.0.0";  /* Default to 0.0.0.0 for old format or missing IP */
+            if (data.size >= 7) {
+                uint8_t ip_bytes[4];
+                memcpy(ip_bytes, &data.data[3], 4);
+                snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d",
+                         ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
+            }
+
+            /* Only non-root nodes display root IP in log */
+            if (!esp_mesh_is_root()) {
+                ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat received from "MACSTR", pointer:%u, counter:%u, root-ip: %s",
+                         MAC2STR(from.addr), pointer, counter, ip_str);
+            } else {
+                /* Root nodes don't display their own IP from heartbeat */
+                ESP_LOGI(MESH_TAG, "[NODE ACTION] Heartbeat received from "MACSTR", pointer:%u, counter:%u",
+                         MAC2STR(from.addr), pointer, counter);
+            }
 
             /* Synchronize core local heartbeat counter with received counter (must happen before plugin handlers) */
             mesh_common_set_local_heartbeat_counter(counter);

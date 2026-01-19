@@ -140,7 +140,7 @@ The plugin protocol uses a self-contained format where the plugin ID is included
 - **With sub-command ID** (plugin-specific): 3+ bytes (PLUGIN_ID + CMD + sub-command ID) + optional data
 - **Minimum size**: 2 bytes (PLUGIN_ID + CMD)
 
-**Note**: Sequence synchronization is handled via `MESH_CMD_HEARTBEAT` (core mesh command), not via plugin BEAT commands. The heartbeat format is `[MESH_CMD_HEARTBEAT:1] [POINTER:1] [COUNTER:1]` (3 bytes total), where POINTER is the sequence pointer (0-255, 0 when sequence inactive) and COUNTER is a synchronization counter (0-255, wraps).
+**Note**: Sequence synchronization is handled via `MESH_CMD_HEARTBEAT` (core mesh command), not via plugin BEAT commands. The heartbeat format is `[MESH_CMD_HEARTBEAT:1] [POINTER:1] [COUNTER:1] [IP0:1] [IP1:1] [IP2:1] [IP3:1]` (7 bytes total), where POINTER is the sequence pointer (0-255, 0 when sequence inactive), COUNTER is a synchronization counter (0-255, wraps), and IP address is the root node's network IP address (4 bytes, network byte order, 0.0.0.0 if not connected).
 
 **Mutual Exclusivity**: When a START command is received for a plugin, the system automatically stops any other running plugin before activating the target plugin.
 

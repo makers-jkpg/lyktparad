@@ -21,6 +21,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include <string.h>
+#include <stdlib.h>
 
 #ifndef CONFIG_MESH_ROUTE_TABLE_SIZE
 #define CONFIG_MESH_ROUTE_TABLE_SIZE 50
@@ -123,7 +124,7 @@ esp_err_t plugin_register(const plugin_info_t *info, uint8_t *assigned_cmd_id)
             ESP_LOGI(TAG, "Plugin '%s' registered as default plugin", plugin_copy.name);
         } else {
             /* Additional plugin with is_default=true - ignore and log warning */
-            ESP_LOGW(TAG, "Plugin '%s' has is_default=true but default plugin '%s' already registered, ignoring", 
+            ESP_LOGW(TAG, "Plugin '%s' has is_default=true but default plugin '%s' already registered, ignoring",
                      plugin_copy.name, default_plugin_name);
         }
     }
@@ -270,13 +271,20 @@ static esp_err_t plugin_system_broadcast_command(uint8_t plugin_id, uint8_t cmd)
         return ESP_ERR_INVALID_STATE;
     }
 
-    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+    /* Allocate route table on heap to avoid stack overflow in event handlers */
+    mesh_addr_t *route_table = malloc(CONFIG_MESH_ROUTE_TABLE_SIZE * sizeof(mesh_addr_t));
+    if (route_table == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate route table for plugin command broadcast");
+        return ESP_ERR_NO_MEM;
+    }
+
     int route_table_size = 0;
-    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+    esp_mesh_get_routing_table((mesh_addr_t *) route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
 
     int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
     if (child_node_count == 0) {
         ESP_LOGD(TAG, "No child nodes to broadcast command");
+        free(route_table);
         return ESP_OK;
     }
 
@@ -310,6 +318,7 @@ static esp_err_t plugin_system_broadcast_command(uint8_t plugin_id, uint8_t cmd)
     ESP_LOGI(TAG, "Plugin command %s (plugin ID 0x%02X) broadcast - sent to %d/%d child nodes (success:%d, failed:%d)",
              cmd_name, plugin_id, success_count, child_node_count, success_count, fail_count);
 
+    free(route_table);
     return ESP_OK;
 }
 
@@ -374,9 +383,15 @@ esp_err_t plugin_activate(const char *name)
             }
         }
 
-        mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+        /* Allocate route table on heap to avoid stack overflow in event handlers */
+        mesh_addr_t *route_table = malloc(CONFIG_MESH_ROUTE_TABLE_SIZE * sizeof(mesh_addr_t));
+        if (route_table == NULL) {
+            ESP_LOGE(TAG, "Failed to allocate route table for plugin activation broadcast");
+            return ESP_ERR_NO_MEM;
+        }
+
         int route_table_size = 0;
-        esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+        esp_mesh_get_routing_table((mesh_addr_t *) route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
 
         int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
         if (child_node_count > 0) {
@@ -414,6 +429,8 @@ esp_err_t plugin_activate(const char *name)
         } else {
             ESP_LOGD(TAG, "Plugin '%s' activated on root node - no child nodes to broadcast", name);
         }
+
+        free(route_table);
     }
 
     return ESP_OK;
@@ -940,7 +957,7 @@ esp_err_t plugin_system_call_heartbeat_handlers(uint8_t pointer, uint8_t counter
         /* Call heartbeat handler */
         esp_err_t handler_err = plugin->callbacks.heartbeat_handler(pointer, counter);
         if (handler_err != ESP_OK) {
-            ESP_LOGW(TAG, "Plugin '%s' heartbeat handler returned error: %s", 
+            ESP_LOGW(TAG, "Plugin '%s' heartbeat handler returned error: %s",
                      plugin->name, esp_err_to_name(handler_err));
             /* Continue with other plugins even if one fails */
             overall_err = handler_err;  /* Store last error, but continue */

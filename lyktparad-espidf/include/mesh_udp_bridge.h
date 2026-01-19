@@ -35,7 +35,7 @@
 /* UDP Command ID for State Update */
 #define UDP_CMD_STATE_UPDATE  0xE2
 
-/* UDP Command IDs for API Commands (0xE7-0xF8) */
+/* UDP Command IDs for API Commands (0xE7-0xFF) */
 #define UDP_CMD_API_NODES  0xE7
 #define UDP_CMD_API_COLOR_GET  0xE8
 #define UDP_CMD_API_COLOR_POST  0xE9
@@ -54,13 +54,16 @@
 #define UDP_CMD_API_OTA_DISTRIBUTION_PROGRESS  0xF6
 #define UDP_CMD_API_OTA_DISTRIBUTION_CANCEL  0xF7
 #define UDP_CMD_API_OTA_REBOOT  0xF8
-#define UDP_CMD_API_PLUGIN_ACTIVATE    0xFA
-#define UDP_CMD_API_PLUGIN_DEACTIVATE  0xFB
-#define UDP_CMD_API_PLUGIN_ACTIVE       0xFC
-#define UDP_CMD_API_PLUGINS_LIST        0xFD
-#define UDP_CMD_API_PLUGIN_STOP         0xF9
-#define UDP_CMD_API_PLUGIN_PAUSE        0xFE
-#define UDP_CMD_API_PLUGIN_RESET        0xFF
+/* Plugin Web UI Command IDs (0xF9-0xFA) */
+#define UDP_CMD_API_PLUGIN_BUNDLE_GET  0xF9
+#define UDP_CMD_API_PLUGIN_DATA_POST  0xFA
+/* Plugin Control Command IDs (0xFB-0xFF) - shifted down by 2 slots to make room for plugin web UI */
+/* Note: PAUSE and RESET are only available via embedded webserver, not via external webserver UDP bridge */
+#define UDP_CMD_API_PLUGIN_ACTIVATE    0xFB
+#define UDP_CMD_API_PLUGIN_DEACTIVATE  0xFC
+#define UDP_CMD_API_PLUGIN_ACTIVE       0xFD
+#define UDP_CMD_API_PLUGINS_LIST        0xFE
+#define UDP_CMD_API_PLUGIN_STOP         0xFF
 
 /*******************************************************
  *                State Update Data Structures
@@ -345,7 +348,7 @@ void mesh_udp_bridge_broadcast_listener_stop(void);
 /**
  * @brief Start the UDP API command listener task.
  *
- * Starts a FreeRTOS task that listens for UDP API commands (0xE7-0xF8) from the external server.
+ * Starts a FreeRTOS task that listens for UDP API commands (0xE7-0xFF) from the external server.
  * The listener processes API commands and sends responses back to the server.
  * Only starts if the node is root. The listener is completely optional and does not affect
  * embedded web server operation.

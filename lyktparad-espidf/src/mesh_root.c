@@ -14,6 +14,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include <time.h>
+#include <stdlib.h>
 #include "esp_wifi.h"
 #include "esp_mac.h"
 #include "esp_log.h"
@@ -261,10 +262,15 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
 
     ESP_LOGI(MESH_TAG, "[ROOT SETUP] Starting mesh state adoption...");
 
-    /* Get routing table */
-    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+    /* Allocate route table on heap to avoid stack overflow in event handlers */
+    mesh_addr_t *route_table = malloc(CONFIG_MESH_ROUTE_TABLE_SIZE * sizeof(mesh_addr_t));
+    if (route_table == NULL) {
+        ESP_LOGE(MESH_TAG, "[ROOT SETUP] Failed to allocate route table");
+        return ESP_ERR_NO_MEM;
+    }
+
     int route_table_size = 0;
-    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+    esp_mesh_get_routing_table((mesh_addr_t *) route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
 
     /* Calculate child node count (excluding root) */
     int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
@@ -281,6 +287,7 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
             /* Continue even if default activation fails */
         }
 
+        free(route_table);
         return ESP_OK;
     }
 
@@ -328,6 +335,7 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
         if (state_response_mutex == NULL) {
             ESP_LOGE(MESH_TAG, "[ROOT SETUP] Failed to create response mutex");
             root_setup_in_progress = false;
+            free(route_table);
             return ESP_ERR_NO_MEM;
         }
     }
@@ -387,6 +395,7 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
             /* Continue even if default activation fails */
         }
 
+        free(route_table);
         return ESP_OK;
     }
 
@@ -431,7 +440,7 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
     /* Refresh routing table to include nodes that joined during setup */
     if (adopted_plugin != NULL) {
         /* Refresh routing table to get current state (nodes might have joined during wait) */
-        esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+        esp_mesh_get_routing_table((mesh_addr_t *) route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
         int current_child_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
 
         /* Get plugin ID */
@@ -479,6 +488,8 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
 
     /* Mark setup as complete (after sending plugin START) */
     root_setup_in_progress = false;
+
+    free(route_table);
 
     ESP_LOGI(MESH_TAG, "[ROOT SETUP] Mesh state adoption complete - counter: %u, plugin: %s",
              median_counter, adopted_plugin != NULL ? adopted_plugin : "none");
@@ -626,7 +637,21 @@ static void heartbeat_timer_cb(void *arg)
         return;
     }
 
-    /* payload: command prefix (0x01) + pointer (1 byte) + counter (1 byte) */
+    /* Get root node IP address */
+    esp_netif_t *netif_sta = mesh_common_get_netif_sta();
+    esp_netif_ip_info_t ip_info;
+    memset(&ip_info, 0, sizeof(ip_info));
+    uint8_t ip_bytes[4] = {0, 0, 0, 0};  /* Default to 0.0.0.0 if IP unavailable */
+
+    if (netif_sta != NULL) {
+        esp_err_t ip_err = esp_netif_get_ip_info(netif_sta, &ip_info);
+        if (ip_err == ESP_OK && ip_info.ip.addr != 0) {
+            /* IP address is already in network byte order */
+            memcpy(ip_bytes, &ip_info.ip.addr, 4);
+        }
+    }
+
+    /* payload: command prefix (0x01) + pointer (1 byte) + counter (1 byte) + IP address (4 bytes) */
     /* Use core local heartbeat counter (core timer handles incrementing) */
     /* Note: Core timer increments counter every MESH_CONFIG_HEARTBEAT_INTERVAL */
     /* Root heartbeat timer fires at same interval, so counters should be synchronized */
@@ -635,9 +660,10 @@ static void heartbeat_timer_cb(void *arg)
     tx_buf[0] = MESH_CMD_HEARTBEAT;  /* Command prefix */
     tx_buf[1] = pointer;  /* Sequence pointer (0-255, 0 when sequence inactive) */
     tx_buf[2] = counter;  /* Counter (0-255, wraps) */
+    memcpy(&tx_buf[3], ip_bytes, 4);  /* IP address (4 bytes, network byte order) */
 
     data.data = tx_buf;
-    data.size = 3;  /* New format: CMD(1) + pointer(1) + counter(1) */
+    data.size = 7;  /* Format: CMD(1) + pointer(1) + counter(1) + IP(4) */
     data.proto = MESH_PROTO_BIN;
     data.tos = MESH_TOS_P2P;
 
@@ -1374,6 +1400,133 @@ void esp_mesh_p2p_tx_main(void *arg)
         }
     }
     vTaskDelete(NULL);
+}
+
+/*******************************************************
+ *                Plugin Data Forwarding
+ *******************************************************/
+
+/**
+ * @brief Forward plugin data to mesh network
+ *
+ * This function forwards plugin data from web UI to all mesh nodes as PLUGIN_CMD_DATA commands.
+ * The root node acts as a transparent proxy, forwarding raw bytes from HTTP requests to mesh
+ * commands with minimal CPU processing (only header insertion and memcpy).
+ *
+ * Command Format: [PLUGIN_ID:1] [PLUGIN_CMD_DATA:1] [RAW_DATA:N]
+ * Minimum size: 2 bytes (PLUGIN_ID + PLUGIN_CMD_DATA) when len is 0
+ *
+ * @param plugin_name Plugin name (non-NULL, must be registered)
+ * @param data Raw bytes data to forward (must be non-NULL if len > 0, ignored if len is 0)
+ * @param len Data length in bytes (0 is valid for zero-length data, <= 512 recommended)
+ * @return ESP_OK on success, error code on failure:
+ *         - ESP_ERR_INVALID_STATE: Not root node or root setup in progress
+ *         - ESP_ERR_INVALID_ARG: Invalid parameters (NULL plugin_name, or NULL data when len > 0)
+ *         - ESP_ERR_NOT_FOUND: Plugin not found
+ *         - ESP_ERR_INVALID_SIZE: Data size exceeds limits
+ *         - ESP_FAIL: Mesh send failure (partial or complete)
+ */
+esp_err_t plugin_forward_data_to_mesh(const char *plugin_name, uint8_t *data, uint16_t len)
+{
+    /* Parameter validation */
+    if (plugin_name == NULL) {
+        ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: invalid parameters (NULL plugin_name)");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Note: Zero-length data (len == 0) is valid and will result in a 2-byte command: [PLUGIN_ID:1] [PLUGIN_CMD_DATA:1] */
+    if (len > 0 && data == NULL) {
+        ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: invalid parameters (NULL data when len > 0)");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (len > 512) {
+        ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: data size exceeds recommended limit (%d > 512)", len);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    /* Root node check */
+    if (!esp_mesh_is_root()) {
+        ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: not root node, cannot forward");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Block commands during root setup */
+    if (mesh_root_is_setup_in_progress()) {
+        ESP_LOGW(MESH_TAG, "Plugin data forwarding blocked during root setup: plugin '%s'", plugin_name);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Get plugin ID from plugin name */
+    uint8_t plugin_id;
+    esp_err_t err = plugin_get_id_by_name(plugin_name, &plugin_id);
+    if (err != ESP_OK) {
+        ESP_LOGE(MESH_TAG, "plugin_forward_data_to_mesh: plugin '%s' not found", plugin_name);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    /* Get routing table */
+    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+    int route_table_size = 0;
+    esp_mesh_get_routing_table((mesh_addr_t *)route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+
+    /* Check for empty routing table (no child nodes) */
+    int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
+    if (child_node_count == 0) {
+        ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: no child nodes to forward to");
+        return ESP_OK;  /* Not an error, just no nodes to send to */
+    }
+
+    /* Get transmit buffer */
+    uint8_t *tx_buf = mesh_common_get_tx_buf();
+
+    /* Construct command using header-insertion approach: [PLUGIN_ID:1] [PLUGIN_CMD_DATA:1] [RAW_DATA:N] */
+    tx_buf[0] = plugin_id;           /* PLUGIN_ID */
+    tx_buf[1] = PLUGIN_CMD_DATA;    /* PLUGIN_CMD_DATA (0x04) */
+    if (len > 0) {
+        memcpy(&tx_buf[2], data, len);   /* Raw bytes, zero processing */
+    }
+
+    /* Calculate total size: PLUGIN_ID (1) + PLUGIN_CMD_DATA (1) + data (N, can be 0) */
+    size_t total_size = 2 + len;
+
+    /* Safety check: validate total size <= 1024 bytes (mesh protocol limit) */
+    if (total_size > 1024) {
+        ESP_LOGE(MESH_TAG, "plugin_forward_data_to_mesh: total size exceeds mesh limit (%zu > 1024)", total_size);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    /* Prepare mesh data structure */
+    mesh_data_t mesh_data;
+    mesh_data.data = tx_buf;
+    mesh_data.size = total_size;
+    mesh_data.proto = MESH_PROTO_BIN;
+    mesh_data.tos = MESH_TOS_P2P;
+
+    /* Broadcast to all child nodes (skip root, index 0) */
+    int success_count = 0;
+    int fail_count = 0;
+    for (int i = 1; i < route_table_size; i++) {
+        esp_err_t send_err = mesh_send_with_bridge(&route_table[i], &mesh_data, MESH_DATA_P2P, NULL, 0);
+        if (send_err == ESP_OK) {
+            success_count++;
+        } else {
+            fail_count++;
+            ESP_LOGD(MESH_TAG, "plugin_forward_data_to_mesh: send err:0x%x to "MACSTR, send_err, MAC2STR(route_table[i].addr));
+        }
+    }
+
+    /* Log summary */
+    if (success_count > 0) {
+        ESP_LOGI(MESH_TAG, "plugin_forward_data_to_mesh: '%s' (%d bytes) forwarded to %d/%d child nodes (success:%d, failed:%d)",
+                 plugin_name, len, success_count, child_node_count, success_count, fail_count);
+    } else {
+        ESP_LOGW(MESH_TAG, "plugin_forward_data_to_mesh: '%s' (%d bytes) failed to forward to any child nodes (%d failed)",
+                 plugin_name, len, fail_count);
+    }
+
+    /* Return ESP_OK if at least one node received command, or ESP_FAIL if all failed */
+    return (success_count > 0) ? ESP_OK : ESP_FAIL;
 }
 
 /*******************************************************

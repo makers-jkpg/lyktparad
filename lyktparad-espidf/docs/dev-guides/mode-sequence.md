@@ -703,8 +703,8 @@ Root node timer callback (`sequence_timer_cb` in `sequence_plugin.c`):
 
 **Heartbeat Message Format**:
 - Command: `MESH_CMD_HEARTBEAT`
-- Payload includes: Sequence pointer (1 byte, 0-255) if plugin is active
-- Total size: Variable (includes other heartbeat data)
+- Format: `[CMD:1] [POINTER:1] [COUNTER:1] [IP0:1] [IP1:1] [IP2:1] [IP3:1]` (7 bytes total)
+- Payload includes: Sequence pointer (1 byte, 0-255) if plugin is active, heartbeat counter (1 byte), and root node IP address (4 bytes, network byte order, 0.0.0.0 if not connected)
 
 **Heartbeat Broadcasting**:
 - Handled by mesh heartbeat system
@@ -798,7 +798,7 @@ sequenceDiagram
     Root->>Root: Timer callback (every beat)
     Root->>Root: Increment pointer
     Root->>Root: Include pointer in heartbeat
-    
+
     Root->>Mesh: Heartbeat(pointer)
     Mesh->>Child1: Heartbeat(pointer)
     Mesh->>Child2: Heartbeat(pointer)

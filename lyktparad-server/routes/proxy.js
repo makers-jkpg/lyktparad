@@ -150,11 +150,17 @@ async function processProxyRequest(req, res) {
                 code: 503,
                 suggestion: rootNode ? `You can access the root node directly via its IP address: http://${rootNode.root_ip}` : 'Please check if the root node is online.'
             });
-        } else if (error.message.includes('exceeds MTU') || error.message.includes('Payload too large')) {
+        } else if (error.message.includes('exceeds MTU') || error.message.includes('Payload too large') || error.message.includes('Bundle size') || error.message.includes('too large')) {
             res.status(413).json({
                 error: 'Payload too large',
                 message: 'Request payload exceeds maximum size. Please reduce the data size and try again.',
                 code: 413
+            });
+        } else if (error.message.includes('Invalid plugin name') || error.message.includes('Plugin name')) {
+            res.status(400).json({
+                error: 'Bad Request',
+                message: error.message || 'Invalid plugin name format.',
+                code: 400
             });
         } else {
             console.error('Proxy request error:', error);

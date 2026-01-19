@@ -85,7 +85,7 @@ Both features are completely optional - ESP32 root nodes always run their embedd
 └─────────────────┬────────────────────┘
                   │
                   │ UDP Packets
-                  │ API Commands: 0xE7-0xF8
+                  │ API Commands: 0xE7-0xFF
                   │ State Updates: 0xE2
                   ▼
 ┌─────────────────────────────────────┐
@@ -124,7 +124,7 @@ Both features are completely optional - ESP32 root nodes always run their embedd
 └─────────────────┼────────────────────┘
                   │
                   │ UDP Packets
-                  │ API Responses: 0xE7-0xF8
+                  │ API Responses: 0xE7-0xFF
                   │ State Updates: 0xE2
                   ▼
 ┌─────────────────────────────────────┐
@@ -140,9 +140,9 @@ Both features are completely optional - ESP32 root nodes always run their embedd
 #### Pattern 1: Request/Response (API Proxy)
 
 ```
-Web UI → HTTP Request → External Server → UDP Command (0xE7-0xF8) → ESP32 Root
+Web UI → HTTP Request → External Server → UDP Command (0xE7-0xFF) → ESP32 Root
                                                                           │
-Web UI ← HTTP Response ← External Server ← UDP Response (0xE7-0xF8) ←────┘
+Web UI ← HTTP Response ← External Server ← UDP Response (0xE7-0xFF) ←────┘
 ```
 
 - **Direction**: Bidirectional (Web UI → ESP32)
@@ -188,7 +188,7 @@ The API Proxy Layer translates HTTP requests from the web UI to UDP commands for
 │  3. Convert JSON → Binary            │
 │  4. Build UDP Packet                 │
 └──────────────┬──────────────────────┘
-               │ UDP Command (0xE7-0xF8)
+               │ UDP Command (0xE7-0xFF)
                │ Port 8082
                ▼
 ┌─────────────────────────────────────┐
@@ -201,7 +201,7 @@ The API Proxy Layer translates HTTP requests from the web UI to UDP commands for
 │  5. Build Response                   │
 │  6. Send UDP Response                │
 └──────────────┬──────────────────────┘
-               │ UDP Response (0xE7-0xF8)
+               │ UDP Response (0xE7-0xFF)
                │ Same Sequence Number
                ▼
 ┌─────────────────────────────────────┐
@@ -262,7 +262,7 @@ The API Proxy maps 18 HTTP endpoints to UDP command IDs:
 [CMD:1][LEN:2][SEQ:2][PAYLOAD:N][CHKSUM:2]
 ```
 
-- **CMD** (1 byte): UDP command ID (0xE7-0xF8)
+- **CMD** (1 byte): UDP command ID (0xE7-0xFF)
 - **LEN** (2 bytes): Payload length (network byte order, big-endian)
 - **SEQ** (2 bytes): Sequence number (network byte order, big-endian)
 - **PAYLOAD** (N bytes): Binary payload (endpoint-specific)
@@ -567,7 +567,7 @@ All multi-byte values (lengths, sequence numbers, timestamps, etc.) use network 
 - **0xE2**: State Update
 - **0xE3**: Registration ACK
 - **0xE6**: Mesh Command Forward
-- **0xE7-0xF8**: API Commands (18 endpoints)
+- **0xE7-0xFF**: API Commands (plugin web UI and control commands added)
 
 ## Request/Response Flow
 

@@ -17,6 +17,14 @@
  * CONDITIONS OF ANY KIND, either express or implied.
  */
 
+/* Include config first to ensure NEOPIXEL_ENABLE and RGB_ENABLE are defined before use */
+#include "config/mesh_device_config.h"
+
+/* Compile-time check to ensure config is included correctly */
+#if !defined(NEOPIXEL_ENABLE) && !defined(RGB_ENABLE)
+#error "Neither NEOPIXEL_ENABLE nor RGB_ENABLE is defined. Check include/config/mesh_device_config.h"
+#endif
+
 #include "plugin_light.h"
 #include "plugin_system.h"
 #include "light_neopixel.h"
@@ -66,17 +74,27 @@ esp_err_t plugin_set_rgb_led(int r, int g, int b)
 esp_err_t plugin_set_rgb(uint8_t r, uint8_t g, uint8_t b)
 {
     esp_err_t err = ESP_OK;
+    bool led_controlled = false;
 
 #ifdef NEOPIXEL_ENABLE
     /* Conditionally control Neopixel/WS2812 LEDs */
     err = plugin_light_set_rgb(r, g, b);
+    if (err == ESP_OK) {
+        led_controlled = true;
+    }
 #endif /* NEOPIXEL_ENABLE */
 
 #ifdef RGB_ENABLE
     /* Conditionally control common-cathode/anode RGB LED if RGB_ENABLE is defined */
     plugin_set_rgb_led((int)r, (int)g, (int)b);
+    led_controlled = true;
 #endif /* RGB_ENABLE */
 
-    /* Return error code from Neopixel if enabled, ESP_OK otherwise */
+    /* Return error if no LED type is enabled or if Neopixel control failed */
+    if (!led_controlled) {
+        ESP_LOGE(TAG, "LED control failed: neither NEOPIXEL_ENABLE nor RGB_ENABLE is defined");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
     return err;
 }

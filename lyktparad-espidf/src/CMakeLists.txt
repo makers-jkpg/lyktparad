@@ -179,6 +179,7 @@ set(ALL_SOURCES
     "mesh_udp_bridge.c"
     "plugin_system.c"
     "plugin_light.c"
+    "plugin_web_ui.c"
 )
 
 list(APPEND ALL_SOURCES ${PLUGIN_SOURCES})
