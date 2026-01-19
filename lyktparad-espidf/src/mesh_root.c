@@ -626,7 +626,21 @@ static void heartbeat_timer_cb(void *arg)
         return;
     }
 
-    /* payload: command prefix (0x01) + pointer (1 byte) + counter (1 byte) */
+    /* Get root node IP address */
+    esp_netif_t *netif_sta = mesh_common_get_netif_sta();
+    esp_netif_ip_info_t ip_info;
+    memset(&ip_info, 0, sizeof(ip_info));
+    uint8_t ip_bytes[4] = {0, 0, 0, 0};  /* Default to 0.0.0.0 if IP unavailable */
+
+    if (netif_sta != NULL) {
+        esp_err_t ip_err = esp_netif_get_ip_info(netif_sta, &ip_info);
+        if (ip_err == ESP_OK && ip_info.ip.addr != 0) {
+            /* IP address is already in network byte order */
+            memcpy(ip_bytes, &ip_info.ip.addr, 4);
+        }
+    }
+
+    /* payload: command prefix (0x01) + pointer (1 byte) + counter (1 byte) + IP address (4 bytes) */
     /* Use core local heartbeat counter (core timer handles incrementing) */
     /* Note: Core timer increments counter every MESH_CONFIG_HEARTBEAT_INTERVAL */
     /* Root heartbeat timer fires at same interval, so counters should be synchronized */
@@ -635,9 +649,10 @@ static void heartbeat_timer_cb(void *arg)
     tx_buf[0] = MESH_CMD_HEARTBEAT;  /* Command prefix */
     tx_buf[1] = pointer;  /* Sequence pointer (0-255, 0 when sequence inactive) */
     tx_buf[2] = counter;  /* Counter (0-255, wraps) */
+    memcpy(&tx_buf[3], ip_bytes, 4);  /* IP address (4 bytes, network byte order) */
 
     data.data = tx_buf;
-    data.size = 3;  /* New format: CMD(1) + pointer(1) + counter(1) */
+    data.size = 7;  /* Format: CMD(1) + pointer(1) + counter(1) + IP(4) */
     data.proto = MESH_PROTO_BIN;
     data.tos = MESH_TOS_P2P;
 

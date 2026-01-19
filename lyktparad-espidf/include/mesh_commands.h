@@ -66,7 +66,8 @@
 /* Command ID allocation strategy:
  *
  * 0x00-0x0A: Reserved (core commands and reserved range)
- *   - 0x01: MESH_CMD_HEARTBEAT (format: [CMD:1] [POINTER:1] [COUNTER:1], 3 bytes total)
+ *   - 0x01: MESH_CMD_HEARTBEAT (format: [CMD:1] [POINTER:1] [COUNTER:1] [IP0:1] [IP1:1] [IP2:1] [IP3:1], 7 bytes total)
+ *     IP address is in network byte order. If root node has no IP address (not connected), sends 0.0.0.0 (4 zero bytes).
  *   - 0x02: MESH_CMD_LIGHT_ON_OFF
  *   - 0x03: MESH_CMD_SET_RGB
  *   - 0x04-0x09: Legacy plugin commands (DEPRECATED - use plugin protocol)

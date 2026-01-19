@@ -120,7 +120,7 @@ Plugins receive commands via the mesh network using a self-contained protocol fo
 **When Plugins Use PLUGIN_CMD_DATA**:
 Plugins use PLUGIN_CMD_DATA when they need to send custom data or configuration that doesn't fit the simple START/PAUSE/RESET/STOP model. For example, the sequence plugin uses it to send sequence data (colors, rhythm, length), while effect plugins use standard commands since they don't need custom data. For developers creating plugins, see the [Plugin System Developer Guide](../dev-guides/plugin-system.md) for detailed protocol specification and examples.
 
-**Note**: Sequence synchronization is handled via `MESH_CMD_HEARTBEAT` (core mesh command), not via plugin BEAT commands. The heartbeat format is `[MESH_CMD_HEARTBEAT:1] [POINTER:1] [COUNTER:1]` (3 bytes total), where POINTER is the sequence pointer (0-255, 0 when sequence inactive) and COUNTER is a synchronization counter (0-255, wraps).
+**Note**: Sequence synchronization is handled via `MESH_CMD_HEARTBEAT` (core mesh command), not via plugin BEAT commands. The heartbeat format is `[MESH_CMD_HEARTBEAT:1] [POINTER:1] [COUNTER:1] [IP0:1] [IP1:1] [IP2:1] [IP3:1]` (7 bytes total), where POINTER is the sequence pointer (0-255, 0 when sequence inactive), COUNTER is a synchronization counter (0-255, wraps), and IP address is the root node's network IP address (4 bytes, network byte order, 0.0.0.0 if not connected).
 
 **Total size**: Maximum 1024 bytes (including all fields)
 
