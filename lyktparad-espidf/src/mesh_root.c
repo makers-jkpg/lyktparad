@@ -14,6 +14,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include <time.h>
+#include <stdlib.h>
 #include "esp_wifi.h"
 #include "esp_mac.h"
 #include "esp_log.h"
@@ -261,10 +262,15 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
 
     ESP_LOGI(MESH_TAG, "[ROOT SETUP] Starting mesh state adoption...");
 
-    /* Get routing table */
-    mesh_addr_t route_table[CONFIG_MESH_ROUTE_TABLE_SIZE];
+    /* Allocate route table on heap to avoid stack overflow in event handlers */
+    mesh_addr_t *route_table = malloc(CONFIG_MESH_ROUTE_TABLE_SIZE * sizeof(mesh_addr_t));
+    if (route_table == NULL) {
+        ESP_LOGE(MESH_TAG, "[ROOT SETUP] Failed to allocate route table");
+        return ESP_ERR_NO_MEM;
+    }
+
     int route_table_size = 0;
-    esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+    esp_mesh_get_routing_table((mesh_addr_t *) route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
 
     /* Calculate child node count (excluding root) */
     int child_node_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
@@ -281,6 +287,7 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
             /* Continue even if default activation fails */
         }
 
+        free(route_table);
         return ESP_OK;
     }
 
@@ -328,6 +335,7 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
         if (state_response_mutex == NULL) {
             ESP_LOGE(MESH_TAG, "[ROOT SETUP] Failed to create response mutex");
             root_setup_in_progress = false;
+            free(route_table);
             return ESP_ERR_NO_MEM;
         }
     }
@@ -387,6 +395,7 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
             /* Continue even if default activation fails */
         }
 
+        free(route_table);
         return ESP_OK;
     }
 
@@ -431,7 +440,7 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
     /* Refresh routing table to include nodes that joined during setup */
     if (adopted_plugin != NULL) {
         /* Refresh routing table to get current state (nodes might have joined during wait) */
-        esp_mesh_get_routing_table((mesh_addr_t *) &route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
+        esp_mesh_get_routing_table((mesh_addr_t *) route_table, CONFIG_MESH_ROUTE_TABLE_SIZE * 6, &route_table_size);
         int current_child_count = (route_table_size > 0) ? (route_table_size - 1) : 0;
 
         /* Get plugin ID */
@@ -479,6 +488,8 @@ static esp_err_t mesh_root_adopt_mesh_state(void)
 
     /* Mark setup as complete (after sending plugin START) */
     root_setup_in_progress = false;
+
+    free(route_table);
 
     ESP_LOGI(MESH_TAG, "[ROOT SETUP] Mesh state adoption complete - counter: %u, plugin: %s",
              median_counter, adopted_plugin != NULL ? adopted_plugin : "none");
